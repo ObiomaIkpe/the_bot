@@ -24,6 +24,8 @@ login all verified working).
   reversible Fernet encryption for broker credentials.
 - Automated tests (`pytest`) + CI (GitHub Actions) -- see "Tests + CI"
   below. Done as of 2026-07-18.
+- Logging + error handling -- see "Logging + error handling" below.
+  Done as of 2026-07-18.
 
 ## Missing for production deployment
 
@@ -36,19 +38,52 @@ so they don't get forgotten before a real deploy:
   Production needs multiple workers (`uvicorn --workers N` or
   Gunicorn + `UvicornWorker`), behind a reverse proxy (nginx/Caddy)
   doing TLS termination, managed by systemd/Docker/Kubernetes.
-- **No logging/observability** -- no `logging` config, no error
-  tracking (Sentry etc.), no request tracing. This is exactly why the
-  bcrypt incompatibility bug only surfaced as a bare "Internal Server
-  Error" with no visible traceback.
+- **No error tracking / request tracing** -- logging now exists (see
+  below), but there's still no Sentry-style aggregation or distributed
+  tracing (OpenTelemetry).
 - **No CORS middleware** -- needed once a browser frontend calls this
   from a different origin.
-- **`/health` is a static stub** -- doesn't check DB connectivity, so
-  it can't distinguish liveness from readiness.
 - **No containerization** -- no `Dockerfile` / `docker-compose.yml`.
 - **No rate limiting** on `/auth/login` -- brute-force protection.
 - **Secrets in a flat `.env` file** -- fine for local dev, production
   standard is a secrets manager (Vault, AWS Secrets Manager, k8s
   Secret) rather than a file on disk.
+
+## Logging + error handling (added 2026-07-18)
+
+- `app/core/logging.py` -- `logging.config.dictConfig` setup, always
+  logging to stdout (12-factor: the deploying platform collects logs,
+  the app doesn't manage log files). Format is switchable via the
+  `LOG_FORMAT` setting: `"text"` (default, human-readable) or `"json"`
+  (structured, one JSON object per line -- for CloudWatch/Loki/Datadog
+  etc). Also tunes `uvicorn`/`uvicorn.access`/`uvicorn.error` onto the
+  same handler, and quiets `sqlalchemy.engine` to `WARNING` (it echoes
+  every SQL statement at `INFO`).
+- `app/main.py` -- calls `configure_logging()` before constructing the
+  app; added `@app.exception_handler(Exception)` that logs the full
+  traceback (`exc_info=exc`) and returns a generic
+  `{"detail": "Internal server error"}` 500, never leaking internals.
+  This directly addresses the bcrypt bug from earlier, which previously
+  surfaced as an opaque 500 with no visible trace.
+- `/health` now runs `SELECT 1` through `get_db` and returns 503 (not a
+  static 200 stub) if the database is unreachable -- the standard
+  liveness-vs-readiness distinction.
+- `app/routers/auth.py` -- logs successful registration and failed/
+  rejected login attempts (never logs passwords).
+- Tests: `tests/test_logging.py` (JSON formatter output shape),
+  `tests/test_error_handling.py` (unhandled exception -> generic 500),
+  `tests/test_health.py` (503 when DB is unreachable, via a fake
+  session that raises on `execute()`).
+
+### Note on testing FastAPI's catch-all exception handler
+
+Starlette's `TestClient` re-raises the original exception by default
+(`raise_server_exceptions=True`) even when a registered `Exception`
+handler produced a response -- intentional, so ordinary tests still
+surface real bugs instead of the handler silently papering over them.
+To test the handler's own behavior, `tests/test_error_handling.py` uses
+a dedicated `TestClient(app, raise_server_exceptions=False)` rather
+than the shared `client` fixture.
 
 ## Tests + CI (added 2026-07-18)
 

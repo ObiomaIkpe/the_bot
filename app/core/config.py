@@ -18,5 +18,7 @@ class Settings(BaseSettings):
 
     credentials_encryption_key: str
 
+    log_format: str = "text"  # "text" (human-readable) or "json" (structured)
+
 
 settings = Settings()

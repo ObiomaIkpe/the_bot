@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
@@ -7,6 +9,8 @@ from app.core.deps import get_current_user
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.user import User
 from app.schemas.auth import Token, UserOut, UserRegister
+
+logger = logging.getLogger("app.auth")
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -21,6 +25,7 @@ def register(payload: UserRegister, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    logger.info("User registered: user_id=%s", user.user_id)
     return user
 
 
@@ -30,15 +35,18 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     # it as the email since users log in with email, not a separate handle.
     user = db.query(User).filter(User.email == form_data.username).first()
     if not user or not verify_password(form_data.password, user.password_hash):
+        logger.info("Failed login attempt for email=%s", form_data.username)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     if not user.is_active:
+        logger.info("Login rejected for inactive account: user_id=%s", user.user_id)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is inactive")
 
     token = create_access_token(subject=str(user.user_id))
+    logger.info("User logged in: user_id=%s", user.user_id)
     return Token(access_token=token)
 
 
