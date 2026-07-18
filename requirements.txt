@@ -1,0 +1,16 @@
+fastapi>=0.111
+uvicorn[standard]>=0.29
+sqlalchemy>=2.0
+alembic>=1.13
+psycopg2-binary>=2.9
+pydantic[email]>=2.6
+pydantic-settings>=2.2
+python-jose[cryptography]>=3.3
+passlib[bcrypt]>=1.7
+# passlib 1.7.4 (unmaintained since 2020) breaks with bcrypt>=4.0: it reads
+# bcrypt.__about__.__version__ (removed in 4.1) and relies on bcrypt silently
+# truncating passwords over 72 bytes (bcrypt>=4.0 raises ValueError instead).
+bcrypt<4.0
+cryptography>=42.0
+python-multipart>=0.0.9
+python-dotenv>=1.0
