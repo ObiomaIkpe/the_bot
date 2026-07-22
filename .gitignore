@@ -6,3 +6,12 @@ __pycache__/
 *.egg-info/
 .mypy_cache/
 .ruff_cache/
+
+# Phase 1: raw HistData CSVs/zips and the large golden-master event trail
+# are regenerable (see phase1/README.md) -- not worth committing. Scoped
+# to phase1/ specifically rather than a blanket *.csv/*.zip, so this
+# doesn't unexpectedly exclude unrelated files elsewhere in the repo later.
+phase1/data/
+phase1/**/*.csv
+phase1/**/*.zip
+phase1/golden_master/golden_master_events.jsonl
