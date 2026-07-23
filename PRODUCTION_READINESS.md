@@ -27,6 +27,28 @@ login all verified working).
 - Logging + error handling -- see "Logging + error handling" below.
   Done as of 2026-07-18.
 
+## Originally-unverified README items: now closed (2026-07-18)
+
+The original Phase 0 README flagged two things it couldn't verify
+itself (no network access, never run against a real DB). Both are now
+covered by tests:
+
+- **`BrokerCredential` encrypt/decrypt round-trip**
+  (`tests/test_broker_credential_encryption.py`) -- confirms
+  `.account_login`/`.account_password` round-trip correctly through a
+  real Postgres row, that the raw `_account_password_enc` column is
+  genuinely ciphertext (not plaintext passed through unchanged), and
+  that encrypting the same password twice produces different
+  ciphertext (Fernet's random IV) -- a cheap guard against an
+  accidental switch to a deterministic cipher later.
+- **`user_settings` CHECK constraints**
+  (`tests/test_user_settings_constraints.py`) -- confirms
+  `NOT (live_model = ANY(shadow_models))` is real and enforced
+  (rejects `live_model` appearing in its own `shadow_models`), that the
+  valid case still passes (so the constraint isn't just rejecting
+  everything), and that `live_model IN ('fvg', 'ob', 'fvg_ob')` is
+  enforced too.
+
 ## Missing for production deployment
 
 Reasonable to be missing at "Phase 0 schema + auth only" -- listed here
