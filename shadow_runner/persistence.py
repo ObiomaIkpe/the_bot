@@ -104,6 +104,14 @@ def get_last_event_timestamp_for_date(db: Session, user_id: str, model: str, dat
         .all()
     )
     for e in todays_events:
+        if e.event_type == "trend_history_bootstrapped":
+            # Bookkeeping marker, not real trading activity -- excluded
+            # so the bootstrap step itself never looks like "today
+            # already has journaled events" on the very run it just
+            # wrote that marker on. Real bug caught in live testing:
+            # without this, every cold start would immediately think
+            # today was already partially processed and skip replay.
+            continue
         # e.timestamp is NY wall-clock (that's what gets fed in as
         # `timestamp` throughout the streaming components -- see
         # write_event()'s docstring).

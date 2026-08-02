@@ -89,10 +89,19 @@ def full_day_bars(date, base=1.1000):
 def establish_trend(gate):
     """Same engineered peak/trough data as test_day_selection_gate.py's
     establish_up_trend, reused here so gate_for_day() actually returns
-    tradeable=True partway through the test."""
+    tradeable=True partway through the test.
+
+    Anchored off the REAL current date (not a hardcoded past date) so
+    the returned next_date lands on today -- otherwise ShadowRunner's
+    cold-start guard (added after a real bug: don't try to construct a
+    day from a stale bar belonging to an already-finished day) would
+    correctly reject these bars as "from the past," which would be
+    right in general but wrong for what THIS test is actually checking
+    (day-rollover/decision-timing logic, not cold-start behavior)."""
     highs = [1.10, 1.11, 1.15, 1.11, 1.10, 1.12, 1.20, 1.12, 1.10]
     lows = [1.05, 1.04, 1.00, 1.04, 1.09, 1.08, 1.03, 1.09, 1.10]
-    d = datetime.date(2026, 7, 1)
+    import shadow_runner.runner as runner_module
+    d = datetime.datetime.now(runner_module.NY_TZ).replace(tzinfo=None).date() - datetime.timedelta(days=9)
     for i in range(9):
         gate.on_day_closed(d, highs[i], lows[i])
         d += datetime.timedelta(days=1)

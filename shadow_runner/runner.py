@@ -122,6 +122,26 @@ class ShadowRunner:
         bar_date = bar["time_ny"].date()
 
         if self.current_day is None:
+            now_ny_date = datetime.now(NY_TZ).replace(tzinfo=None).date()
+            if bar_date < now_ny_date:
+                # Cold start when the most recent available bars belong
+                # to a day that's already fully over (e.g. starting up
+                # on a weekend, when the bridge's "most recent" bars are
+                # just Friday's tail end -- a small fragment, not the
+                # whole day). Trying to build a CurrentDay and judge that
+                # fragment produces a misleading "insufficient_bars"
+                # verdict on a day nobody was ever going to journal
+                # properly anyway. Matches the documented limitation in
+                # PHASE3_RESTART_RECOVERY.md: fully-missed/already-over
+                # days are never reconstructed, only today's in-progress
+                # one. Just wait for bars that are genuinely dated today
+                # (or later, once the market reopens).
+                log.info(
+                    "Ignoring stale bar at %s (date %s, before today %s) -- "
+                    "waiting for genuinely current data",
+                    bar["time_ny"], bar_date, now_ny_date,
+                )
+                return
             self.current_day = CurrentDay(bar_date)
         elif bar_date != self.current_day.date:
             self._finalize_day(self.current_day)
