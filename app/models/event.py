@@ -53,6 +53,12 @@ VALID_EVENT_TYPES = (
     # -- added, Phase 3: DaySelectionGate's FOMC-calendar staleness
     #    self-check (see day_selection_gate.py's module docstring) --
     "fomc_calendar_stale_warning",
+    # -- added, Phase 3 step 7: one-time cold-start trend-history
+    #    bootstrap marker (see shadow_runner/runner.py's
+    #    _bootstrap_trend_history_if_needed()) -- written once, ever,
+    #    per (user, model), to prevent re-injecting historical daily
+    #    swing data on every future restart --
+    "trend_history_bootstrapped",
 )
 
 

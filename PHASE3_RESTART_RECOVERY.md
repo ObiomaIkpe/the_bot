@@ -109,12 +109,74 @@ first.
   Postgres available. The real proof happens once this runs against
   Hetzner's actual database (Phase 3 step 8).
 
+## Addendum — cold-start trend bootstrap (added after first live deployment)
+
+The two recoveries above only cover things a *prior run of this system*
+already knew. They don't help on the very first deployment ever, when
+there's no prior run to recover from at all. That gap showed up
+immediately in practice: the first real deployment came up cleanly,
+correctly found nothing to recover, and then correctly reported
+`no_trend` for the only real day it had data for -- because with zero
+swing history, there's nothing to compute a trend from yet, and
+`DaySelectionGate` normally needs ~9 real trading days to accumulate
+enough on its own.
+
+### What's built
+
+A third, one-time step: `ShadowRunner._bootstrap_trend_history_if_needed()`,
+called at the very start of `recover_on_startup()`, before the two
+recoveries above. It fetches up to 5,000 M5 bars from the bridge
+(~17 trading days, the bridge's max per call), aggregates them into
+NY-calendar-day highs/lows itself (deliberately not using MT5's D1
+candle directly -- same UTC-vs-NY bucketing trap flagged earlier in this
+phase), and feeds the result through `DaySelectionGate.on_day_closed()`
+in chronological order, giving real trend data from day one instead of
+two weeks in.
+
+### The duplication risk this had to guard against
+
+Naively re-running this fetch-and-inject on every restart would
+duplicate the same historical swing-confirmation events every time the
+container restarts. Guarded against with a one-time marker event
+(`trend_history_bootstrapped`, written once per user+model, checked
+first on every future startup).
+
+A second, subtler case is also guarded against: if this bootstrap code
+gets deployed onto a system that's *already* been running for real for
+a while (real swing history already exists, no marker yet because the
+feature didn't exist when it started accumulating that history), the
+code detects the existing real data and writes the marker retroactively
+**without** injecting anything on top of it -- avoids creating
+duplicate/overlapping historical days.
+
+### What this does NOT cover
+
+- Only bootstraps once, ever. If the bootstrap fetch itself fails (bridge
+  down at startup), it logs an error and does NOT write the marker --
+  meaning it'll simply retry on the next restart. No partial-bootstrap
+  state is possible; it's all-or-nothing per attempt.
+- The ~17 trading days fetched depend entirely on the bridge's 5,000-bar
+  cap. If that cap ever changes, or if fewer than the ~9 real days
+  needed for a first swing confirmation happen to be available (e.g. a
+  brand-new broker account with limited history), bootstrap could
+  complete having accumulated fewer than 2 confirmed highs/lows -- in
+  which case `DaySelectionGate` correctly falls back to reporting
+  `no_trend` until enough real days close, same as it would have without
+  bootstrap at all. Not a bug, just a smaller-than-ideal head start in
+  that edge case.
+- No test against the real bridge or real Postgres -- verified with the
+  same fake-DB/fake-bridge approach as everything else in this document
+  (`tests/test_bootstrap.py`, 3 tests covering all three branches: fresh
+  cold start, already-bootstrapped, and pre-existing-real-history).
+
 ## Quick reference: files involved
 
 | File | What it adds for recovery |
 |---|---|
 | `phase1/streaming/day_selection_gate.py` | `seed_trend_history()` method |
-| `shadow_runner/persistence.py` | `get_recent_swing_history()`, `get_last_event_timestamp_for_date()` |
-| `shadow_runner/runner.py` | `recover_on_startup()` |
+| `shadow_runner/persistence.py` | `get_recent_swing_history()`, `get_last_event_timestamp_for_date()`, `event_type_exists()` |
+| `shadow_runner/runner.py` | `recover_on_startup()`, `_bootstrap_trend_history_if_needed()` |
 | `shadow_runner/main.py` | calls `recover_on_startup()` before `run_forever()` |
-| `tests/test_shadow_runner_recovery.py` | 4 tests covering both recovery paths |
+| `app/models/event.py` | `trend_history_bootstrapped` added to `VALID_EVENT_TYPES` |
+| `tests/test_shadow_runner_recovery.py` | 4 tests covering both original recovery paths |
+| `tests/test_bootstrap.py` | 3 tests covering the cold-start bootstrap's three branches |

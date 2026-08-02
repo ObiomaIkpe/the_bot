@@ -49,10 +49,11 @@ from zoneinfo import ZoneInfo
 from app.models import UserSettings
 from phase1.streaming.day_orchestrator import DayOrchestrator
 from phase1.streaming.day_selection_gate import DaySelectionGate
-from .bridge_client import BridgeClient, BridgeError
-from .config import ShadowRunnerConfig
-from .day_state import CurrentDay
-from .persistence import (
+from shadow_runner.bridge_client import BridgeClient, BridgeError
+from shadow_runner.config import ShadowRunnerConfig
+from shadow_runner.day_state import CurrentDay
+from shadow_runner.persistence import (
+    event_type_exists,
     get_current_equity,
     get_last_event_timestamp_for_date,
     get_recent_swing_history,
@@ -194,20 +195,118 @@ class ShadowRunner:
 
     # ---------- Phase 3 step 6: restart recovery ----------
 
+    BOOTSTRAP_FETCH_COUNT = 5000  # bridge's documented max per /candles call
+
+    def _bootstrap_trend_history_if_needed(self) -> None:
+        """
+        Phase 3 step 7. Runs at most ONCE, ever, per (user, model) --
+        see the three-way check below. Fetches up to BOOTSTRAP_FETCH_COUNT
+        M5 bars (the bridge's max per call, ~17 trading days), aggregates
+        them into NY-calendar-day highs/lows ourselves (deliberately NOT
+        using MT5's D1 candle directly -- that's bucketed by broker
+        server time (UTC), not NY midnight-to-midnight, which would
+        silently compute the wrong daily high/low; see this phase's
+        earlier Q&A on daily-range timing), and feeds the result through
+        DaySelectionGate.on_day_closed() in chronological order.
+        """
+        db = self.session_factory()
+        try:
+            already_bootstrapped = event_type_exists(
+                db, self.config.user_id, self.config.model, "trend_history_bootstrapped"
+            )
+            if already_bootstrapped:
+                log.info("Bootstrap: already done previously, skipping")
+                return
+
+            has_real_swing_history = event_type_exists(
+                db, self.config.user_id, self.config.model, "daily_swing_high_confirmed"
+            ) or event_type_exists(
+                db, self.config.user_id, self.config.model, "daily_swing_low_confirmed"
+            )
+        finally:
+            db.close()
+
+        if has_real_swing_history:
+            # This system has real accumulated history already (e.g.
+            # bootstrap code deployed after weeks of normal operation) --
+            # do NOT inject historical data on top of it (would create
+            # duplicate/overlapping calendar days). Just mark it done so
+            # this check is skipped instantly on all future restarts.
+            log.info(
+                "Bootstrap: real swing history already exists (this system has been "
+                "running before this feature was added) -- marking done without "
+                "injecting anything, to avoid duplicating real data."
+            )
+            self._write_events_now(
+                [{"event_type": "trend_history_bootstrapped", "timestamp": datetime.now(NY_TZ).replace(tzinfo=None), "days_seeded": 0, "note": "skipped, real history already present"}]
+            )
+            return
+
+        try:
+            candles = self.bridge.get_candles(self.config.symbol, "M5", self.BOOTSTRAP_FETCH_COUNT)
+        except BridgeError as e:
+            log.error(
+                "Bootstrap: bridge unavailable, could not fetch historical data (%s). "
+                "Trend detection will start cold and take ~9 real trading days to warm "
+                "up naturally. Will retry bootstrap on next restart (marker not written).",
+                e,
+            )
+            return
+
+        daily_ranges: dict = {}
+        for c in candles:
+            d = c["time_ny"].date()
+            if d not in daily_ranges:
+                daily_ranges[d] = {"high": c["high"], "low": c["low"]}
+            else:
+                daily_ranges[d]["high"] = max(daily_ranges[d]["high"], c["high"])
+                daily_ranges[d]["low"] = min(daily_ranges[d]["low"], c["low"])
+
+        today = datetime.now(NY_TZ).replace(tzinfo=None).date()
+        sorted_days = sorted(d for d in daily_ranges if d < today)  # exclude today -- not closed yet
+
+        all_events = []
+        for d in sorted_days:
+            events = self.gate.on_day_closed(d, daily_ranges[d]["high"], daily_ranges[d]["low"])
+            all_events.extend(events)
+
+        if all_events:
+            self._write_events_now(all_events)
+
+        self._write_events_now(
+            [
+                {
+                    "event_type": "trend_history_bootstrapped",
+                    "timestamp": datetime.now(NY_TZ).replace(tzinfo=None),
+                    "days_seeded": len(sorted_days),
+                    "swing_events_confirmed": len(all_events),
+                }
+            ]
+        )
+        log.info(
+            "Bootstrap: fed %d historical days, confirmed %d swing events",
+            len(sorted_days), len(all_events),
+        )
+
     def recover_on_startup(self) -> None:
         """
-        Call once, before run_forever(). Two independent recoveries --
-        see PHASE3_RESTART_RECOVERY.md for the full writeup, including
-        what this deliberately does NOT cover.
+        Call once, before run_forever(). Three things happen here, in
+        order -- see PHASE3_RESTART_RECOVERY.md for the full writeup.
 
-        1. Trend history: always safe to restore, no duplication risk
-           (reads from the DB, doesn't write anything).
-        2. Today's in-progress session: only replayed if NOTHING has
-           been journaled for today yet (no duplication risk). If a
-           prior run already wrote some of today's events before
-           stopping, replay is skipped entirely and a warning is logged
-           -- see the docstring below for why.
+        0. Cold-start trend bootstrap (step 7 addition): if this is
+           truly the first time this (user, model) has ever run, seed
+           DaySelectionGate with ~17 trading days of REAL historical
+           swing data instead of starting from zero and waiting ~9 real
+           trading days to accumulate enough on its own. Idempotent --
+           writes a one-time marker event so this never re-runs and
+           re-injects duplicate data on a future restart.
+        1. Trend history: restore from whatever's in the DB now
+           (includes anything step 0 just wrote, if it ran).
+        2. Today's in-progress session: replay if safe, skip with a
+           logged gap if not -- see docstring further down.
         """
+        self._bootstrap_trend_history_if_needed()
+
         db = self.session_factory()
         try:
             highs, lows = get_recent_swing_history(db, self.config.user_id, self.config.model)

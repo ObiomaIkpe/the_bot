@@ -14,6 +14,23 @@ from app.models import Event, Trade
 log = logging.getLogger("shadow_runner.persistence")
 
 
+def event_type_exists(db: Session, user_id: str, model: str, event_type: str) -> bool:
+    """
+    Phase 3 step 7 (cold-start trend bootstrap). Cheap existence check --
+    used both to detect the one-time bootstrap marker
+    (trend_history_bootstrapped) and, separately, to detect any
+    pre-existing REAL daily_swing_*_confirmed events (guards against
+    re-bootstrapping a system that's already been running for real --
+    see runner.py's _bootstrap_trend_history_if_needed()).
+    """
+    row = (
+        db.query(Event)
+        .filter(Event.user_id == user_id, Event.model == model, Event.event_type == event_type)
+        .first()
+    )
+    return row is not None
+
+
 def get_recent_swing_history(db: Session, user_id: str, model: str) -> tuple[list, list]:
     """
     Phase 3 step 6 (restart recovery). Returns (confirmed_highs,
