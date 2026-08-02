@@ -1,0 +1,9 @@
+{
+  "account_label": "tony",
+  "login": 476123801,
+  "password": "REPLACE_WITH_REAL_PASSWORD",
+  "server": "Exness-MT5Trial9",
+  "mt5_terminal_path": "C:\\MT5-Tony\\terminal64.exe",
+  "default_symbol": "EURUSDm",
+  "port": 8001
+}
