@@ -7,9 +7,9 @@ same image as `api`, different command) -- see HANDOFF.md step 7.
 import logging
 
 from app.core.database import SessionLocal
-from shadow_runner.bridge_client import BridgeClient
-from shadow_runner.config import ShadowRunnerConfig
-from shadow_runner.runner import ShadowRunner
+from .bridge_client import BridgeClient
+from .config import ShadowRunnerConfig
+from .runner import ShadowRunner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,6 +21,7 @@ def main():
     config = ShadowRunnerConfig()
     bridge = BridgeClient(config.bridge_url)
     runner = ShadowRunner(config, bridge, SessionLocal)
+    runner.recover_on_startup()
     runner.run_forever()
 
 

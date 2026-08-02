@@ -156,6 +156,38 @@ class DaySelectionGate:
         self._closed_day_count += 1
         return events
 
+    def seed_trend_history(self, confirmed_highs: list, confirmed_lows: list) -> None:
+        """
+        Phase 3 step 6 (restart recovery) addition. Directly sets the
+        confirmed-swing lists that _trend_for_today() reads, bypassing
+        on_day_closed()/DailySwingDetector entirely.
+
+        Why this is safe: _trend_for_today() only ever looks at the
+        PRICES of the last 2 confirmed highs and last 2 confirmed lows
+        -- never their day_index values. So recovering just those 4
+        prices (from already-journaled daily_swing_*_confirmed events in
+        the database, see shadow_runner/persistence.py's
+        get_recent_swing_history()) is sufficient to make correct trend
+        decisions immediately after a restart, without needing to
+        replay days of history through on_day_closed() again (which
+        would also re-emit -- and therefore duplicate in the database --
+        swing-confirmation events that were already journaled before the
+        restart).
+
+        What this deliberately does NOT restore: DailySwingDetector's
+        own internal pivot window (the rolling 5-day buffer it uses to
+        confirm brand-new swings going forward). That resets empty, same
+        as a fresh start -- meaning it takes ~4 days after a restart
+        before the detector confirms its first NEW swing on its own.
+        Until then, _trend_for_today() keeps using the seeded values
+        below, which stay valid (today's trend doesn't change just
+        because the detector's internal buffer is warming back up).
+        Call this once, immediately after construction, before any
+        on_day_closed() calls.
+        """
+        self._confirmed_highs = list(confirmed_highs)
+        self._confirmed_lows = list(confirmed_lows)
+
     def _trend_for_today(self) -> str | None:
         """Mirrors daily_trend_as_of(): last 2 confirmed highs + last 2
         confirmed lows, higher-high+higher-low -> up, lower+lower -> down,

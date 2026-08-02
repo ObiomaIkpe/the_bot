@@ -14,6 +14,87 @@ from app.models import Event, Trade
 log = logging.getLogger("shadow_runner.persistence")
 
 
+def get_recent_swing_history(db: Session, user_id: str, model: str) -> tuple[list, list]:
+    """
+    Phase 3 step 6 (restart recovery). Returns (confirmed_highs,
+    confirmed_lows) -- each a list of up to 2 (day_index, price) tuples,
+    oldest first, matching DaySelectionGate._confirmed_highs/_lows'
+    exact shape -- reconstructed from the last 2 daily_swing_high_confirmed
+    and last 2 daily_swing_low_confirmed events already in the database
+    for this (user, model). day_index is synthesized as a simple
+    increasing placeholder (0, 1) since only relative order and price
+    matter to DaySelectionGate.seed_trend_history() -- see that method's
+    docstring for why the real historical day_index values aren't needed.
+
+    Returns ([], []) if fewer than 2 of either type exist yet (e.g. a
+    brand-new deployment with no history at all) -- the gate will
+    correctly report "no_trend" until enough real days accumulate, same
+    as a fresh start.
+    """
+    highs = (
+        db.query(Event)
+        .filter(
+            Event.user_id == user_id,
+            Event.model == model,
+            Event.event_type == "daily_swing_high_confirmed",
+        )
+        .order_by(Event.timestamp.desc())
+        .limit(2)
+        .all()
+    )
+    lows = (
+        db.query(Event)
+        .filter(
+            Event.user_id == user_id,
+            Event.model == model,
+            Event.event_type == "daily_swing_low_confirmed",
+        )
+        .order_by(Event.timestamp.desc())
+        .limit(2)
+        .all()
+    )
+    # DB order is newest-first (for LIMIT to grab the right 2); the gate
+    # needs oldest-first so [-2]/[-1] indexing lands on the right pair.
+    highs = list(reversed(highs))
+    lows = list(reversed(lows))
+    confirmed_highs = [(i, e.details["price"]) for i, e in enumerate(highs)]
+    confirmed_lows = [(i, e.details["price"]) for i, e in enumerate(lows)]
+    return confirmed_highs, confirmed_lows
+
+
+def get_last_event_timestamp_for_date(db: Session, user_id: str, model: str, date) -> object | None:
+    """
+    Phase 3 step 6 (restart recovery). Returns the latest event
+    timestamp already journaled for this (user, model) on the given NY
+    calendar date, or None if nothing has been journaled for that date
+    yet. Used to decide whether it's safe to replay today's bars
+    (nothing written yet -> safe, no duplicate risk) or whether a
+    restart happened mid-day after partial progress was already
+    committed (unsafe to replay -- would duplicate everything before the
+    crash point; see runner.py's recover_on_startup() for how this
+    result gets used).
+
+    NOTE: filters in Python on date, not via a DB-side date range query
+    -- acceptable for now since one day's event volume is small (at most
+    a few hundred rows), but worth revisiting with a proper WHERE
+    timestamp::date = :date if this ever needs to scale to many users.
+    """
+    todays_events = (
+        db.query(Event)
+        .filter(Event.user_id == user_id, Event.model == model)
+        .order_by(Event.timestamp.desc())
+        .limit(500)  # generous cap -- see NOTE above
+        .all()
+    )
+    for e in todays_events:
+        # e.timestamp is NY wall-clock (that's what gets fed in as
+        # `timestamp` throughout the streaming components -- see
+        # write_event()'s docstring).
+        if e.timestamp.date() == date:
+            return e.timestamp
+    return None
+
+
 def write_event(db: Session, event: dict, user_id: str, model: str) -> Event:
     """
     Converts a streaming-component event dict (from DayOrchestrator's

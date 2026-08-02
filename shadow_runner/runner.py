@@ -49,10 +49,16 @@ from zoneinfo import ZoneInfo
 from app.models import UserSettings
 from phase1.streaming.day_orchestrator import DayOrchestrator
 from phase1.streaming.day_selection_gate import DaySelectionGate
-from shadow_runner.bridge_client import BridgeClient, BridgeError
-from shadow_runner.config import ShadowRunnerConfig
-from shadow_runner.day_state import CurrentDay
-from shadow_runner.persistence import get_current_equity, write_event, write_trade
+from .bridge_client import BridgeClient, BridgeError
+from .config import ShadowRunnerConfig
+from .day_state import CurrentDay
+from .persistence import (
+    get_current_equity,
+    get_last_event_timestamp_for_date,
+    get_recent_swing_history,
+    write_event,
+    write_trade,
+)
 
 log = logging.getLogger("shadow_runner.runner")
 
@@ -185,6 +191,71 @@ class ShadowRunner:
             db.commit()
         finally:
             db.close()
+
+    # ---------- Phase 3 step 6: restart recovery ----------
+
+    def recover_on_startup(self) -> None:
+        """
+        Call once, before run_forever(). Two independent recoveries --
+        see PHASE3_RESTART_RECOVERY.md for the full writeup, including
+        what this deliberately does NOT cover.
+
+        1. Trend history: always safe to restore, no duplication risk
+           (reads from the DB, doesn't write anything).
+        2. Today's in-progress session: only replayed if NOTHING has
+           been journaled for today yet (no duplication risk). If a
+           prior run already wrote some of today's events before
+           stopping, replay is skipped entirely and a warning is logged
+           -- see the docstring below for why.
+        """
+        db = self.session_factory()
+        try:
+            highs, lows = get_recent_swing_history(db, self.config.user_id, self.config.model)
+        finally:
+            db.close()
+        self.gate.seed_trend_history(highs, lows)
+        log.info(
+            "Recovery: seeded trend history (%d confirmed highs, %d confirmed lows) from prior events",
+            len(highs), len(lows),
+        )
+
+        now_ny = datetime.now(NY_TZ).replace(tzinfo=None)
+        today = now_ny.date()
+
+        db = self.session_factory()
+        try:
+            last_ts = get_last_event_timestamp_for_date(db, self.config.user_id, self.config.model, today)
+        finally:
+            db.close()
+
+        if last_ts is not None:
+            log.warning(
+                "Recovery: %s already has journaled events up to %s -- a prior run "
+                "must have stopped partway through today. NOT replaying (would "
+                "duplicate everything before that point). Everything between %s "
+                "and now (%s) will be a documented gap in today's journal -- see "
+                "PHASE3_RESTART_RECOVERY.md. Resuming normal live polling from here.",
+                today, last_ts, last_ts, now_ny,
+            )
+            return
+
+        log.info("Recovery: no events journaled yet for %s -- replaying from 5am NY through now", today)
+        try:
+            candles = self.bridge.get_candles(self.config.symbol, "M5", 200)
+        except BridgeError as e:
+            log.error(
+                "Recovery: bridge unavailable, could not replay today's bars (%s). "
+                "Starting fresh from the next live poll instead -- today's morning "
+                "activity before now may be missed.", e,
+            )
+            return
+
+        replay_bars = self._filter_new_closed_bars(candles, now_ny)
+        replay_bars = [b for b in replay_bars if b["time_ny"].date() == today]
+        log.info("Recovery: replaying %d bars for %s", len(replay_bars), today)
+        for bar in replay_bars:
+            self._process_bar(bar)
+            self.last_processed_bar_time_ny = bar["time_ny"]
 
     # ---------- day finalization ----------
 
