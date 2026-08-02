@@ -51,6 +51,29 @@ WHAT THIS DELIBERATELY DOESN'T RE-VERIFY: this class trusts each
 component to be individually correct (they each have exact-match
 validation against the golden master); its only job is scheduling
 them the way the batch model does.
+
+PHASE 3 ADDITION -- event_sink (additive only, see below)
+-----------------------------------------------------------
+Originally this class computed and used every sub-component's events
+internally but never exposed them -- fine when the only thing anyone
+needed was the final trade from finalize(). Phase 3 (shadow mode) needs
+to journal every intermediate event too (swings, raids, MSS, FVGs,
+fills, closes), not just the final trade.
+
+The fix is a single optional constructor parameter, event_sink -- a
+callback invoked with each event dict at the exact point in the
+existing code where that event already gets computed. This is the same
+pattern extract_golden_master.py itself uses (log_event() as a pure
+side effect that never influences control flow): every line below that
+mentions event_sink is a new, additive call; nothing about the
+existing scheduling logic, priority resolution, or return values
+changed. If you diff this file against the pre-Phase-3 version and find
+anything other than added `if self._event_sink:` blocks and the
+constructor parameter itself, that's a bug in this change, not a
+license to alter behavior. The existing test_day_orchestrator.py suite
+(which drives finalize() directly, bypassing on_new_bar) still passes
+unmodified, and event_sink defaults to None so every previous caller
+behaves identically.
 """
 from phase1.streaming.intraday_swing_detector import IntradaySwingDetector
 from phase1.streaming.raid_detector import RaidDetector
@@ -60,18 +83,24 @@ from phase1.streaming.trade_attempt import TradeAttempt, TARGET_LOOKBACK_BARS
 
 
 class DayOrchestrator:
-    def __init__(self, trend: str, session_start_idx: int, session_end_idx: int):
+    def __init__(self, trend: str, session_start_idx: int, session_end_idx: int, event_sink=None):
         """
         trend: "up" or "down" -- this day's daily-trend direction.
         session_start_idx / session_end_idx: the Kill Zone's bar-index
         bounds within this day's bars (raids only spawn inside these;
         MSS watches and fill searches run to end of day regardless).
+        event_sink: optional callable(event: dict) -> None, invoked for
+        every intermediate event as it's computed (swings, raids, MSS,
+        FVGs found/rejected, fills, closes). Added for Phase 3
+        journaling -- see module docstring. None (default) = no change
+        from pre-Phase-3 behavior.
 
         One orchestrator instance = one day. Construct fresh each day.
         """
         self.trend = trend
         self.session_start_idx = session_start_idx
         self.session_end_idx = session_end_idx
+        self._event_sink = event_sink
 
         self._swing_det = IntradaySwingDetector(swing_n=2)
         self._swing_det.start_new_day()
@@ -83,6 +112,13 @@ class DayOrchestrator:
         self._attempts = []    # list of {"key": (raid_bar, mss_bar), "attempt": TradeAttempt}
         self._recent_bars = []  # rolling last-TARGET_LOOKBACK_BARS (bar_index, high, low), INCLUDING current bar
 
+    def _emit(self, event: dict) -> None:
+        """Pure side effect, exactly like extract_golden_master.py's
+        log_event() -- never influences control flow. No-op if no sink
+        was provided."""
+        if self._event_sink is not None:
+            self._event_sink(event)
+
     def on_new_bar(self, timestamp, bar_index: int, high: float, low: float, close: float) -> None:
         """Feed every bar of the day (from 5 AM), in order."""
         # Rolling seed buffer updated FIRST -- attempts spawned at this bar
@@ -91,6 +127,8 @@ class DayOrchestrator:
         self._recent_bars = self._recent_bars[-TARGET_LOOKBACK_BARS:]
 
         swing_events = self._swing_det.on_new_bar(timestamp, high, low)
+        for e in swing_events:
+            self._emit(e)
         self._fvg_det.on_new_bar(bar_index, high, low)
 
         # 1. Feed all live attempts (fill/outcome tracking). Attempts spawned
@@ -98,7 +136,8 @@ class DayOrchestrator:
         #    bar -- matching the batch's fill search range(j+1, n).
         for a in self._attempts:
             if a["attempt"].is_active():
-                a["attempt"].on_new_bar(timestamp, bar_index, high, low)
+                for e in a["attempt"].on_new_bar(timestamp, bar_index, high, low):
+                    self._emit(e)
 
         # 2. Feed all live MSS watches; spawn attempts from confirmations.
         #    A watch spawned at THIS bar (below) guards internally against
@@ -108,9 +147,11 @@ class DayOrchestrator:
             if watch.is_expired(bar_index):
                 continue
             for mss_e in watch.on_new_bar(timestamp, bar_index, close):
+                self._emit(mss_e)
                 fvg_e = self._fvg_det.check_fvg(timestamp, mss_e["direction"])
                 if not fvg_e:
                     continue
+                self._emit(fvg_e)
                 trade_dir = "long" if mss_e["direction"] == "bull" else "short"
                 entry_price = (fvg_e["top"] + fvg_e["bottom"]) / 2
                 # stop = the frame candle's low (long) / high (short); the frame
@@ -123,7 +164,21 @@ class DayOrchestrator:
                     trade_dir, entry_price, stop, bar_index,
                     seed_bars=list(self._recent_bars),
                 )
-                if attempt.status != "rejected_min_stop":
+                if attempt.status == "rejected_min_stop":
+                    # TradeAttempt itself doesn't emit an event for this
+                    # (it's a construction-time rejection, not something
+                    # discovered via on_new_bar) -- synthesized here to
+                    # match extract_golden_master.py's fvg_rejected_min_stop
+                    # log_event() call, same fields (direction, risk_pips).
+                    self._emit(
+                        {
+                            "event_type": "fvg_rejected_min_stop",
+                            "timestamp": timestamp,
+                            "direction": mss_e["direction"],
+                            "risk_pips": float(attempt.risk_pips),
+                        }
+                    )
+                else:
                     self._attempts.append(
                         {"key": (c["raid_bar"], mss_e["mss_bar_index"]), "attempt": attempt}
                     )
@@ -135,6 +190,7 @@ class DayOrchestrator:
             timestamp, bar_index, high, low, self.trend, in_kz, swing_events
         )
         for raid_e in raid_events:
+            self._emit(raid_e)
             self._candidates.append(
                 {
                     "raid_bar": raid_e["bar_index"],
@@ -162,7 +218,9 @@ class DayOrchestrator:
         winner = min(filled, key=lambda a: a["key"])["attempt"]
 
         if winner.status == "filled":  # still open at end of day
-            winner.close_as_scratch(last_timestamp, final_close)
+            scratch_e = winner.close_as_scratch(last_timestamp, final_close)
+            if scratch_e:
+                self._emit(scratch_e)
 
         return {
             "direction": winner.direction,
