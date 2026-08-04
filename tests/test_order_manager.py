@@ -88,6 +88,7 @@ class FakeBridge:
             "ticket": ticket, "symbol": order["symbol"], "direction": order["direction"],
             "volume": order["volume"], "open_price": open_price, "current_price": open_price,
             "stop_loss": order["stop_loss"], "take_profit": 0.0, "profit": 0.0, "magic": order["magic"],
+            "time_utc": "2026-08-04T13:35:00+00:00", "time_ny": "2026-08-04T09:35:00-04:00",
         }
 
     def simulate_close(self, ticket, close_price, profit, close_reason="take_profit", history_ready=True):
@@ -430,3 +431,37 @@ def test_check_for_close_fails_safe_on_bridge_error():
     om.bridge = FailingBridge()  # then swap in a failing one for the actual close check
     result = om.check_for_close()  # must not raise
     assert result is None
+
+
+def test_get_real_outcome_returns_none_before_any_fill():
+    bridge = FakeBridge()
+    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    assert om.get_real_outcome() is None
+
+
+def test_get_real_outcome_has_fill_data_but_none_close_data_while_open():
+    bridge = FakeBridge()
+    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    ticket = _get_a_winner(bridge, om, entry=1.1050, stop=1.1040)
+
+    outcome = om.get_real_outcome()
+    assert outcome["position_ticket"] == ticket
+    assert outcome["fill_price"] == 1.1050
+    assert outcome["fill_time_utc"] == "2026-08-04T13:35:00+00:00"
+    assert outcome["close_price"] is None, "must not fabricate close data while still genuinely open"
+    assert outcome["close_time_utc"] is None
+    assert outcome["profit"] is None
+
+
+def test_get_real_outcome_has_both_fill_and_close_data_once_closed():
+    bridge = FakeBridge()
+    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    ticket = _get_a_winner(bridge, om, entry=1.1050, stop=1.1040)
+    bridge.simulate_close(ticket, close_price=1.1080, profit=30.0, close_reason="take_profit")
+    om.check_for_close()
+
+    outcome = om.get_real_outcome()
+    assert outcome["fill_price"] == 1.1050  # fill data still present, unaffected by the close
+    assert outcome["close_price"] == 1.1080
+    assert outcome["profit"] == 30.0
+    assert outcome["close_reason"] == "take_profit"

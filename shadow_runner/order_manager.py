@@ -176,6 +176,9 @@ class OrderManager:
         self._winner_position_ticket = None
         self._closed_info = None  # None until check_for_close() detects and
                                     # confirms the real close -- Phase 4 step 3
+        self._real_fill_price = None
+        self._real_fill_time_utc = None
+        self._real_fill_time_ny = None
         self._symbol_info_cache = None  # fetched lazily on first use, cached for
                                           # this instance's lifetime (one day) --
                                           # contract specs don't change intraday
@@ -392,9 +395,54 @@ class OrderManager:
         )
         return history
 
+    def get_real_outcome(self) -> dict | None:
+        """
+        Phase 4 step 3 (part 2). Called by the runner once a day
+        finalizes, to correlate this model's real order/fill/close data
+        into the SAME trade row _write_trade() already writes for the
+        simulated outcome (see runner.py's _write_trade()).
+
+        Returns None if no candidate ever filled today (nothing real to
+        report). Otherwise returns a dict with fill data always present,
+        and close data present only if check_for_close() had already
+        confirmed it by the time this is called -- a real trade can
+        still be genuinely open at day finalize time (day_end doesn't
+        force-close real positions the way the simulation's finalize()
+        force-closes its own simulated attempt; see this module's
+        cancel_all_at_day_end(), which only cancels UNFILLED pending
+        orders, never touches an already-open real position). In that
+        case close_* fields are None -- the trade row gets the fill data
+        now and stays open on the real-outcome side until a later day's
+        poll cycle (via a still-running OrderManager -- NOT YET BUILT
+        for cross-day continuation, see this method's caller for the
+        current one-day-only limitation) eventually detects the close.
+        """
+        if self._winner_position_ticket is None:
+            return None
+        return {
+            "position_ticket": self._winner_position_ticket,
+            "fill_price": self._real_fill_price,
+            "fill_time_utc": self._real_fill_time_utc,
+            "fill_time_ny": self._real_fill_time_ny,
+            "close_price": self._closed_info["close_price"] if self._closed_info else None,
+            "close_time_utc": self._closed_info["close_time_utc"] if self._closed_info else None,
+            "close_time_ny": self._closed_info["close_time_ny"] if self._closed_info else None,
+            "profit": self._closed_info["profit"] if self._closed_info else None,
+            "close_reason": self._closed_info["close_reason"] if self._closed_info else None,
+        }
+
     def _on_fill(self, winning_key: tuple, winning_info: dict, position: dict) -> None:
         self._winner_ticket = winning_info["order_ticket"]
         self._winner_position_ticket = position["ticket"]
+        # Stored for get_real_outcome() -- see this method's docstring.
+        # position["time_utc"]/["time_ny"] are the REAL broker fill
+        # timestamps (strings, ISO format, as returned by the bridge's
+        # Position model) -- distinct from winning_info's entry/stop,
+        # which are the CANDIDATE's intended values, not what actually
+        # happened.
+        self._real_fill_price = position["open_price"]
+        self._real_fill_time_utc = position["time_utc"]
+        self._real_fill_time_ny = position["time_ny"]
         self._emit(
             {
                 "event_type": "candidate_filled",

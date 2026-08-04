@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, String
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -41,6 +41,29 @@ class Trade(Base):
     # candles formed the FVG, OB-confirmed or not -- kept as JSONB so this
     # can grow without a schema migration every time a new field is added.
     setup_context = Column(JSONB, nullable=False, default=dict)
+
+    # Phase 4 step 3 (part 2): the REAL broker-side outcome, for trades
+    # where a real order was actually placed (is_shadow=False) --
+    # entry_price/exit_price/outcome/realized_r above remain what they
+    # always were: the SIMULATION's view (DayOrchestrator/TradeAttempt's
+    # computed result), unchanged by this addition. These columns hold
+    # what actually happened, side by side, so the two can be compared
+    # directly on one row without a join -- this is exactly the
+    # reconciliation Phase 4 step 3 exists to build. All nullable: a
+    # shadow-mode trade (still the overwhelming majority of rows) never
+    # populates any of these; even for an is_shadow=False trade, they
+    # only populate once OrderManager's real fill/close detection has
+    # actually happened (see shadow_runner/order_manager.py's
+    # get_real_outcome()).
+    real_position_ticket = Column(Integer, nullable=True)
+    real_fill_price = Column(Float, nullable=True)
+    real_fill_time_utc = Column(DateTime(timezone=True), nullable=True)
+    real_fill_time_ny = Column(DateTime(timezone=True), nullable=True)
+    real_close_price = Column(Float, nullable=True)
+    real_close_time_utc = Column(DateTime(timezone=True), nullable=True)
+    real_close_time_ny = Column(DateTime(timezone=True), nullable=True)
+    real_profit = Column(Float, nullable=True)
+    real_close_reason = Column(String, nullable=True)  # 'stop_loss' | 'take_profit' | 'manual' | 'expert' | 'unknown'
 
     user = relationship("User", back_populates="trades")
 

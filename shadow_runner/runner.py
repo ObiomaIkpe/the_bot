@@ -576,6 +576,16 @@ class ShadowRunner:
                 starting_equity_hint = acct["balance"]
                 equity_before = starting_equity_hint
 
+            # Phase 4 step 3 (part 2): is_shadow reflects this model's
+            # ACTUAL status, not a hardcoded True -- a model at 'active'
+            # status means a real order genuinely could have been
+            # placed today (whether one actually filled is separate --
+            # real_outcome below is None if not). Defaults to shadow
+            # (True) if somehow no model_config was loaded, matching
+            # the same fail-safe direction as the risk_pct fallback above.
+            is_shadow = True if self.model_config is None else (self.model_config["status"] != "active")
+            real_outcome = cd.order_manager.get_real_outcome() if cd.order_manager is not None else None
+
             write_trade(
                 db, trade,
                 entry_time_utc=entry_bar["time_utc"],
@@ -586,12 +596,15 @@ class ShadowRunner:
                 risk_pct=risk_pct,
                 equity_before=equity_before,
                 setup_context={"trend": cd.trend, "risk_pips": trade["risk_pips"]},
+                is_shadow=is_shadow,
+                real_outcome=real_outcome,
             )
             db.commit()
             log.info(
-                "%s: trade journaled -- %s %s, outcome=%s, entry=%.5f exit=%.5f",
+                "%s: trade journaled -- %s %s, outcome=%s, entry=%.5f exit=%.5f, "
+                "is_shadow=%s, real_outcome=%s",
                 cd.date, trade["direction"], self.config.model, trade["outcome"],
-                trade["entry"], trade["exit_price"],
+                trade["entry"], trade["exit_price"], is_shadow, real_outcome is not None,
             )
         finally:
             db.close()

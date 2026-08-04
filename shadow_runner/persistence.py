@@ -208,10 +208,23 @@ def get_current_equity(db: Session, user_id: str, model: str, bridge_starting_eq
     committed trade left off, rather than re-seeding from the broker
     balance every time (which would double-count any trades already
     journaled).
+
+    Phase 4 fix: no longer filters on is_shadow. The original filter
+    (is_shadow.is_(True)) silently meant this query would NEVER find a
+    real (is_shadow=False) trade once one existed -- the equity chain
+    would appear frozen at whatever it was the moment a model first
+    went 'active', always falling back to bridge_starting_equity instead
+    of continuing to compound. Removing the filter keeps the actual
+    equity_after computation exactly as it's always been (based on the
+    trade's simulated realized_r, unchanged by this fix) -- it only
+    fixes which ROW gets found as "most recent," not what equity means.
+    Whether equity tracking should reflect the SIMULATED or REAL P&L for
+    an is_shadow=False trade is a separate, not-yet-decided question --
+    flagged, not resolved, here.
     """
     last_trade = (
         db.query(Trade)
-        .filter(Trade.user_id == user_id, Trade.model == model, Trade.is_shadow.is_(True))
+        .filter(Trade.user_id == user_id, Trade.model == model)
         .order_by(Trade.entry_time_utc.desc())
         .first()
     )
@@ -231,6 +244,8 @@ def write_trade(
     risk_pct: float,
     equity_before: float,
     setup_context: dict,
+    is_shadow: bool = True,
+    real_outcome: dict | None = None,
 ) -> Trade:
     """
     trade: the dict DayOrchestrator.finalize() returns
@@ -238,6 +253,17 @@ def write_trade(
     entry_time_utc/entry_time_ny: recovered by the caller from the day's
         already-journaled order_filled event (finalize() itself doesn't
         carry a timestamp for when the winning attempt actually filled).
+    is_shadow: Phase 4 addition. Defaults to True (safe default, matches
+        all pre-Phase-4 behavior) -- pass False only when this model's
+        status was genuinely 'active' for this trade, i.e. a real order
+        was actually placed.
+    real_outcome: Phase 4 step 3 addition. dict from
+        OrderManager.get_real_outcome(), or None if no real order was
+        placed today (e.g. shadow/disabled model, or an active model
+        that simply had no fill today). When provided, populates the
+        real_* columns alongside the always-present simulated columns --
+        see app/models/trade.py's module comment on why both live on
+        the same row.
     """
     realized_r = compute_realized_r(trade)
     equity_after = equity_before + (equity_before * risk_pct * realized_r)
@@ -246,7 +272,7 @@ def write_trade(
         trade_id=uuid.uuid4(),
         user_id=user_id,
         model=model,
-        is_shadow=True,
+        is_shadow=is_shadow,
         direction=trade["direction"],
         entry_price=trade["entry"],
         stop_price=trade["stop"],
@@ -261,6 +287,15 @@ def write_trade(
         equity_before=equity_before,
         equity_after=equity_after,
         setup_context=setup_context,
+        real_position_ticket=real_outcome["position_ticket"] if real_outcome else None,
+        real_fill_price=real_outcome["fill_price"] if real_outcome else None,
+        real_fill_time_utc=real_outcome["fill_time_utc"] if real_outcome else None,
+        real_fill_time_ny=real_outcome["fill_time_ny"] if real_outcome else None,
+        real_close_price=real_outcome["close_price"] if real_outcome else None,
+        real_close_time_utc=real_outcome["close_time_utc"] if real_outcome else None,
+        real_close_time_ny=real_outcome["close_time_ny"] if real_outcome else None,
+        real_profit=real_outcome["profit"] if real_outcome else None,
+        real_close_reason=real_outcome["close_reason"] if real_outcome else None,
     )
     db.add(row)
     return row
