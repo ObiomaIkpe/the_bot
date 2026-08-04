@@ -42,7 +42,7 @@ report back exactly what actually happened.
 """
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import MetaTrader5 as mt5
@@ -708,15 +708,15 @@ def get_symbol_info(symbol: str) -> dict:
 
 def _do_get_position_history(ticket: int) -> dict:
     _ensure_connected()
-    # mt5.history_deals_get(position=...) can return incomplete results
-    # if the terminal's history cache doesn't already cover the relevant
-    # date range -- history_select() first ensures it does. 30 days back
-    # is generous for a same-day-or-recent position; widen if this is
-    # ever used to look up much older trades.
-    from_date = datetime.now(timezone.utc) - timedelta(days=30)
-    to_date = datetime.now(timezone.utc) + timedelta(days=1)
-    mt5.history_select(from_date, to_date)
-
+    # NOTE: earlier version of this function called mt5.history_select()
+    # first, believing it was needed to populate the terminal's history
+    # cache before history_deals_get() would return complete results.
+    # That was wrong -- history_select() is an MQL5 (Expert Advisor)
+    # function, not part of the Python MetaTrader5 package at all;
+    # calling it raised AttributeError ('MetaTrader5' has no attribute
+    # 'history_select'), confirmed via a real 500 error live on the VPS.
+    # The Python wrapper's history_deals_get(position=ticket) queries
+    # the terminal directly and needs no such prior step.
     deals = mt5.history_deals_get(position=ticket)
     if deals is None:
         _fail(f"mt5.history_deals_get(position={ticket})")
