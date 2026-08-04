@@ -450,3 +450,189 @@ def _do_close_position(ticket: int) -> dict:
 
 def close_position(ticket: int) -> dict:
     return _run(_do_close_position, ticket)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 step 2a: pending limit orders + position modify.
+#
+# WHY THIS EXISTS SEPARATELY FROM place_market_order(): the strategy's
+# take-profit target is computed from the 6 bars immediately BEFORE the
+# fill -- it literally cannot be known before the fill happens (see this
+# phase's design discussion). A market order fills instantly with no
+# window to compute anything first. A PENDING limit order, by contrast,
+# sits at the strategy's exact computed entry price and waits for the
+# market to reach it -- faithfully matching how TradeAttempt already
+# simulates fills in the batch/streaming model, and giving the caller a
+# real gap between "order placed" and "order filled" in which to compute
+# the target and then attach it via modify_position().
+#
+# Direction -> MT5 order type is fixed, not caller-configurable: this
+# strategy's FVG entries are always a retracement INTO a recent price
+# level, never a breakout through one. Long always waits for price to
+# dip down to entry (BUY_LIMIT); short always waits for price to rise up
+# to entry (SELL_LIMIT). There is no scenario in this model where a stop
+# order (buy above market / sell below market) is correct.
+# ---------------------------------------------------------------------------
+
+
+def _do_place_pending_limit_order(
+    symbol: str, direction: str, volume: float,
+    entry_price: float, stop_loss: float,
+    comment: str, magic: int,
+) -> dict:
+    _ensure_connected()
+
+    if direction == "long":
+        order_type = mt5.ORDER_TYPE_BUY_LIMIT
+    elif direction == "short":
+        order_type = mt5.ORDER_TYPE_SELL_LIMIT
+    else:
+        raise ValueError(f"direction must be 'long' or 'short', got {direction!r}")
+
+    request = {
+        "action": mt5.TRADE_ACTION_PENDING,
+        "symbol": symbol,
+        "volume": volume,
+        "type": order_type,
+        "price": entry_price,
+        "sl": stop_loss,
+        "tp": 0.0,  # deliberately not set -- unknown until fill, see module note above
+        "type_time": mt5.ORDER_TIME_GTC,
+        # Expiry is managed by the CALLER (live-order-manager), not MT5's
+        # own day-order semantics -- the strategy's day_end (5pm NY) is
+        # the authoritative boundary, and MT5's server-side day rollover
+        # doesn't necessarily line up with it. Cancel explicitly via
+        # cancel_pending_order() instead of relying on this expiring on
+        # its own.
+        "magic": magic,
+        "comment": comment[:31],
+    }
+
+    result = mt5.order_send(request)
+    if result is None:
+        _fail("mt5.order_send (pending) returned None")
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        raise MT5Error(
+            f"pending order_send did not complete: retcode={result.retcode}, "
+            f"comment={result.comment!r}"
+        )
+
+    time_utc, time_ny = _to_ny(int(datetime.now(timezone.utc).timestamp()))
+    return {
+        "order_ticket": result.order,
+        "symbol": symbol,
+        "direction": direction,
+        "volume": volume,
+        "entry_price": entry_price,
+        "stop_loss": stop_loss,
+        "magic": magic,
+        "time_utc": time_utc,
+        "time_ny": time_ny,
+        "retcode": result.retcode,
+        "broker_comment": result.comment,
+    }
+
+
+def place_pending_limit_order(
+    symbol: str, direction: str, volume: float,
+    entry_price: float, stop_loss: float,
+    comment: str, magic: int,
+) -> dict:
+    return _run(
+        _do_place_pending_limit_order, symbol, direction, volume, entry_price, stop_loss, comment, magic
+    )
+
+
+def _do_get_pending_orders(magic: int | None) -> list[dict]:
+    _ensure_connected()
+    orders = mt5.orders_get()
+    if orders is None:
+        _fail("mt5.orders_get")
+    out = []
+    for o in orders:
+        if magic is not None and o.magic != magic:
+            continue
+        if o.type not in (mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_SELL_LIMIT):
+            continue  # this bridge only ever places limit orders; ignore anything else on the account
+        time_utc, time_ny = _to_ny(o.time_setup)
+        out.append({
+            "order_ticket": o.ticket,
+            "symbol": o.symbol,
+            "direction": "long" if o.type == mt5.ORDER_TYPE_BUY_LIMIT else "short",
+            "volume": o.volume_current,
+            "entry_price": o.price_open,
+            "stop_loss": o.sl,
+            "take_profit": o.tp,  # 0.0 until modify_position() sets it post-fill
+            "magic": o.magic,
+            "time_utc": time_utc,
+            "time_ny": time_ny,
+        })
+    return out
+
+
+def get_pending_orders(magic: int | None = None) -> list[dict]:
+    return _run(_do_get_pending_orders, magic)
+
+
+def _do_cancel_pending_order(ticket: int) -> dict:
+    _ensure_connected()
+    request = {
+        "action": mt5.TRADE_ACTION_REMOVE,
+        "order": ticket,
+    }
+    result = mt5.order_send(request)
+    if result is None:
+        _fail("mt5.order_send (cancel) returned None")
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        raise MT5Error(
+            f"cancel did not complete: retcode={result.retcode}, comment={result.comment!r}"
+        )
+    time_utc, time_ny = _to_ny(int(datetime.now(timezone.utc).timestamp()))
+    return {
+        "order_ticket": ticket,
+        "time_utc": time_utc,
+        "time_ny": time_ny,
+        "retcode": result.retcode,
+        "broker_comment": result.comment,
+    }
+
+
+def cancel_pending_order(ticket: int) -> dict:
+    return _run(_do_cancel_pending_order, ticket)
+
+
+def _do_modify_position(ticket: int, stop_loss: float | None, take_profit: float | None) -> dict:
+    _ensure_connected()
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        raise MT5Error(f"No open position found with ticket {ticket}")
+    pos = positions[0]
+
+    request = {
+        "action": mt5.TRADE_ACTION_SLTP,
+        "position": ticket,
+        "symbol": pos.symbol,
+        "sl": stop_loss if stop_loss is not None else pos.sl,
+        "tp": take_profit if take_profit is not None else pos.tp,
+    }
+    result = mt5.order_send(request)
+    if result is None:
+        _fail("mt5.order_send (modify) returned None")
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        raise MT5Error(
+            f"modify did not complete: retcode={result.retcode}, comment={result.comment!r}"
+        )
+    time_utc, time_ny = _to_ny(int(datetime.now(timezone.utc).timestamp()))
+    return {
+        "ticket": ticket,
+        "stop_loss": request["sl"],
+        "take_profit": request["tp"],
+        "time_utc": time_utc,
+        "time_ny": time_ny,
+        "retcode": result.retcode,
+        "broker_comment": result.comment,
+    }
+
+
+def modify_position(ticket: int, stop_loss: float | None = None, take_profit: float | None = None) -> dict:
+    return _run(_do_modify_position, ticket, stop_loss, take_profit)

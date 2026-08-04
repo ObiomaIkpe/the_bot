@@ -25,11 +25,18 @@ from app import mt5_client
 from app.config import get_config
 from app.models import (
     AccountInfoResponse,
+    CancelResult,
     CandlesResponse,
     CloseResult,
     HealthResponse,
+    ModifyPositionRequest,
+    ModifyResult,
     OrderResult,
+    PendingOrder,
+    PendingOrdersResponse,
+    PendingOrderResult,
     PlaceOrderRequest,
+    PlacePendingOrderRequest,
     Position,
     PositionsResponse,
     TickResponse,
@@ -185,3 +192,71 @@ def close_position(ticket: int):
     except mt5_client.MT5Error as e:
         raise HTTPException(status_code=502, detail=str(e))
     return CloseResult(**data)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 step 2a: pending limit orders + position modify. Same
+# orders_enabled gate as everything else above.
+# ---------------------------------------------------------------------------
+
+
+@app.post("/orders/pending", response_model=PendingOrderResult)
+def place_pending_order(order: PlacePendingOrderRequest):
+    config = get_config()
+    _require_orders_enabled(config)
+    try:
+        data = mt5_client.place_pending_limit_order(
+            symbol=order.symbol,
+            direction=order.direction,
+            volume=order.volume,
+            entry_price=order.entry_price,
+            stop_loss=order.stop_loss,
+            comment=order.comment,
+            magic=config.magic_number,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except mt5_client.MT5Error as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return PendingOrderResult(**data)
+
+
+@app.get("/orders/pending", response_model=PendingOrdersResponse)
+def get_pending_orders(
+    only_ours: bool = Query(
+        default=True,
+        description="If true (default), only this worker's own pending orders (by magic number).",
+    ),
+):
+    config = get_config()
+    _require_orders_enabled(config)
+    magic = config.magic_number if only_ours else None
+    try:
+        rows = mt5_client.get_pending_orders(magic)
+    except mt5_client.MT5Error as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return PendingOrdersResponse(orders=[PendingOrder(**r) for r in rows])
+
+
+@app.delete("/orders/pending/{ticket}", response_model=CancelResult)
+def cancel_pending_order(ticket: int):
+    config = get_config()
+    _require_orders_enabled(config)
+    try:
+        data = mt5_client.cancel_pending_order(ticket)
+    except mt5_client.MT5Error as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return CancelResult(**data)
+
+
+@app.post("/positions/{ticket}/modify", response_model=ModifyResult)
+def modify_position(ticket: int, modification: ModifyPositionRequest):
+    config = get_config()
+    _require_orders_enabled(config)
+    if modification.stop_loss is None and modification.take_profit is None:
+        raise HTTPException(status_code=400, detail="Provide at least one of stop_loss or take_profit")
+    try:
+        data = mt5_client.modify_position(ticket, modification.stop_loss, modification.take_profit)
+    except mt5_client.MT5Error as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return ModifyResult(**data)

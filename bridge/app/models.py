@@ -115,3 +115,74 @@ class CloseResult(BaseModel):
     time_ny: str
     retcode: int
     broker_comment: str
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 step 2a: pending limit orders + position modify
+# ---------------------------------------------------------------------------
+
+
+class PlacePendingOrderRequest(BaseModel):
+    symbol: str
+    direction: str  # "long" | "short" -- maps to BUY_LIMIT / SELL_LIMIT, see mt5_client.py
+    volume: float
+    entry_price: float
+    stop_loss: float
+    comment: str = ""
+    # No take_profit field, deliberately -- unknown at placement time.
+    # Set it afterward via POST /positions/{ticket}/modify once the
+    # position has actually filled and the target's been computed.
+
+
+class PendingOrderResult(BaseModel):
+    order_ticket: int
+    symbol: str
+    direction: str
+    volume: float
+    entry_price: float
+    stop_loss: float
+    magic: int
+    time_utc: str
+    time_ny: str
+    retcode: int
+    broker_comment: str
+
+
+class PendingOrder(BaseModel):
+    order_ticket: int
+    symbol: str
+    direction: str
+    volume: float
+    entry_price: float
+    stop_loss: float
+    take_profit: float  # 0.0 until modified post-fill
+    magic: int
+    time_utc: str
+    time_ny: str
+
+
+class PendingOrdersResponse(BaseModel):
+    orders: list[PendingOrder]
+
+
+class CancelResult(BaseModel):
+    order_ticket: int
+    time_utc: str
+    time_ny: str
+    retcode: int
+    broker_comment: str
+
+
+class ModifyPositionRequest(BaseModel):
+    stop_loss: float | None = None
+    take_profit: float | None = None
+
+
+class ModifyResult(BaseModel):
+    ticket: int
+    stop_loss: float
+    take_profit: float
+    time_utc: str
+    time_ny: str
+    retcode: int
+    broker_comment: str
