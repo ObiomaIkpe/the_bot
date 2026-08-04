@@ -66,8 +66,8 @@ def compute_lot_size(
         pip_size = 0.0001  (standard forex pip -- matches PIP above and
             phase1/streaming/trade_attempt.py's own convention throughout
             this project)
-        ticks_per_pip = pip_size / symbol_info["trade_tick_size"]
-        pip_value_per_lot = symbol_info["trade_tick_value"] * ticks_per_pip
+        ticks_per_pip = pip_size / symbol_info["tick_size"]
+        pip_value_per_lot = symbol_info["tick_value"] * ticks_per_pip
         risk_amount = balance * risk_pct
         stop_distance_pips = stop_distance_price / pip_size
         raw_lots = risk_amount / (stop_distance_pips * pip_value_per_lot)
@@ -76,12 +76,16 @@ def compute_lot_size(
     never be inadvertently exceeded by rounding the wrong direction),
     floored at volume_min, capped at volume_max -- all three pulled from
     the same real symbol_info, not assumed.
+
+    symbol_info: dict from BridgeClient.get_symbol_info() -- matches the
+        bridge's SymbolInfoResponse field names exactly: tick_size,
+        tick_value, volume_min, volume_max, volume_step.
     """
     if stop_distance_price <= 0:
         raise ValueError(f"stop_distance_price must be positive, got {stop_distance_price}")
 
-    tick_size = symbol_info["trade_tick_size"]
-    tick_value = symbol_info["trade_tick_value"]
+    tick_size = symbol_info["tick_size"]
+    tick_value = symbol_info["tick_value"]
     volume_step = symbol_info["volume_step"]
     volume_min = symbol_info["volume_min"]
     volume_max = symbol_info["volume_max"]
@@ -170,6 +174,8 @@ class OrderManager:
         self._pending = {}  # candidate_key -> {"order_ticket", "direction", "entry", "stop", "raid_bar"}
         self._winner_ticket = None
         self._winner_position_ticket = None
+        self._closed_info = None  # None until check_for_close() detects and
+                                    # confirms the real close -- Phase 4 step 3
         self._symbol_info_cache = None  # fetched lazily on first use, cached for
                                           # this instance's lifetime (one day) --
                                           # contract specs don't change intraday
@@ -317,6 +323,74 @@ class OrderManager:
             self._on_fill(candidate_key, info, matching_position)
             return True
         return False
+
+    def check_for_close(self) -> dict | None:
+        """
+        Phase 4 step 3. Call periodically (each poll cycle), same
+        cadence as check_for_fills() -- but independent of it (this
+        checks whether the WINNING position has since closed, not
+        whether a candidate has filled). Returns the real close details
+        (dict: close_price, profit, close_reason, close_time_utc/ny) the
+        FIRST time a close is newly detected and confirmed -- None on
+        every other call, including before there's a winner, after the
+        close has already been recorded once, or if the position is
+        still genuinely open.
+
+        Two real broker-timing races handled deliberately, not just
+        assumed away:
+          1. A position can vanish from /positions the instant it
+             closes, but MT5's OWN history cache can lag slightly
+             before /history/position/{ticket} reflects it. If the
+             history lookup says not-yet-closed despite the position
+             having vanished, this method does NOT record anything --
+             it logs a warning and waits for a future poll to retry,
+             rather than recording a False negative.
+          2. Bridge/network failures during either call fail safe: log
+             and retry next poll, never crash, never record partial/
+             wrong data.
+        """
+        if self._winner_position_ticket is None or self._closed_info is not None:
+            return None
+
+        try:
+            open_positions = self.bridge.get_positions(self.model_config["magic_number"])
+        except Exception as e:
+            log.error("check_for_close: bridge call failed, will retry next poll: %s", e)
+            return None
+
+        still_open = any(p["ticket"] == self._winner_position_ticket for p in open_positions)
+        if still_open:
+            return None
+
+        try:
+            history = self.bridge.get_position_history(self._winner_position_ticket)
+        except Exception as e:
+            log.error(
+                "check_for_close: could not fetch close history for ticket %s: %s -- will retry next poll",
+                self._winner_position_ticket, e,
+            )
+            return None
+
+        if not history.get("is_closed"):
+            log.warning(
+                "Ticket %s vanished from open positions but history shows not yet "
+                "closed -- likely a brief broker-side history-cache lag; will retry next poll",
+                self._winner_position_ticket,
+            )
+            return None
+
+        self._closed_info = history
+        self._emit(
+            {
+                "event_type": "real_trade_closed",
+                "timestamp": self._now_ny(),
+                "ticket": self._winner_position_ticket,
+                "close_price": history["close_price"],
+                "profit": history["profit"],
+                "close_reason": history["close_reason"],
+            }
+        )
+        return history
 
     def _on_fill(self, winning_key: tuple, winning_info: dict, position: dict) -> None:
         self._winner_ticket = winning_info["order_ticket"]

@@ -121,6 +121,25 @@ class ShadowRunner:
             self.last_processed_bar_time_ny = bar["time_ny"]
 
         self._check_order_manager_fills()
+        self._check_order_manager_close()
+
+    def _check_order_manager_close(self) -> None:
+        """Phase 4 step 3. Checked once per poll cycle, same cadence and
+        reasoning as _check_order_manager_fills() -- real broker state
+        (whether the winning position has closed) can change between
+        bar closes, not just at them. OrderManager itself already
+        journals the real_trade_closed event via its own event_sink
+        (same cd.todays_events.append hookup as fills/placements) -- no
+        additional action needed here beyond calling it; this method
+        exists mainly for symmetry/discoverability alongside its fills
+        counterpart, and as the natural place to extend later (e.g.
+        correlating the real close back into the simulated trade record
+        -- not yet built, see PHASE4 step 3 scope)."""
+        cd = self.current_day
+        if cd is None or cd.order_manager is None:
+            return
+        cd.order_manager.check_for_close()
+        self._flush_new_events(cd)
 
     def _check_order_manager_fills(self) -> None:
         """Checked once per poll cycle, independent of whether any new
@@ -130,6 +149,9 @@ class ShadowRunner:
         if cd is None or cd.order_manager is None:
             return
         newly_filled = cd.order_manager.check_for_fills()
+        self._flush_new_events(cd)  # flush regardless of outcome below --
+                                      # placements/cancellations already
+                                      # emitted must not wait for a bar
         if not newly_filled:
             return
         try:
@@ -152,6 +174,7 @@ class ShadowRunner:
             if (c["time_ny"].replace(tzinfo=None) if c["time_ny"].tzinfo else c["time_ny"]) + BAR_DURATION <= now_ny
         ]
         cd.order_manager.attach_target(closed_bars)
+        self._flush_new_events(cd)
 
     def _filter_new_closed_bars(self, candles: list[dict], now_ny: datetime) -> list[dict]:
         out = []

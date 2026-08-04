@@ -74,6 +74,11 @@ VALID_EVENT_TYPES = (
     "candidate_filled",
     "target_attached",
     "order_placement_failed",
+    # -- added, Phase 4 step 3: the real broker-side close of a winning
+    #    position -- distinct from the simulation's trade_closed (which
+    #    describes what the SIMULATION thinks happened); this is what
+    #    ACTUALLY happened, per MT5's own trade history --
+    "real_trade_closed",
 )
 
 

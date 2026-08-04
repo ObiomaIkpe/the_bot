@@ -24,6 +24,7 @@ class FakeBridge:
         self._next_ticket = 1000
         self._pending_orders = {}   # ticket -> dict
         self._positions = {}        # ticket -> dict
+        self._closed_history = {}   # ticket -> dict, see simulate_close()
 
         # Position-sizing test controls -- see test_compute_volume_* below.
         self.symbol_info_response = None
@@ -72,6 +73,12 @@ class FakeBridge:
             self._positions[ticket]["take_profit"] = take_profit
         return {"ticket": ticket, "take_profit": take_profit, "retcode": 10009}
 
+    def get_position_history(self, ticket):
+        self.get_position_history_call_count = getattr(self, "get_position_history_call_count", 0) + 1
+        if ticket in self._closed_history:
+            return self._closed_history[ticket]
+        return {"ticket": ticket, "is_closed": False}
+
     # ---- test helpers, not part of the real BridgeClient interface ----
 
     def simulate_fill(self, ticket, open_price):
@@ -82,6 +89,19 @@ class FakeBridge:
             "volume": order["volume"], "open_price": open_price, "current_price": open_price,
             "stop_loss": order["stop_loss"], "take_profit": 0.0, "profit": 0.0, "magic": order["magic"],
         }
+
+    def simulate_close(self, ticket, close_price, profit, close_reason="take_profit", history_ready=True):
+        """Moves a ticket out of open positions, as if MT5 closed it, and
+        (if history_ready) makes get_position_history() report it as
+        closed -- set history_ready=False to simulate the broker-side
+        history-cache-lag race check_for_close() has to handle."""
+        self._positions.pop(ticket, None)
+        if history_ready:
+            self._closed_history[ticket] = {
+                "ticket": ticket, "is_closed": True, "close_price": close_price,
+                "close_time_utc": "2026-08-04T14:00:00+00:00", "close_time_ny": "2026-08-04T10:00:00-04:00",
+                "profit": profit, "close_reason": close_reason,
+            }
 
 
 def make_model_config(status="active", magic=900001):
@@ -221,9 +241,9 @@ def realistic_symbol_info():
     trusting them for real position sizing (see
     PHASE4_BRIDGE_ORDERS.md)."""
     return {
-        "trade_contract_size": 100000.0,
-        "trade_tick_size": 0.00001,
-        "trade_tick_value": 1.0,
+        "contract_size": 100000.0,
+        "tick_size": 0.00001,
+        "tick_value": 1.0,
         "volume_min": 0.01,
         "volume_max": 100.0,
         "volume_step": 0.01,
@@ -320,3 +340,93 @@ def test_compute_target_matches_trade_attempt_convention():
     assert compute_target(bars, "long") == (1.12 + 1.10) / 2
     # short -> lowest low (1.05), midpoint with its own high (1.08)
     assert compute_target(bars, "short") == (1.08 + 1.05) / 2
+
+
+def _get_a_winner(bridge, om, entry=1.1050, stop=1.1040):
+    """Shared setup for check_for_close tests: place, fill, confirm --
+    returns the winning ticket."""
+    om.on_trade_candidate_ready(make_candidate_event(entry=entry, stop=stop))
+    ticket = bridge.placed[0]["order_ticket"]
+    bridge.simulate_fill(ticket, open_price=entry)
+    om.check_for_fills()
+    return ticket
+
+
+def test_check_for_close_returns_none_before_any_winner_exists():
+    bridge = FakeBridge()
+    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    assert om.check_for_close() is None
+
+
+def test_check_for_close_returns_none_while_still_open():
+    bridge = FakeBridge()
+    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    _get_a_winner(bridge, om)
+    assert om.check_for_close() is None  # still open in the fake bridge
+
+
+def test_check_for_close_detects_a_real_close_and_emits_event():
+    bridge = FakeBridge()
+    received = []
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, event_sink=received.append)
+    ticket = _get_a_winner(bridge, om)
+
+    bridge.simulate_close(ticket, close_price=1.1080, profit=30.0, close_reason="take_profit")
+    result = om.check_for_close()
+
+    assert result is not None
+    assert result["close_price"] == 1.1080
+    assert result["profit"] == 30.0
+    assert result["close_reason"] == "take_profit"
+
+    close_events = [e for e in received if e.get("event_type") == "real_trade_closed"]
+    assert len(close_events) == 1
+    assert close_events[0]["ticket"] == ticket
+
+
+def test_check_for_close_only_reports_once():
+    bridge = FakeBridge()
+    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    ticket = _get_a_winner(bridge, om)
+    bridge.simulate_close(ticket, close_price=1.1080, profit=30.0)
+
+    first = om.check_for_close()
+    second = om.check_for_close()
+    assert first is not None
+    assert second is None, "should only report the close once, not every poll"
+
+
+def test_check_for_close_handles_history_cache_lag_without_a_false_negative():
+    """Position vanishes from open positions, but history hasn't caught
+    up yet -- must NOT record anything, must retry on a later poll."""
+    bridge = FakeBridge()
+    received = []
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, event_sink=received.append)
+    ticket = _get_a_winner(bridge, om)
+
+    bridge.simulate_close(ticket, close_price=1.1080, profit=30.0, history_ready=False)
+    result = om.check_for_close()
+    assert result is None, "must not record a close before history confirms it"
+    assert not any(e.get("event_type") == "real_trade_closed" for e in received)
+
+    # Now history catches up (simulating the next poll, after the lag resolves).
+    bridge._closed_history[ticket] = {
+        "ticket": ticket, "is_closed": True, "close_price": 1.1080,
+        "close_time_utc": "x", "close_time_ny": "x", "profit": 30.0, "close_reason": "take_profit",
+    }
+    result2 = om.check_for_close()
+    assert result2 is not None, "should successfully record the close once history catches up"
+
+
+def test_check_for_close_fails_safe_on_bridge_error():
+    class FailingBridge(FakeBridge):
+        def get_positions(self, magic):
+            raise Exception("simulated network failure")
+
+    working_bridge = FakeBridge()
+    om = OrderManager(make_model_config(), "EURUSDm", working_bridge)
+    _get_a_winner(working_bridge, om)  # place/fill against the working bridge
+
+    om.bridge = FailingBridge()  # then swap in a failing one for the actual close check
+    result = om.check_for_close()  # must not raise
+    assert result is None

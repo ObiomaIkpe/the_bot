@@ -38,6 +38,7 @@ from app.models import (
     PlaceOrderRequest,
     PlacePendingOrderRequest,
     Position,
+    PositionHistoryResponse,
     PositionsResponse,
     SymbolInfoResponse,
     TickResponse,
@@ -125,10 +126,25 @@ def get_symbol_info(
     config = get_config()
     sym = symbol or config.default_symbol
     try:
-        data = mt5_client.symbol_info(sym)
+        data = mt5_client.get_symbol_info(sym)
     except mt5_client.MT5Error as e:
         raise HTTPException(status_code=502, detail=str(e))
     return SymbolInfoResponse(**data)
+
+
+@app.get("/history/position/{ticket}", response_model=PositionHistoryResponse)
+def get_position_history(ticket: int):
+    """
+    Read-only, no orders_enabled gate -- same as /account_info,
+    /candles, /symbol_info. Returns is_closed=False if the position is
+    still open OR if the ticket has no closing deal in the last 30 days
+    of history (see mt5_client.py's _do_get_position_history).
+    """
+    try:
+        data = mt5_client.get_position_history(ticket)
+    except mt5_client.MT5Error as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return PositionHistoryResponse(**data)
 
 
 # ---------------------------------------------------------------------------

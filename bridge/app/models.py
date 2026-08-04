@@ -206,3 +206,24 @@ class ModifyResult(BaseModel):
     time_ny: str
     retcode: int
     broker_comment: str
+
+
+class SymbolInfoResponse(BaseModel):
+    symbol: str
+    contract_size: float
+    tick_size: float
+    tick_value: float  # already converted to account currency by MT5 itself
+    digits: int
+    volume_min: float
+    volume_max: float
+    volume_step: float
+
+
+class PositionHistoryResponse(BaseModel):
+    ticket: int
+    is_closed: bool
+    close_price: float | None = None
+    close_time_utc: str | None = None
+    close_time_ny: str | None = None
+    profit: float | None = None
+    close_reason: str | None = None  # "stop_loss" | "take_profit" | "manual" | "expert" | "unknown"

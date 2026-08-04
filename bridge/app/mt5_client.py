@@ -42,7 +42,7 @@ report back exactly what actually happened.
 """
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import MetaTrader5 as mt5
@@ -667,3 +667,92 @@ def _do_modify_position(ticket: int, stop_loss: float | None, take_profit: float
 
 def modify_position(ticket: int, stop_loss: float | None = None, take_profit: float | None = None) -> dict:
     return _run(_do_modify_position, ticket, stop_loss, take_profit)
+
+
+def _do_get_symbol_info(symbol: str) -> dict:
+    _ensure_connected()
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        _fail(f"mt5.symbol_info({symbol!r})")
+    return {
+        "symbol": symbol,
+        "contract_size": info.trade_contract_size,
+        "tick_size": info.trade_tick_size,
+        # trade_tick_value is ALREADY converted into the account's own
+        # currency by MT5 itself -- this is exactly why fetching it
+        # beats hardcoding an assumed $/pip figure. Correct regardless
+        # of account currency, symbol, or broker-specific contract
+        # quirks (this bridge previously assumed $10/pip/lot for
+        # EURUSD, unverified against Exness's actual spec -- see
+        # shadow_runner/order_manager.py's prior OPEN ITEM note).
+        "tick_value": info.trade_tick_value,
+        "digits": info.digits,
+        "volume_min": info.volume_min,
+        "volume_max": info.volume_max,
+        "volume_step": info.volume_step,
+    }
+
+
+def get_symbol_info(symbol: str) -> dict:
+    return _run(_do_get_symbol_info, symbol)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 step 3 prerequisite: real trade close detection. Nothing before
+# this point could ever tell whether a real, filled position had since
+# closed -- OrderManager could detect a FILL but had no way to detect a
+# CLOSE. This is read-only (no orders_enabled gate needed, same as
+# /account_info, /candles, /symbol_info).
+# ---------------------------------------------------------------------------
+
+
+def _do_get_position_history(ticket: int) -> dict:
+    _ensure_connected()
+    # mt5.history_deals_get(position=...) can return incomplete results
+    # if the terminal's history cache doesn't already cover the relevant
+    # date range -- history_select() first ensures it does. 30 days back
+    # is generous for a same-day-or-recent position; widen if this is
+    # ever used to look up much older trades.
+    from_date = datetime.now(timezone.utc) - timedelta(days=30)
+    to_date = datetime.now(timezone.utc) + timedelta(days=1)
+    mt5.history_select(from_date, to_date)
+
+    deals = mt5.history_deals_get(position=ticket)
+    if deals is None:
+        _fail(f"mt5.history_deals_get(position={ticket})")
+    if not deals:
+        return {"ticket": ticket, "is_closed": False}
+
+    # A position's deal history includes the opening deal (entry ==
+    # DEAL_ENTRY_IN) and, once closed, a closing deal (entry ==
+    # DEAL_ENTRY_OUT) -- possibly more than one if partially closed.
+    # Only the closing deal(s) matter here.
+    closing_deals = [d for d in deals if d.entry == mt5.DEAL_ENTRY_OUT]
+    if not closing_deals:
+        return {"ticket": ticket, "is_closed": False}
+
+    close_deal = closing_deals[-1]  # most recent, in case of a partial-close sequence
+    reason_map = {
+        mt5.DEAL_REASON_SL: "stop_loss",
+        mt5.DEAL_REASON_TP: "take_profit",
+        mt5.DEAL_REASON_CLIENT: "manual",
+        mt5.DEAL_REASON_EXPERT: "expert",
+        mt5.DEAL_REASON_MOBILE: "manual",
+        mt5.DEAL_REASON_WEB: "manual",
+    }
+    close_reason = reason_map.get(close_deal.reason, "unknown")
+
+    time_utc, time_ny = _to_ny(close_deal.time)
+    return {
+        "ticket": ticket,
+        "is_closed": True,
+        "close_price": close_deal.price,
+        "close_time_utc": time_utc,
+        "close_time_ny": time_ny,
+        "profit": close_deal.profit,
+        "close_reason": close_reason,
+    }
+
+
+def get_position_history(ticket: int) -> dict:
+    return _run(_do_get_position_history, ticket)
