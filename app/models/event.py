@@ -59,6 +59,12 @@ VALID_EVENT_TYPES = (
     #    per (user, model), to prevent re-injecting historical daily
     #    swing data on every future restart --
     "trend_history_bootstrapped",
+    # -- added, Phase 4 step 2b: the earliest point a candidate's real
+    #    entry+stop are both known -- see day_orchestrator.py's
+    #    trade_candidate_ready emit(). The live-order-manager listens for
+    #    this to place a real pending order; take_profit is deliberately
+    #    absent from this event (unknown until the real fill happens) --
+    "trade_candidate_ready",
 )
 
 

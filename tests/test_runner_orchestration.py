@@ -9,7 +9,7 @@ access.
 import datetime
 
 from shadow_runner.config import ShadowRunnerConfig
-from shadow_runner.runner import ShadowRunner
+from shadow_runner.runner import ShadowRunner, NY_TZ
 import shadow_runner.persistence as persistence
 from app.models import UserSettings
 
@@ -160,7 +160,14 @@ def test_skipped_day_journals_skip_reason_and_never_constructs_orchestrator():
     config = make_config()
     runner = ShadowRunner(config, bridge=None, session_factory=lambda: FakeDB(shared_writes))
     # No trend established -- gate_for_day() must return "no_trend".
-    d = datetime.date(2026, 8, 3)
+    # Anchored off the REAL current date (not a hardcoded one) -- a fixed
+    # date eventually becomes "the past" as real time moves on, which the
+    # cold-start stale-bar guard (added after a real bug -- see
+    # PHASE3_RESTART_RECOVERY.md addendum 2) correctly rejects. This
+    # test is about the no_trend skip path, not cold-start behavior, so
+    # it needs a date that's never in the past relative to whenever the
+    # test actually runs.
+    d = datetime.datetime.now(NY_TZ).replace(tzinfo=None).date()
     bars = full_day_bars(d)
     for b in bars:
         runner._process_bar(b)

@@ -182,6 +182,29 @@ class DayOrchestrator:
                     self._attempts.append(
                         {"key": (c["raid_bar"], mss_e["mss_bar_index"]), "attempt": attempt}
                     )
+                    # Phase 4 step 2b addition, additive only (same pattern
+                    # as every other _emit() call in this file -- pure side
+                    # effect, no change to scheduling/priority logic).
+                    # This is the EARLIEST point entry+stop are both known
+                    # for this candidate -- the live-order-manager listens
+                    # for this event to place a real PENDING order the
+                    # moment it fires, rather than waiting for on_new_bar's
+                    # simulated fill (which only tells us what WOULD have
+                    # happened, not what to do right now). Take-profit is
+                    # deliberately absent here -- see mt5_client.py's
+                    # module docstring: the target isn't computable until
+                    # the real fill actually happens.
+                    self._emit(
+                        {
+                            "event_type": "trade_candidate_ready",
+                            "timestamp": timestamp,
+                            "direction": trade_dir,
+                            "entry": float(entry_price),
+                            "stop": float(stop),
+                            "raid_bar": c["raid_bar"],
+                            "mss_bar": mss_e["mss_bar_index"],
+                        }
+                    )
 
         # 3. Raid detection (Kill Zone only, enforced via in_kill_zone flag).
         #    EVERY raid spawns its own candidate -- this is the fix.
