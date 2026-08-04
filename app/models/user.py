@@ -22,6 +22,12 @@ class User(Base):
     settings = relationship(
         "UserSettings", back_populates="user", uselist=False, cascade="all, delete-orphan"
     )
+    # Phase 4: one row per (user, model) -- replaces the old single
+    # live_model/shadow_models columns on UserSettings. See
+    # app/models/model_config.py's module docstring.
+    model_configs = relationship(
+        "ModelConfig", back_populates="user", cascade="all, delete-orphan"
+    )
     trades = relationship("Trade", back_populates="user", cascade="all, delete-orphan")
     events = relationship("Event", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship(
