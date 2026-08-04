@@ -251,6 +251,37 @@ def candles(symbol: str, timeframe: str, count: int) -> list[dict]:
     return _run(_do_candles, symbol, timeframe, count)
 
 
+def _do_symbol_info(symbol: str) -> dict:
+    _ensure_connected()
+    info = mt5.symbol_info(symbol)
+    if info is None:
+        _fail(f"mt5.symbol_info({symbol!r})")
+    return {
+        "symbol": symbol,
+        "digits": info.digits,
+        "trade_contract_size": info.trade_contract_size,
+        "trade_tick_size": info.trade_tick_size,
+        "trade_tick_value": info.trade_tick_value,
+        "volume_min": info.volume_min,
+        "volume_max": info.volume_max,
+        "volume_step": info.volume_step,
+    }
+
+
+def symbol_info(symbol: str) -> dict:
+    """
+    Read-only -- the REAL contract specification for this symbol,
+    straight from MT5/the broker, not an assumed figure. Added
+    specifically to replace the unverified "$10/pip per standard lot"
+    default that shadow_runner/order_manager.py's compute_lot_size()
+    used to rely on -- see that module's docstring for the full story.
+    No orders_enabled gate needed (matches the other read-only
+    endpoints from Phase 2) -- this is pure information, no order
+    placement involved.
+    """
+    return _run(_do_symbol_info, symbol)
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: order placement. See this file's module docstring above for the
 # safety layers that sit ABOVE these functions -- they are deliberately not

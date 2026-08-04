@@ -16,16 +16,17 @@ models can still receive on_trade_candidate_ready() calls harmlessly --
 this makes it safe to wire an OrderManager for EVERY model_config row,
 active or not, without an outer "if active" check at every call site.
 
-OPEN ITEM, DELIBERATELY NOT SOLVED HERE: _compute_volume() is a
-documented placeholder returning the checklist's known-safe minimum lot
-size (0.01), NOT a real risk_pct-based position size. Real position
-sizing needs (a) the account's current real balance (from the bridge's
-/account_info) and (b) a confirmed pip-value-per-lot figure for
-EURUSDm's specific contract on Exness (the 10.0 USD/pip/standard-lot
-default in compute_lot_size() below is the conventional EURUSD value,
-NOT yet verified against Exness's actual contract spec -- micro/cent
-account variants sometimes differ). Do not flip any model to 'active'
-in a way that actually risks money until this is resolved for real.
+RESOLVED (was an open item): position sizing now uses the symbol's real
+contract specification, fetched from MT5 via the bridge's /symbol_info
+endpoint (BridgeClient.get_symbol_info()), instead of an assumed
+pip-value figure. See compute_lot_size()'s docstring for the exact math.
+_compute_volume() fetches this once per OrderManager instance (cached --
+contract specs don't change intraday) plus the account's current real
+balance, and computes a genuine risk_pct-based lot size. Still worth a
+one-time manual sanity check the first time a model actually goes
+'active' -- compare the computed lot size's implied risk against the
+account's real margin/balance in the MT5 terminal directly, per
+PHASE4_BRIDGE_ORDERS.md's checklist -- but this is no longer a guess.
 """
 import logging
 from datetime import datetime
@@ -49,31 +50,60 @@ TARGET_LOOKBACK_BARS = 6  # MUST match phase1/streaming/trade_attempt.py's
 
 
 def compute_lot_size(
-    balance: float, risk_pct: float, stop_distance_price: float,
-    pip_value_per_pip_per_lot: float = 10.0,
+    balance: float, risk_pct: float, stop_distance_price: float, symbol_info: dict,
 ) -> float:
     """
-    Standard forex position sizing:
+    Real forex position sizing, using the symbol's ACTUAL contract
+    specification (fetched via BridgeClient.get_symbol_info(), which
+    calls MT5's own symbol_info() -- the broker's real, authoritative
+    numbers for THIS specific symbol/account, not an assumed constant).
+
+    This replaces an earlier version of this function that defaulted to
+    an unverified "$10/pip per standard lot" figure -- see this
+    module's OPEN ITEM history. That guess is gone; the math below uses
+    only real values:
+
+        pip_size = 0.0001  (standard forex pip -- matches PIP above and
+            phase1/streaming/trade_attempt.py's own convention throughout
+            this project)
+        ticks_per_pip = pip_size / symbol_info["trade_tick_size"]
+        pip_value_per_lot = symbol_info["trade_tick_value"] * ticks_per_pip
         risk_amount = balance * risk_pct
-        lot_size = risk_amount / (stop_distance_in_pips * pip_value_per_lot)
+        stop_distance_pips = stop_distance_price / pip_size
+        raw_lots = risk_amount / (stop_distance_pips * pip_value_per_lot)
 
-    pip_value_per_pip_per_lot defaults to $10/pip per 1.0 (standard) lot
-    -- the conventional EURUSD value for a USD-denominated account.
-    UNVERIFIED against Exness's actual EURUSDm contract specification --
-    see this module's docstring. Do not trust this default for real
-    position sizing without confirming it first (check a real trade's
-    margin/pip-value directly in the MT5 terminal).
-
-    Rounds DOWN to 2 decimal places (MT5's typical minimum lot step) --
-    always down, never up, so risk is never inadvertently exceeded by
-    rounding in the wrong direction. Floors at 0.01 (can't place smaller).
+    Rounded DOWN to the symbol's real volume_step (never up -- risk must
+    never be inadvertently exceeded by rounding the wrong direction),
+    floored at volume_min, capped at volume_max -- all three pulled from
+    the same real symbol_info, not assumed.
     """
     if stop_distance_price <= 0:
         raise ValueError(f"stop_distance_price must be positive, got {stop_distance_price}")
+
+    tick_size = symbol_info["trade_tick_size"]
+    tick_value = symbol_info["trade_tick_value"]
+    volume_step = symbol_info["volume_step"]
+    volume_min = symbol_info["volume_min"]
+    volume_max = symbol_info["volume_max"]
+
+    ticks_per_pip = PIP / tick_size
+    pip_value_per_lot = tick_value * ticks_per_pip
+
     stop_distance_pips = stop_distance_price / PIP
     risk_amount = balance * risk_pct
-    raw_lots = risk_amount / (stop_distance_pips * pip_value_per_pip_per_lot)
-    return max(0.01, int(raw_lots * 100) / 100)
+    raw_lots = risk_amount / (stop_distance_pips * pip_value_per_lot)
+
+    steps = int((raw_lots / volume_step) + 1e-9)  # +epsilon guards against binary
+                                                    # float imprecision (e.g. 0.1/0.01
+                                                    # == 9.999999999999998, not 10.0,
+                                                    # which would silently under-round
+                                                    # without this) -- still always
+                                                    # floors, never rounds UP past the
+                                                    # true value
+    lots = steps * volume_step
+    lots = max(volume_min, lots)
+    lots = min(volume_max, lots)
+    return round(lots, 8)  # clean up float noise from the step multiplication
 
 
 def compute_target(bars: list[dict], direction: str) -> float:
@@ -140,6 +170,9 @@ class OrderManager:
         self._pending = {}  # candidate_key -> {"order_ticket", "direction", "entry", "stop", "raid_bar"}
         self._winner_ticket = None
         self._winner_position_ticket = None
+        self._symbol_info_cache = None  # fetched lazily on first use, cached for
+                                          # this instance's lifetime (one day) --
+                                          # contract specs don't change intraday
 
     def is_active(self) -> bool:
         return self.model_config["status"] == "active"
@@ -201,9 +234,50 @@ class OrderManager:
         )
 
     def _compute_volume(self, event: dict) -> float:
-        # PLACEHOLDER -- see module docstring's OPEN ITEM. Returns the
-        # known-safe minimum, NOT a real risk_pct-based size.
-        return 0.01
+        """
+        Real risk_pct-based position sizing (see compute_lot_size() and
+        the module docstring's RESOLVED note). Falls back to the
+        checklist's known-safe minimum (0.01) if either bridge call
+        fails or the math itself errors -- a failure here should never
+        crash order placement, but it also must never silently place a
+        WRONG size; falling back to the smallest possible size is the
+        safe direction to fail in, not falling back to something larger.
+        """
+        if self._symbol_info_cache is None:
+            try:
+                self._symbol_info_cache = self.bridge.get_symbol_info(self.symbol)
+            except Exception as e:
+                log.error(
+                    "Could not fetch symbol_info for %s (%s) -- falling back to "
+                    "minimum lot size 0.01 for this order", self.symbol, e,
+                )
+                return 0.01
+
+        try:
+            balance = self.bridge.account_info()["balance"]
+        except Exception as e:
+            log.error(
+                "Could not fetch account balance (%s) -- falling back to minimum "
+                "lot size 0.01 for this order", e,
+            )
+            return 0.01
+
+        stop_distance = abs(event["entry"] - event["stop"])
+        try:
+            return compute_lot_size(
+                balance, self.model_config["risk_pct"], stop_distance, self._symbol_info_cache
+            )
+        except Exception as e:
+            # Broad catch deliberately: a malformed/missing symbol_info
+            # response (e.g. None, or missing keys) raises TypeError/
+            # KeyError, not just ValueError from a bad stop_distance --
+            # the whole point of this fallback is to NEVER crash order
+            # placement, whatever the failure mode.
+            log.error(
+                "compute_lot_size failed (%s) -- falling back to minimum lot size "
+                "0.01 for this order", e,
+            )
+            return 0.01
 
     def check_for_fills(self) -> bool:
         """Call periodically (each poll cycle). Detects a candidate's

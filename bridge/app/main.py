@@ -39,6 +39,7 @@ from app.models import (
     PlacePendingOrderRequest,
     Position,
     PositionsResponse,
+    SymbolInfoResponse,
     TickResponse,
 )
 
@@ -115,6 +116,19 @@ def get_candles(
     except mt5_client.MT5Error as e:
         raise HTTPException(status_code=502, detail=str(e))
     return CandlesResponse(symbol=sym, timeframe=timeframe, count=len(rows), candles=rows)
+
+
+@app.get("/symbol_info", response_model=SymbolInfoResponse)
+def get_symbol_info(
+    symbol: str = Query(default=None, description="Defaults to config's default_symbol, e.g. EURUSDm"),
+):
+    config = get_config()
+    sym = symbol or config.default_symbol
+    try:
+        data = mt5_client.symbol_info(sym)
+    except mt5_client.MT5Error as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return SymbolInfoResponse(**data)
 
 
 # ---------------------------------------------------------------------------

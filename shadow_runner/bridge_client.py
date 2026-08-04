@@ -156,3 +156,16 @@ class BridgeClient:
         except requests.RequestException as e:
             detail = e.response.text if getattr(e, "response", None) is not None else str(e)
             raise BridgeError(f"POST /positions/{ticket}/modify failed: {detail}") from e
+
+    def get_symbol_info(self, symbol: str) -> dict:
+        """The REAL contract spec for this symbol -- see
+        order_manager.py's compute_lot_size() for why this replaced an
+        assumed pip-value figure."""
+        try:
+            resp = requests.get(
+                f"{self.base_url}/symbol_info", params={"symbol": symbol}, timeout=self.timeout_seconds
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            raise BridgeError(f"GET /symbol_info failed: {e}") from e

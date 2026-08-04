@@ -152,4 +152,80 @@ knowledge.
   against this bridge in the same way the shadow runner is, so this
   isn't expected to matter, but it's untested.
 - Anything about the live-trading runner itself, `user_settings` safety
-  rails, or reconciliation logic -- those are steps 2-4, not this one.
+  rails, or reconciliation logic -- those are steps 2c-4, not this one.
+
+## Addendum — step 2a: pending limit orders + position modify
+
+Four new endpoints, same `orders_enabled` gate as everything above:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /orders/pending` | Place a pending limit order (entry + stop only, no take-profit yet -- see design note below) |
+| `GET /orders/pending` | List this worker's still-pending (not yet filled) orders |
+| `DELETE /orders/pending/{ticket}` | Cancel a pending order that hasn't filled |
+| `POST /positions/{ticket}/modify` | Attach stop-loss/take-profit to an already-open position |
+
+**Why no take-profit at placement time:** the strategy's target is
+computed from the 6 bars immediately before the fill -- it can't be
+known before the fill happens. Place the pending order with entry+stop
+only, wait for it to fill (shows up in `/positions`, disappears from
+`/orders/pending`), compute the target the same way the model always
+has, then call `/positions/{ticket}/modify` to attach it.
+
+### Extra manual verification steps for this addendum
+
+Same account, same safety precautions as the checklist above (confirm
+`orders_enabled` state deliberately before/after, use tiny volume, wide
+stop). Run these once EURUSDm is open:
+
+1. **Place a pending limit order below/above current market** (so it
+   doesn't fill instantly):
+   ```powershell
+   $body = @{ symbol="EURUSDm"; direction="long"; volume=0.01; entry_price=<price well below current bid>; stop_loss=<even lower>; comment="phase4-pending-test" } | ConvertTo-Json
+   Invoke-RestMethod -Uri "http://127.0.0.1:8001/orders/pending" -Method Post -Body $body -ContentType "application/json"
+   ```
+2. **Confirm it shows up in `GET /orders/pending`**, NOT in `/positions`
+   (it hasn't filled yet).
+3. **Cancel it** via `DELETE /orders/pending/{ticket}`, confirm it's gone
+   from `/orders/pending`.
+4. **Separately, place one that WILL fill quickly** (entry very close to
+   current price), wait for it to fill, confirm it now appears in
+   `/positions` and has disappeared from `/orders/pending`.
+5. **Call `/positions/{ticket}/modify`** with a `take_profit` value,
+   confirm the position's `take_profit` field updates correctly in a
+   follow-up `/positions` check.
+6. Close it via the existing `/positions/{ticket}/close` from the
+   original checklist, confirm it's gone.
+7. Turn `orders_enabled` back off.
+
+## Addendum — position sizing: /symbol_info verification
+
+Real position sizing (`shadow_runner/order_manager.py`'s
+`compute_lot_size()`) depends entirely on `/symbol_info` returning
+Exness's ACTUAL contract spec for EURUSDm. This endpoint is read-only --
+no `orders_enabled` gate needed -- safe to check any time:
+
+```powershell
+Invoke-RestMethod -Uri "http://127.0.0.1:8001/symbol_info?symbol=EURUSDm" -Method Get | ConvertTo-Json
+```
+
+**Sanity-check the numbers**, don't just confirm it returns *something*:
+- `trade_tick_size` should be a small number like `0.00001` (5-digit
+  pricing, matches the fill prices already seen in this checklist, e.g.
+  `1.15082`)
+- `trade_tick_value` combined with `trade_tick_size` should imply
+  roughly $10/pip per 1.0 lot for a USD account trading EURUSD -- if the
+  numbers imply something wildly different (10x or 100x off), STOP and
+  investigate before letting any model reach `'active'` status; a wrong
+  contract read means every computed lot size is wrong in the same
+  direction.
+- `volume_min`/`volume_step` should match what you've already been
+  using successfully in this checklist (`0.01`).
+
+**Cross-check against a real fill**: place one more tiny test market
+order (same as step 5 of the main checklist), note its `profit` field
+in `/positions` as price moves a known number of pips, and confirm that
+observed profit-per-pip roughly matches what `/symbol_info`'s numbers
+predict for a 0.01-lot position. This is the real proof -- not just
+that the endpoint returns data, but that the data is genuinely accurate
+for this specific account/symbol.

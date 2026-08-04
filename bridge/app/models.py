@@ -53,6 +53,17 @@ class CandlesResponse(BaseModel):
     candles: list[Candle]
 
 
+class SymbolInfoResponse(BaseModel):
+    symbol: str
+    digits: int
+    trade_contract_size: float
+    trade_tick_size: float
+    trade_tick_value: float
+    volume_min: float
+    volume_max: float
+    volume_step: float
+
+
 # ---------------------------------------------------------------------------
 # Phase 4: order placement / positions
 # ---------------------------------------------------------------------------
