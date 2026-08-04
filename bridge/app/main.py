@@ -152,7 +152,7 @@ def place_order(order: PlaceOrderRequest):
             stop_loss=order.stop_loss,
             take_profit=order.take_profit,
             comment=order.comment,
-            magic=config.magic_number,
+            magic=order.magic if order.magic is not None else config.magic_number,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -212,7 +212,7 @@ def place_pending_order(order: PlacePendingOrderRequest):
             entry_price=order.entry_price,
             stop_loss=order.stop_loss,
             comment=order.comment,
-            magic=config.magic_number,
+            magic=order.magic if order.magic is not None else config.magic_number,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

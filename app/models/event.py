@@ -65,6 +65,15 @@ VALID_EVENT_TYPES = (
     #    this to place a real pending order; take_profit is deliberately
     #    absent from this event (unknown until the real fill happens) --
     "trade_candidate_ready",
+    # -- added, Phase 4 step 2c: OrderManager's own events (distinct
+    #    from DayOrchestrator's -- these describe what the order-manager
+    #    actually DID against the real broker, not what the trading
+    #    logic detected) --
+    "pending_order_placed",
+    "pending_order_cancelled",
+    "candidate_filled",
+    "target_attached",
+    "order_placement_failed",
 )
 
 

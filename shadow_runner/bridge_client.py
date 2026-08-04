@@ -1,8 +1,16 @@
 """
-Thin HTTP client for the Phase 2 MT5 bridge. Read-only, matches the
-bridge's actual endpoints exactly (see bridge/README.md /
-PHASE2_VALIDATION.md) -- no order functions exist on the bridge side to
-call even if this file wanted to.
+Thin HTTP client for the Phase 2/4 MT5 bridge. Matches the bridge's
+actual endpoints exactly (see bridge/README.md / PHASE2_VALIDATION.md /
+PHASE4_BRIDGE_ORDERS.md).
+
+Order-placing methods below (place_pending_order, cancel_pending_order,
+modify_position, get_positions) call endpoints gated behind the bridge's
+own orders_enabled config -- this client doesn't add any additional
+safety layer of its own beyond what the bridge already enforces. Every
+order-placing call also accepts an explicit magic number (Phase 4
+multi-model addition) -- callers must always pass the calling model's
+own magic_number from its ModelConfig row, never rely on the bridge's
+worker-level default, since multiple models share one bridge worker.
 """
 import logging
 from datetime import datetime
@@ -70,3 +78,81 @@ class BridgeClient:
             except (KeyError, ValueError) as e:
                 raise BridgeError(f"Malformed candle in bridge response: {c!r} ({e})") from e
         return candles
+
+    # -----------------------------------------------------------------
+    # Phase 4: order placement
+    # -----------------------------------------------------------------
+
+    def place_pending_order(
+        self, symbol: str, direction: str, volume: float,
+        entry_price: float, stop_loss: float, comment: str, magic: int,
+    ) -> dict:
+        try:
+            resp = requests.post(
+                f"{self.base_url}/orders/pending",
+                json={
+                    "symbol": symbol, "direction": direction, "volume": volume,
+                    "entry_price": entry_price, "stop_loss": stop_loss,
+                    "comment": comment, "magic": magic,
+                },
+                timeout=self.timeout_seconds,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            detail = e.response.text if getattr(e, "response", None) is not None else str(e)
+            raise BridgeError(f"POST /orders/pending failed: {detail}") from e
+
+    def get_pending_orders(self, magic: int) -> list[dict]:
+        try:
+            resp = requests.get(
+                f"{self.base_url}/orders/pending",
+                params={"only_ours": True},
+                timeout=self.timeout_seconds,
+            )
+            resp.raise_for_status()
+            all_orders = resp.json().get("orders", [])
+        except requests.RequestException as e:
+            raise BridgeError(f"GET /orders/pending failed: {e}") from e
+        # Belt-and-suspenders filter: only_ours=true already filters to
+        # the BRIDGE WORKER's default magic, which may not match this
+        # specific model's magic if multiple models share the worker --
+        # filter explicitly by the exact magic passed in.
+        return [o for o in all_orders if o.get("magic") == magic]
+
+    def cancel_pending_order(self, ticket: int) -> dict:
+        try:
+            resp = requests.delete(
+                f"{self.base_url}/orders/pending/{ticket}", timeout=self.timeout_seconds
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            detail = e.response.text if getattr(e, "response", None) is not None else str(e)
+            raise BridgeError(f"DELETE /orders/pending/{ticket} failed: {detail}") from e
+
+    def get_positions(self, magic: int) -> list[dict]:
+        try:
+            resp = requests.get(
+                f"{self.base_url}/positions",
+                params={"only_ours": True},
+                timeout=self.timeout_seconds,
+            )
+            resp.raise_for_status()
+            all_positions = resp.json().get("positions", [])
+        except requests.RequestException as e:
+            raise BridgeError(f"GET /positions failed: {e}") from e
+        return [p for p in all_positions if p.get("magic") == magic]
+
+    def modify_position(self, ticket: int, take_profit: float) -> dict:
+        try:
+            resp = requests.post(
+                f"{self.base_url}/positions/{ticket}/modify",
+                json={"take_profit": take_profit},
+                timeout=self.timeout_seconds,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            detail = e.response.text if getattr(e, "response", None) is not None else str(e)
+            raise BridgeError(f"POST /positions/{ticket}/modify failed: {detail}") from e

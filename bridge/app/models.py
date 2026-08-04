@@ -64,9 +64,9 @@ class PlaceOrderRequest(BaseModel):
     volume: float   # lot size, e.g. 0.01
     stop_loss: float
     take_profit: float
-    comment: str = ""  # truncated to 31 chars by MT5 itself; magic number
-                         # (from config, not the caller) is the real
-                         # identifying tag, this is just for human context
+    comment: str = ""
+    magic: int | None = None  # Phase 4 multi-model addition -- see
+                                # PlacePendingOrderRequest's identical field
 
 
 class OrderResult(BaseModel):
@@ -129,6 +129,15 @@ class PlacePendingOrderRequest(BaseModel):
     entry_price: float
     stop_loss: float
     comment: str = ""
+    magic: int | None = None  # Phase 4 multi-model addition: overrides
+                                # config.magic_number when provided, so
+                                # multiple models sharing one bridge
+                                # worker/account can each place orders
+                                # under their own distinct magic number.
+                                # Falls back to the worker's configured
+                                # default when omitted (keeps the
+                                # already-verified single-model flow
+                                # working unchanged).
     # No take_profit field, deliberately -- unknown at placement time.
     # Set it afterward via POST /positions/{ticket}/modify once the
     # position has actually filled and the target's been computed.
