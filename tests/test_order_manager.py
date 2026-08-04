@@ -71,9 +71,10 @@ def make_model_config(status="active", magic=900001):
 
 
 def make_candidate_event(direction="long", entry=1.1050, stop=1.1040, raid_bar=12, mss_bar=15):
+    import datetime
     return {
-        "event_type": "trade_candidate_ready", "direction": direction,
-        "entry": entry, "stop": stop, "raid_bar": raid_bar, "mss_bar": mss_bar,
+        "event_type": "trade_candidate_ready", "timestamp": datetime.datetime(2026, 8, 4, 9, 0),
+        "direction": direction, "entry": entry, "stop": stop, "raid_bar": raid_bar, "mss_bar": mss_bar,
     }
 
 

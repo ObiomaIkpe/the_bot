@@ -28,6 +28,13 @@ account variants sometimes differ). Do not flip any model to 'active'
 in a way that actually risks money until this is resolved for real.
 """
 import logging
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+NY_TZ = ZoneInfo("America/New_York")  # matches shadow_runner.runner's own convention --
+                                        # every event timestamp elsewhere in this codebase
+                                        # is NY wall-clock, not UTC (see persistence.py's
+                                        # write_event() docstring)
 
 log = logging.getLogger("shadow_runner.order_manager")
 
@@ -72,10 +79,21 @@ def compute_lot_size(
 def compute_target(bars: list[dict], direction: str) -> float:
     """
     Replicates TradeAttempt's target calculation exactly, using real
-    bars from the bridge instead of simulated ones: look at the last
-    TARGET_LOOKBACK_BARS bars ending at (and including) the fill bar,
-    find the most extreme one (highest high for long, lowest low for
-    short), target = that bar's (high+low)/2 midpoint.
+    bars from the bridge instead of simulated ones: look at the
+    TARGET_LOOKBACK_BARS bars STRICTLY BEFORE the fill (confirmed
+    against extract_golden_master.py: highs[p-6:p] excludes index p,
+    i.e. the fill bar itself is NOT part of the window), find the most
+    extreme one (highest high for long, lowest low for short), target =
+    that bar's (high+low)/2 midpoint.
+
+    CALLER'S RESPONSIBILITY, not enforced here: `bars` must be exactly
+    the window "before the fill" -- do not include the fill bar itself,
+    and do not include any still-forming (not yet closed) bar. In live
+    trading, a fill can happen at any moment (tick-level), not just at
+    a bar close, so "before the fill" in practice means "the most
+    recently CLOSED bars as of the moment the fill was detected" -- see
+    runner.py's _check_order_manager_fills() for how those get fetched
+    and filtered before this function ever sees them.
 
     bars: list of dicts with "high"/"low" keys, OLDEST FIRST, length
     >= TARGET_LOOKBACK_BARS.
@@ -126,6 +144,13 @@ class OrderManager:
     def is_active(self) -> bool:
         return self.model_config["status"] == "active"
 
+    def _now_ny(self):
+        """Real wall-clock NY time -- used for events triggered by
+        polling real broker state (fills, cancellations, target
+        attachment), which don't have a natural bar timestamp to reuse
+        the way on_trade_candidate_ready's events do."""
+        return datetime.now(NY_TZ).replace(tzinfo=None)
+
     def on_trade_candidate_ready(self, event: dict) -> None:
         """Call from DayOrchestrator's event_sink whenever
         trade_candidate_ready fires for this model. Safe to call even
@@ -153,7 +178,7 @@ class OrderManager:
         except Exception as e:
             log.error("Failed to place pending order for candidate %s: %s", candidate_key, e)
             self._emit(
-                {"event_type": "order_placement_failed", "candidate_key": str(candidate_key), "error": str(e)}
+                {"event_type": "order_placement_failed", "timestamp": event["timestamp"], "candidate_key": str(candidate_key), "error": str(e)}
             )
             return
 
@@ -167,6 +192,7 @@ class OrderManager:
         self._emit(
             {
                 "event_type": "pending_order_placed",
+                "timestamp": event["timestamp"],
                 "order_ticket": result["order_ticket"],
                 "direction": event["direction"],
                 "entry": event["entry"],
@@ -179,21 +205,25 @@ class OrderManager:
         # known-safe minimum, NOT a real risk_pct-based size.
         return 0.01
 
-    def check_for_fills(self) -> None:
+    def check_for_fills(self) -> bool:
         """Call periodically (each poll cycle). Detects a candidate's
         pending order filling, cancels every sibling, and records the
-        winner. Handles at most one newly-detected fill per call --
-        keeps this simple and testable; a missed cycle just gets caught
-        on the next poll."""
+        winner. Returns True if a fill was newly detected THIS call
+        (caller should then fetch real closed bars and call
+        attach_target()) -- False otherwise, including when there's
+        nothing to check or a winner was already decided on a prior
+        call. Handles at most one newly-detected fill per call -- keeps
+        this simple and testable; a missed cycle just gets caught on
+        the next poll."""
         if not self.is_active() or not self._pending or self._winner_ticket is not None:
-            return
+            return False
 
         try:
             open_positions = self.bridge.get_positions(self.model_config["magic_number"])
             still_pending = self.bridge.get_pending_orders(self.model_config["magic_number"])
         except Exception as e:
             log.error("check_for_fills: bridge call failed, will retry next poll: %s", e)
-            return
+            return False
 
         still_pending_tickets = {o["order_ticket"] for o in still_pending}
 
@@ -211,7 +241,8 @@ class OrderManager:
                 del self._pending[candidate_key]
                 continue
             self._on_fill(candidate_key, info, matching_position)
-            return
+            return True
+        return False
 
     def _on_fill(self, winning_key: tuple, winning_info: dict, position: dict) -> None:
         self._winner_ticket = winning_info["order_ticket"]
@@ -219,6 +250,7 @@ class OrderManager:
         self._emit(
             {
                 "event_type": "candidate_filled",
+                "timestamp": self._now_ny(),
                 "order_ticket": position["ticket"],
                 "direction": winning_info["direction"],
                 "fill_price": position["open_price"],
@@ -233,6 +265,7 @@ class OrderManager:
                 self._emit(
                     {
                         "event_type": "pending_order_cancelled",
+                        "timestamp": self._now_ny(),
                         "order_ticket": info["order_ticket"],
                         "reason": "sibling_filled",
                     }
@@ -260,7 +293,7 @@ class OrderManager:
         try:
             self.bridge.modify_position(self._winner_position_ticket, take_profit=target)
             self._emit(
-                {"event_type": "target_attached", "ticket": self._winner_position_ticket, "target": target}
+                {"event_type": "target_attached", "timestamp": self._now_ny(), "ticket": self._winner_position_ticket, "target": target}
             )
         except Exception as e:
             log.error("Failed to attach target to position %s: %s", self._winner_position_ticket, e)
@@ -277,6 +310,7 @@ class OrderManager:
                 self._emit(
                     {
                         "event_type": "pending_order_cancelled",
+                        "timestamp": self._now_ny(),
                         "order_ticket": info["order_ticket"],
                         "reason": "day_end",
                     }

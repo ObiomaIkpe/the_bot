@@ -33,6 +33,9 @@ class CurrentDay:
         self.trend: str | None = None
         self.skip_reason: str | None = None
         self.orchestrator = None         # DayOrchestrator, only if tradeable
+        self.order_manager = None        # OrderManager, only if tradeable AND
+                                          # a model_configs row exists -- see
+                                          # runner.py's _decide_day()
         self.todays_events: list[dict] = []  # raw event dicts, for the
                                               # entry/exit-timestamp lookup
                                               # at finalize time

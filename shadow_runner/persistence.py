@@ -9,7 +9,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import Event, Trade
+from app.models import Event, ModelConfig, Trade
 
 log = logging.getLogger("shadow_runner.persistence")
 
@@ -118,6 +118,33 @@ def get_last_event_timestamp_for_date(db: Session, user_id: str, model: str, dat
         if e.timestamp.date() == date:
             return e.timestamp
     return None
+
+
+def get_model_config(db: Session, user_id: str, model_name: str) -> dict | None:
+    """
+    Phase 4 step 2c. Fetches the real (status, risk_pct, magic_number)
+    for one (user, model) from the model_configs table -- replaces the
+    old assumption that a model's risk_pct lived on UserSettings (a
+    Phase 0/3-era, single-model idea; UserSettings.risk_pct is now
+    stale/unused going forward, see runner.py's _write_trade()).
+    Returns None if no row exists for this (user, model) -- callers
+    should treat that as "this model has no config at all yet," not the
+    same as status='disabled' (which means a row exists but is
+    intentionally off).
+    """
+    row = (
+        db.query(ModelConfig)
+        .filter(ModelConfig.user_id == user_id, ModelConfig.model_name == model_name)
+        .first()
+    )
+    if row is None:
+        return None
+    return {
+        "model_name": row.model_name,
+        "status": row.status,
+        "risk_pct": row.risk_pct,
+        "magic_number": row.magic_number,
+    }
 
 
 def write_event(db: Session, event: dict, user_id: str, model: str) -> Event:

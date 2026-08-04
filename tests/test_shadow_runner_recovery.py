@@ -8,36 +8,57 @@ from zoneinfo import ZoneInfo
 
 import shadow_runner.persistence as persistence
 from shadow_runner.runner import ShadowRunner, NY_TZ
-from app.models import Event
+from app.models import Event, ModelConfig
 from tests.test_runner_orchestration import make_config
 from phase1.streaming.day_selection_gate import DaySelectionGate
 
 
 class RecoveryFakeQuery:
     def __init__(self, all_result=None):
-        self._all = all_result or []
+        self._all = list(all_result or [])
+        self._conditions = []
+        self._limit_n = None
 
-    def filter(self, *a, **k):
+    def filter(self, *conditions):
+        self._conditions.extend(conditions)
         return self
 
     def order_by(self, *a, **k):
-        return self
+        return self  # still not real ordering -- tests pre-sort fixtures
+                      # where order actually matters
 
     def limit(self, n):
+        self._limit_n = n
         return self
 
+    def _apply_filters(self):
+        rows = self._all
+        for cond in self._conditions:
+            rows = [r for r in rows if getattr(r, cond.name, None) == cond.value]
+        return rows
+
+    def first(self):
+        rows = self._apply_filters()
+        return rows[0] if rows else None
+
     def all(self):
-        return self._all
+        rows = self._apply_filters()
+        if self._limit_n is not None:
+            rows = rows[: self._limit_n]
+        return rows
 
 
 class RecoveryFakeDB:
-    def __init__(self, event_rows=None):
+    def __init__(self, event_rows=None, model_config_rows=None):
         self.event_rows = event_rows or []
+        self.model_config_rows = model_config_rows or []  # empty by default -- see get_model_config() call sites
         self.added = []
 
     def query(self, model_cls):
         if model_cls is Event:
             return RecoveryFakeQuery(all_result=self.event_rows)
+        if model_cls is ModelConfig:
+            return RecoveryFakeQuery(all_result=self.model_config_rows)
         raise AssertionError(f"unexpected query for {model_cls}")
 
     def add(self, obj):
@@ -60,19 +81,18 @@ def test_get_recent_swing_history_returns_last_two_oldest_first():
         make_swing_event("daily_swing_high_confirmed", 1.15, datetime.datetime(2026, 7, 10)),
         make_swing_event("daily_swing_high_confirmed", 1.20, datetime.datetime(2026, 7, 20)),  # most recent
     ]
-    # RecoveryFakeQuery ignores the actual filter, so just return
-    # everything and let the persistence code's own ordering/limit
-    # semantics do the real work -- but since our fake .all() returns
-    # whatever we hand it regardless of order_by, hand it PRE-SORTED
-    # newest-first, matching what a real DB would return for
-    # .order_by(desc()).limit(2).
-    newest_first_highs = sorted(highs, key=lambda e: e.timestamp, reverse=True)[:2]
-    db = RecoveryFakeDB()
-    db.query = lambda model_cls: RecoveryFakeQuery(all_result=newest_first_highs) if model_cls is Event else None
+    for e in highs:
+        e.user_id, e.model = "test-user-id", "fvg"
+    # RecoveryFakeQuery's order_by() isn't real ordering (see its own
+    # docstring) -- hand it pre-sorted newest-first, matching what a
+    # real DB's .order_by(desc()).limit(2) would already return, so
+    # .limit(2) picks the right 2 regardless.
+    db = RecoveryFakeDB(event_rows=sorted(highs, key=lambda e: e.timestamp, reverse=True))
 
-    confirmed_highs, confirmed_lows = persistence.get_recent_swing_history(db, "user1", "fvg")
+    confirmed_highs, confirmed_lows = persistence.get_recent_swing_history(db, "test-user-id", "fvg")
     prices = [p for _, p in confirmed_highs]
     assert prices == [1.15, 1.20], "should be oldest-first, last 2 only"
+    assert confirmed_lows == []  # no daily_swing_low_confirmed events in this fixture
 
 
 def test_seed_trend_history_unblocks_gate_without_any_on_day_closed_calls():
@@ -144,11 +164,9 @@ def test_recovery_skips_replay_when_events_already_exist_today():
     existing_event = Event(
         event_type="raid_detected",
         timestamp=datetime.datetime.combine(today, datetime.time(8, 0)),
-        details={"price": 1.10},  # RecoveryFakeDB doesn't filter by event_type
-                                    # like a real DB would, so get_recent_swing_history's
-                                    # query sees this too -- give it a harmless "price"
-                                    # key so that doesn't crash; the actual thing this
-                                    # test verifies (replay gets skipped) is unaffected.
+        details={"price": 1.10},
+        user_id="test-user-id", model="fvg",  # must match query filters now that
+                                                # the fake DB does real filtering
     )
     config = make_config()
     db = RecoveryFakeDB(event_rows=[existing_event])

@@ -46,16 +46,17 @@ import time as time_module
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.models import UserSettings
 from phase1.streaming.day_orchestrator import DayOrchestrator
 from phase1.streaming.day_selection_gate import DaySelectionGate
 from shadow_runner.bridge_client import BridgeClient, BridgeError
 from shadow_runner.config import ShadowRunnerConfig
 from shadow_runner.day_state import CurrentDay
+from shadow_runner.order_manager import OrderManager
 from shadow_runner.persistence import (
     event_type_exists,
     get_current_equity,
     get_last_event_timestamp_for_date,
+    get_model_config,
     get_recent_swing_history,
     write_event,
     write_trade,
@@ -75,6 +76,37 @@ class ShadowRunner:
         self.gate = gate or DaySelectionGate()
         self.current_day: CurrentDay | None = None
         self.last_processed_bar_time_ny: datetime | None = None
+        # Phase 4 step 2c: this model's real (status, risk_pct,
+        # magic_number) from model_configs -- loaded once at startup via
+        # _load_model_config(), not per-day. None until loaded; also
+        # stays None if no model_configs row exists for this model at
+        # all (distinct from status='disabled', which is a real row
+        # that's just intentionally off -- see get_model_config()'s
+        # docstring). When None, OrderManager is never constructed and
+        # this runner behaves exactly like pre-Phase-4 Phase 3: pure
+        # journaling, no order-manager involvement at all.
+        self.model_config: dict | None = None
+
+    def _load_model_config(self) -> None:
+        db = self.session_factory()
+        try:
+            self.model_config = get_model_config(db, self.config.user_id, self.config.model)
+        finally:
+            db.close()
+        if self.model_config is None:
+            log.warning(
+                "No model_configs row found for model=%s -- OrderManager will not be "
+                "constructed; this runner will only journal, never place real orders, "
+                "regardless of any future model_configs row added later this session "
+                "(restart required to pick up a newly-added row).",
+                self.config.model,
+            )
+        else:
+            log.info(
+                "Loaded model config: model=%s status=%s risk_pct=%s magic_number=%s",
+                self.model_config["model_name"], self.model_config["status"],
+                self.model_config["risk_pct"], self.model_config["magic_number"],
+            )
 
     # ---------- polling ----------
 
@@ -87,6 +119,39 @@ class ShadowRunner:
         for bar in new_bars:
             self._process_bar(bar)
             self.last_processed_bar_time_ny = bar["time_ny"]
+
+        self._check_order_manager_fills()
+
+    def _check_order_manager_fills(self) -> None:
+        """Checked once per poll cycle, independent of whether any new
+        bars arrived -- fills happen against REAL broker state, which
+        can change between bar closes, not just at them."""
+        cd = self.current_day
+        if cd is None or cd.order_manager is None:
+            return
+        newly_filled = cd.order_manager.check_for_fills()
+        if not newly_filled:
+            return
+        try:
+            candles = self.bridge.get_candles(self.config.symbol, "M5", 20)
+        except BridgeError as e:
+            log.error(
+                "Fill detected but could not fetch bars to compute the target (%s) -- "
+                "take_profit will remain unset until a future poll retries this.", e,
+            )
+            return
+        # compute_target() needs bars STRICTLY BEFORE the fill (see its
+        # docstring) -- a live fill can happen at any moment, not just a
+        # bar close, so "before the fill" here means "the most recently
+        # CLOSED bars right now." Filter out any still-forming trailing
+        # bar the bridge may have included (same rule _filter_new_closed_bars
+        # already applies elsewhere) before handing bars to attach_target.
+        now_ny = datetime.now(NY_TZ).replace(tzinfo=None)
+        closed_bars = [
+            c for c in candles
+            if (c["time_ny"].replace(tzinfo=None) if c["time_ny"].tzinfo else c["time_ny"]) + BAR_DURATION <= now_ny
+        ]
+        cd.order_manager.attach_target(closed_bars)
 
     def _filter_new_closed_bars(self, candles: list[dict], now_ny: datetime) -> list[dict]:
         out = []
@@ -185,9 +250,25 @@ class ShadowRunner:
         cd.todays_events.append(
             {"event_type": "day_trend_determined", "timestamp": cd.bars[-1]["time_ny"], "trend": result.trend}
         )
+
+        # Phase 4 step 2c: construct BEFORE DayOrchestrator, since the
+        # combined sink below references cd.order_manager, and
+        # DayOrchestrator's constructor immediately backfills bars
+        # (which can emit trade_candidate_ready synchronously).
+        if self.model_config is not None:
+            cd.order_manager = OrderManager(
+                self.model_config, self.config.symbol, self.bridge,
+                event_sink=cd.todays_events.append,
+            )
+
+        def combined_sink(e: dict) -> None:
+            cd.todays_events.append(e)
+            if e.get("event_type") == "trade_candidate_ready" and cd.order_manager is not None:
+                cd.order_manager.on_trade_candidate_ready(e)
+
         cd.orchestrator = DayOrchestrator(
             result.trend, result.session_start_idx, result.session_end_idx,
-            event_sink=cd.todays_events.append,
+            event_sink=combined_sink,
         )
         for idx, b in enumerate(cd.bars):
             cd.orchestrator.on_new_bar(b["time_ny"], idx, b["high"], b["low"], b["close"])
@@ -325,6 +406,7 @@ class ShadowRunner:
         2. Today's in-progress session: replay if safe, skip with a
            logged gap if not -- see docstring further down.
         """
+        self._load_model_config()
         self._bootstrap_trend_history_if_needed()
 
         db = self.session_factory()
@@ -388,6 +470,14 @@ class ShadowRunner:
         if trade:
             self._write_trade(cd, trade)
 
+        # Phase 4 step 2c: cancel anything the order-manager still has
+        # genuinely pending (never filled today) -- independent of the
+        # simulation's own finalize() above, since it operates on real
+        # broker state, not the simulated attempts.
+        if cd.order_manager is not None:
+            cd.order_manager.cancel_all_at_day_end()
+            self._flush_new_events(cd)
+
         # Daily swing detection runs on EVERY closed day, tradeable or
         # not -- matches the batch script's unconditional upfront swing
         # computation over the whole `daily` array.
@@ -433,10 +523,25 @@ class ShadowRunner:
 
         db = self.session_factory()
         try:
-            settings = (
-                db.query(UserSettings).filter(UserSettings.user_id == self.config.user_id).one()
-            )
-            risk_pct = settings.risk_pct
+            # Phase 4 fix: risk_pct now comes from self.model_config
+            # (model_configs, per-model) -- NOT UserSettings.risk_pct,
+            # which was the Phase 0/3-era account-wide/single-model
+            # assumption and is now stale for this purpose (the column
+            # still exists on UserSettings for other settings, just no
+            # longer used for this). Falls back to a conservative
+            # default only if somehow no model_configs row was loaded
+            # (logged loudly at startup already if so -- see
+            # _load_model_config()) rather than crashing a trade write.
+            if self.model_config is not None:
+                risk_pct = self.model_config["risk_pct"]
+            else:
+                log.error(
+                    "%s: no model_config loaded -- falling back to a conservative "
+                    "0.01 risk_pct for this trade write. This should not happen; "
+                    "investigate why model_configs had no row for model=%s.",
+                    cd.date, self.config.model,
+                )
+                risk_pct = 0.01
 
             starting_equity_hint = None  # only fetched from the bridge if actually needed
             equity_before = get_current_equity(
