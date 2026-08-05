@@ -274,3 +274,39 @@ def test_load_from_db_reconstructs_tracking_state():
     assert 3002 in tracker._tracked
     assert tracker._tracked[3002]["partial_closed"] is True
     assert tracker._tracked[3001]["trade_id"] == "trade-open"
+
+
+def test_check_positions_failure_is_journaled_not_just_logged():
+    """Reliability fix (this phase's chat history): PositionTracker
+    uses its OWN DB-session-per-call path (unlike OrderManager, which
+    piggybacks on a shared event_sink) -- worth proving directly that
+    ITS failures are now journaled too, not just OrderManager's."""
+    import shadow_runner.persistence as persistence_module
+
+    written_events = []
+    original_write_event = persistence_module.write_event
+
+    def spy_write_event(db, event, user_id, model):
+        written_events.append(event)
+        return original_write_event(db, event, user_id, model)
+
+    class FailingBridge(FakePositionBridge):
+        def get_positions(self, magic):
+            raise Exception("simulated network failure")
+
+    bridge = FailingBridge()
+    entry_time = datetime.datetime.now()
+    db = FakeDB(rows=[FakeTradeRow("trade-abc", 2001, "open", entry_time)])
+    tracker = PositionTracker(bridge, lambda: db, "user1", make_model_config())
+    tracker.register_new_position(2001, "trade-abc", entry_time)
+
+    import shadow_runner.position_tracker as pt_module
+    pt_module.write_event = spy_write_event
+    try:
+        tracker.check_positions()  # must not raise
+    finally:
+        pt_module.write_event = original_write_event
+
+    failure_events = [e for e in written_events if e.get("event_type") == "safety_check_failed"]
+    assert len(failure_events) == 1
+    assert failure_events[0]["check_name"] == "position_tracker_check_positions"

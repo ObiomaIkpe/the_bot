@@ -180,7 +180,15 @@ def test_fails_safe_on_db_error():
     received = []
     om = OrderManager(make_model_config(status="active"), "EURUSDm", BalanceBridge(1000.0), lambda: FailingDB(), "user1", event_sink=received.append)
     om.check_daily_loss_threshold()  # must not raise
-    assert received == []
+
+    # No daily_loss_threshold_crossed event (correct -- the check never
+    # completed) -- but the failure itself IS now journaled (the
+    # reliability fix this file's own conversation led to: a silent
+    # DB error used to be invisible except in container logs).
+    assert not any(e.get("event_type") == "daily_loss_threshold_crossed" for e in received)
+    failure_events = [e for e in received if e.get("event_type") == "safety_check_failed"]
+    assert len(failure_events) == 1
+    assert failure_events[0]["check_name"] == "daily_loss_threshold_db"
 
 
 def test_fails_safe_on_bridge_balance_error():
@@ -194,4 +202,8 @@ def test_fails_safe_on_bridge_balance_error():
     received = []
     om = OrderManager(make_model_config(status="active"), "EURUSDm", FailingBalanceBridge(), lambda: db, "user1", event_sink=received.append)
     om.check_daily_loss_threshold()  # must not raise
-    assert received == []
+
+    assert not any(e.get("event_type") == "daily_loss_threshold_crossed" for e in received)
+    failure_events = [e for e in received if e.get("event_type") == "safety_check_failed"]
+    assert len(failure_events) == 1
+    assert failure_events[0]["check_name"] == "daily_loss_threshold_balance_fetch"

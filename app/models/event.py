@@ -92,6 +92,15 @@ VALID_EVENT_TYPES = (
     #    journals that today's realized loss crossed
     #    UserSettings.max_daily_loss_pct, for awareness) --
     "daily_loss_threshold_crossed",
+    # -- added, Phase 4 reliability fix: journals EVERY silent fail-safe
+    #    catch (bridge errors, DB errors, malformed data) as a real,
+    #    queryable event -- not just a container log line that
+    #    disappears unless someone's actively watching. See this
+    #    phase's chat history: fail-safe error handling (catch, log,
+    #    keep running) is the right call for a live process, but it
+    #    means a genuine bug can silently do nothing indefinitely with
+    #    only a log line as the trace --
+    "safety_check_failed",
 )
 
 # Fixes a real, stale bug: write_event() used to hardcode is_shadow=True
@@ -125,6 +134,7 @@ REAL_ACTION_EVENT_TYPES = frozenset(
         "real_trade_closed",
         "partial_close_executed",
         "daily_loss_threshold_crossed",
+        "safety_check_failed",
     }
 )
 

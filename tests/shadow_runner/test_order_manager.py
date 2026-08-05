@@ -568,9 +568,22 @@ def test_is_user_paused_fails_safe_not_paused_on_db_error():
             pass
 
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, lambda: FailingSettingsDB(), "user1")
+    received = []
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, lambda: FailingSettingsDB(), "user1", event_sink=received.append)
 
     # Must not raise, and must fail toward NOT paused (proceeds to place normally) --
     # see _is_user_paused()'s own docstring for the reasoning.
     om.on_trade_candidate_ready(make_candidate_event())
+    assert len(bridge.placed) == 1
+
+    # Reliability fix: the failure itself must now be journaled, not just logged.
+    # (Note: this fake bridge also has no symbol_info configured, so
+    # _compute_volume's own fallback ALSO correctly fires its own
+    # safety_check_failed event -- filter specifically for the one this
+    # test actually cares about, is_paused_check.)
+    paused_check_failures = [
+        e for e in received
+        if e.get("event_type") == "safety_check_failed" and e.get("check_name") == "is_paused_check"
+    ]
+    assert len(paused_check_failures) == 1
     assert len(bridge.placed) == 1

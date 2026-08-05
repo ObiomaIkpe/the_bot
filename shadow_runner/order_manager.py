@@ -213,11 +213,7 @@ class OrderManager:
         try:
             return get_user_paused_status(db, self.user_id)
         except Exception as e:
-            log.error(
-                "Could not check is_paused status (%s) -- proceeding as NOT paused. "
-                "If this persists, investigate DB connectivity; a broken pause check "
-                "should not itself become a silent, invisible trading halt.", e,
-            )
+            self._emit_check_failure("is_paused_check", e)
             return False
         finally:
             db.close()
@@ -228,6 +224,32 @@ class OrderManager:
         attachment), which don't have a natural bar timestamp to reuse
         the way on_trade_candidate_ready's events do."""
         return datetime.now(NY_TZ).replace(tzinfo=None)
+
+    def _emit_check_failure(self, check_name: str, error: Exception, **extra) -> None:
+        """
+        Reliability fix, added after a real bug this exact pattern
+        masked during testing (see this phase's chat history): every
+        fail-safe except-block in this class used to ONLY log.error(),
+        meaning a genuine, persistent failure would be invisible unless
+        someone was actively watching container logs at the moment it
+        happened. Now every one of those catches ALSO journals a real,
+        queryable safety_check_failed event -- "how many times has
+        check X failed this week" becomes a normal database question
+        instead of a log-archaeology exercise.
+
+        Still logs too (log.error, same as before) -- this is additive,
+        not a replacement for the log line.
+        """
+        log.error("%s failed: %s", check_name, error)
+        self._emit(
+            {
+                "event_type": "safety_check_failed",
+                "timestamp": self._now_ny(),
+                "check_name": check_name,
+                "error": str(error),
+                **extra,
+            }
+        )
 
     def on_trade_candidate_ready(self, event: dict) -> None:
         """Call from DayOrchestrator's event_sink whenever
@@ -309,19 +331,13 @@ class OrderManager:
             try:
                 self._symbol_info_cache = self.bridge.get_symbol_info(self.symbol)
             except Exception as e:
-                log.error(
-                    "Could not fetch symbol_info for %s (%s) -- falling back to "
-                    "minimum lot size 0.01 for this order", self.symbol, e,
-                )
+                self._emit_check_failure("symbol_info_fetch", e, symbol=self.symbol)
                 return 0.01
 
         try:
             balance = self.bridge.account_info()["balance"]
         except Exception as e:
-            log.error(
-                "Could not fetch account balance (%s) -- falling back to minimum "
-                "lot size 0.01 for this order", e,
-            )
+            self._emit_check_failure("account_balance_fetch", e)
             return 0.01
 
         stop_distance = abs(event["entry"] - event["stop"])
@@ -335,10 +351,7 @@ class OrderManager:
             # KeyError, not just ValueError from a bad stop_distance --
             # the whole point of this fallback is to NEVER crash order
             # placement, whatever the failure mode.
-            log.error(
-                "compute_lot_size failed (%s) -- falling back to minimum lot size "
-                "0.01 for this order", e,
-            )
+            self._emit_check_failure("compute_lot_size", e)
             return 0.01
 
     def check_for_fills(self) -> bool:
@@ -358,7 +371,7 @@ class OrderManager:
             open_positions = self.bridge.get_positions(self.model_config["magic_number"])
             still_pending = self.bridge.get_pending_orders(self.model_config["magic_number"])
         except Exception as e:
-            log.error("check_for_fills: bridge call failed, will retry next poll: %s", e)
+            self._emit_check_failure("check_for_fills_bridge_call", e)
             return False
 
         still_pending_tickets = {o["order_ticket"] for o in still_pending}
@@ -411,7 +424,7 @@ class OrderManager:
         try:
             open_positions = self.bridge.get_positions(self.model_config["magic_number"])
         except Exception as e:
-            log.error("check_for_close: bridge call failed, will retry next poll: %s", e)
+            self._emit_check_failure("check_for_close_get_positions", e)
             return None
 
         still_open = any(p["ticket"] == self._winner_position_ticket for p in open_positions)
@@ -421,9 +434,8 @@ class OrderManager:
         try:
             history = self.bridge.get_position_history(self._winner_position_ticket)
         except Exception as e:
-            log.error(
-                "check_for_close: could not fetch close history for ticket %s: %s -- will retry next poll",
-                self._winner_position_ticket, e,
+            self._emit_check_failure(
+                "check_for_close_get_history", e, ticket=self._winner_position_ticket
             )
             return None
 
@@ -508,7 +520,7 @@ class OrderManager:
             today = self._now_ny().date()
             realized_pnl = get_realized_pnl_today(db, self.user_id, self.model_config["model_name"], today)
         except Exception as e:
-            log.error("check_daily_loss_threshold: DB error, will retry next poll: %s", e)
+            self._emit_check_failure("daily_loss_threshold_db", e)
             return
         finally:
             db.close()
@@ -517,7 +529,7 @@ class OrderManager:
             acct = self.bridge.account_info()
             equity = acct["balance"]
         except Exception as e:
-            log.error("check_daily_loss_threshold: could not fetch balance, will retry next poll: %s", e)
+            self._emit_check_failure("daily_loss_threshold_balance_fetch", e)
             return
         if equity <= 0:
             return
@@ -579,7 +591,7 @@ class OrderManager:
                     }
                 )
             except Exception as e:
-                log.error("Failed to cancel sibling order %s: %s", info["order_ticket"], e)
+                self._emit_check_failure("cancel_sibling_order", e, order_ticket=info["order_ticket"])
 
         self._pending = {winning_key: winning_info}
 
@@ -596,7 +608,7 @@ class OrderManager:
         try:
             target = compute_target(recent_bars, winning_info["direction"])
         except ValueError as e:
-            log.error("Could not compute target (insufficient bars): %s -- leaving take_profit unset", e)
+            self._emit_check_failure("compute_target", e, ticket=self._winner_position_ticket)
             return
         try:
             self.bridge.modify_position(self._winner_position_ticket, take_profit=target)
@@ -604,7 +616,7 @@ class OrderManager:
                 {"event_type": "target_attached", "timestamp": self._now_ny(), "ticket": self._winner_position_ticket, "target": target}
             )
         except Exception as e:
-            log.error("Failed to attach target to position %s: %s", self._winner_position_ticket, e)
+            self._emit_check_failure("attach_target_modify_position", e, ticket=self._winner_position_ticket, target=target)
 
     def cancel_all_at_day_end(self) -> None:
         """Call once, at day_end (5pm NY) -- cancels anything still
@@ -624,5 +636,5 @@ class OrderManager:
                     }
                 )
             except Exception as e:
-                log.error("Failed to cancel end-of-day order %s: %s", info["order_ticket"], e)
+                self._emit_check_failure("cancel_end_of_day_order", e, order_ticket=info["order_ticket"])
         self._pending = {}

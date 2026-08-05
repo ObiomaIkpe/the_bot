@@ -72,6 +72,37 @@ class PositionTracker:
         # ticket -> {"trade_id", "entry_time_ny", "partial_closed": bool}
         self._tracked: dict[int, dict] = {}
 
+    def _emit_check_failure(self, check_name: str, error: Exception, **extra) -> None:
+        """Same reliability fix as OrderManager._emit_check_failure() --
+        see its docstring for the full reasoning. PositionTracker has no
+        shared event_sink to append to (unlike OrderManager, which
+        piggybacks on DayOrchestrator's day-scoped one), so this opens
+        its own short DB session directly, matching how every other
+        write in this class already works."""
+        log.error("%s failed: %s", check_name, error)
+        db = self.session_factory()
+        try:
+            write_event(
+                db,
+                {
+                    "event_type": "safety_check_failed",
+                    "timestamp": now_ny(),
+                    "check_name": check_name,
+                    "error": str(error),
+                    **extra,
+                },
+                self.user_id, self.model_config["model_name"],
+            )
+            db.commit()
+        except Exception as inner_e:
+            # If even journaling the failure fails, don't let THAT crash
+            # anything either -- the log.error() call above already
+            # happened, so the failure isn't completely invisible even
+            # in this worst case.
+            log.error("Additionally failed to journal the above failure: %s", inner_e)
+        finally:
+            db.close()
+
     def load_from_db(self) -> None:
         """Call once, at startup. Rebuilds tracking state for every
         trade this (user, model) still has open real exposure on --
@@ -124,7 +155,7 @@ class PositionTracker:
         try:
             open_positions = self.bridge.get_positions(magic)
         except Exception as e:
-            log.error("check_positions: bridge get_positions failed, will retry next poll: %s", e)
+            self._emit_check_failure("position_tracker_check_positions", e)
             return
         open_by_ticket = {p["ticket"]: p for p in open_positions}
 
@@ -148,17 +179,17 @@ class PositionTracker:
         # configuration.
         half_volume = round(current_volume / 2, 2)
         if half_volume <= 0 or half_volume >= current_volume:
-            log.error(
-                "Ticket %s: computed half_volume=%s is invalid for current_volume=%s -- "
-                "skipping partial close this cycle, will retry next poll",
-                ticket, half_volume, current_volume,
+            self._emit_check_failure(
+                "partial_close_volume_validation",
+                ValueError(f"half_volume={half_volume} invalid for current_volume={current_volume}"),
+                ticket=ticket,
             )
             return
 
         try:
             result = self.bridge.close_position_partial(ticket, half_volume)
         except Exception as e:
-            log.error("Ticket %s: partial close failed, will retry next poll: %s", ticket, e)
+            self._emit_check_failure("close_position_partial", e, ticket=ticket, half_volume=half_volume)
             return
 
         db = self.session_factory()
@@ -202,10 +233,7 @@ class PositionTracker:
         try:
             history = self.bridge.get_position_history(ticket)
         except Exception as e:
-            log.error(
-                "Ticket %s: vanished, but could not fetch close history: %s -- will retry next poll",
-                ticket, e,
-            )
+            self._emit_check_failure("position_tracker_get_history", e, ticket=ticket)
             return
         if not history.get("is_closed"):
             log.warning(
