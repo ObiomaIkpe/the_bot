@@ -133,8 +133,20 @@ class ShadowRunner:
 
         self._check_order_manager_fills()
         self._check_order_manager_close()
+        self._check_daily_loss_threshold()
         if self.position_tracker is not None:
             self.position_tracker.check_positions()
+
+    def _check_daily_loss_threshold(self) -> None:
+        """Phase 4 step 4 Part 2. Visibility only -- see
+        OrderManager.check_daily_loss_threshold()'s own docstring for
+        the full reasoning (does not block trades, does not force-close
+        anything)."""
+        cd = self.current_day
+        if cd is None or cd.order_manager is None:
+            return
+        cd.order_manager.check_daily_loss_threshold()
+        self._flush_new_events(cd)
 
     def _check_order_manager_close(self) -> None:
         """Phase 4 step 3. Checked once per poll cycle, same cadence and

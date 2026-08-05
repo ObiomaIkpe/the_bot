@@ -172,6 +172,56 @@ def get_user_paused_status(db: Session, user_id: str) -> bool:
     return row.is_paused
 
 
+def get_max_daily_loss_pct(db: Session, user_id: str) -> float | None:
+    """
+    Phase 4 step 4 Part 2 (visibility only -- confirmed design: this
+    number is journaled for awareness, it does NOT block new trades or
+    force-close anything, see OrderManager.check_daily_loss_threshold()).
+    Returns None if no UserSettings row exists.
+    """
+    row = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+    if row is None:
+        return None
+    return row.max_daily_loss_pct
+
+
+def get_realized_pnl_today(db: Session, user_id: str, model: str, today_date) -> float:
+    """
+    Phase 4 step 4 Part 2. Sum of REAL, REALIZED profit (real_profit)
+    across every trade for this (user, model) that fully closed today
+    (real_status == 'closed', real_close_time_ny's date matches
+    today_date). Net P&L, not "sum of losses only" -- a day with one
+    big loss partly offset by smaller wins is a losing day; a day with
+    one loss fully offset by a win isn't.
+
+    Deliberately does NOT include partial_close_profit -- that field is
+    currently always None (MT5's order_send result doesn't return
+    realized profit directly for a partial close the way
+    history_deals_get does for a full close; see
+    position_tracker.py's _do_partial_close() for the same documented
+    gap). A position that's only been partially closed today therefore
+    doesn't contribute to today's realized total via this function at
+    all yet -- a known, honest limitation, not silently guessed at.
+
+    Filters by date in Python, not SQL, matching the same established
+    pattern (and the same documented scaling caveat) as
+    get_last_event_timestamp_for_date().
+    """
+    rows = (
+        db.query(Trade)
+        .filter(
+            Trade.user_id == user_id, Trade.model == model,
+            Trade.is_shadow.is_(False), Trade.real_status == "closed",
+        )
+        .all()
+    )
+    total = 0.0
+    for r in rows:
+        if r.real_close_time_ny is not None and r.real_close_time_ny.date() == today_date:
+            total += (r.real_profit or 0.0)
+    return total
+
+
 def write_event(db: Session, event: dict, user_id: str, model: str) -> Event:
     """
     Converts a streaming-component event dict (from DayOrchestrator's

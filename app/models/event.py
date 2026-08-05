@@ -87,6 +87,11 @@ VALID_EVENT_TYPES = (
     #    have placed a real order, but didn't, because
     #    UserSettings.is_paused was true at the moment it was checked --
     "order_skipped_paused",
+    # -- added, Phase 4 step 4 Part 2 (visibility only, confirmed design:
+    #    does NOT block new trades or force-close anything -- purely
+    #    journals that today's realized loss crossed
+    #    UserSettings.max_daily_loss_pct, for awareness) --
+    "daily_loss_threshold_crossed",
 )
 
 # Fixes a real, stale bug: write_event() used to hardcode is_shadow=True
@@ -119,6 +124,7 @@ REAL_ACTION_EVENT_TYPES = frozenset(
         "order_skipped_paused",
         "real_trade_closed",
         "partial_close_executed",
+        "daily_loss_threshold_crossed",
     }
 )
 
