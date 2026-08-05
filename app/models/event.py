@@ -89,6 +89,39 @@ VALID_EVENT_TYPES = (
     "order_skipped_paused",
 )
 
+# Fixes a real, stale bug: write_event() used to hardcode is_shadow=True
+# on every Event row, unconditionally -- correct back when nothing but
+# DayOrchestrator/DaySelectionGate ever emitted events (Phase 3), wrong
+# now that OrderManager emits real-action events too (Phase 4).
+#
+# The distinguishing fact that makes this decidable from event_type
+# ALONE, with no per-call-site changes needed anywhere: OrderManager
+# only ever calls its own event_sink when is_active() is True (its very
+# first check in on_trade_candidate_ready() returns immediately
+# otherwise) -- so every event type it emits is, by construction,
+# ALWAYS describing a real action, never a merely-simulated one. Every
+# other event type (DayOrchestrator's raid/MSS/FVG/trade detection,
+# DaySelectionGate's day-level decisions) always describes internal
+# detection/simulation logic, regardless of whether the model is active
+# -- that never changes into a "real action" no matter what.
+#
+# See persistence.py's write_event() for where this is actually used.
+# Unrecognized event types default to is_shadow=True (the safe
+# direction: never mistakenly claim something was a real action when
+# it isn't a known real-action type).
+REAL_ACTION_EVENT_TYPES = frozenset(
+    {
+        "pending_order_placed",
+        "pending_order_cancelled",
+        "candidate_filled",
+        "target_attached",
+        "order_placement_failed",
+        "order_skipped_paused",
+        "real_trade_closed",
+        "partial_close_executed",
+    }
+)
+
 
 class Event(Base):
     """

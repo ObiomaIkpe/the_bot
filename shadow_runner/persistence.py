@@ -9,7 +9,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import Event, ModelConfig, Trade, UserSettings
+from app.models import Event, ModelConfig, REAL_ACTION_EVENT_TYPES, Trade, UserSettings
 
 log = logging.getLogger("shadow_runner.persistence")
 
@@ -175,16 +175,26 @@ def get_user_paused_status(db: Session, user_id: str) -> bool:
 def write_event(db: Session, event: dict, user_id: str, model: str) -> Event:
     """
     Converts a streaming-component event dict (from DayOrchestrator's
-    event_sink, or DaySelectionGate's on_day_closed/gate_for_day) into an
-    Event row. event_type and timestamp are lifted out to their own
-    columns; everything else in the dict goes into `details` (JSONB) --
-    this is deliberately generic so new event fields never require a
-    schema change, only VALID_EVENT_TYPES additions when a genuinely new
-    event *type* appears.
+    event_sink, DaySelectionGate's on_day_closed/gate_for_day, or
+    OrderManager's own event_sink) into an Event row. event_type and
+    timestamp are lifted out to their own columns; everything else in
+    the dict goes into `details` (JSONB) -- this is deliberately generic
+    so new event fields never require a schema change, only
+    VALID_EVENT_TYPES additions when a genuinely new event *type*
+    appears.
+
+    is_shadow is derived from event_type via REAL_ACTION_EVENT_TYPES
+    (app/models/event.py) -- NOT hardcoded. Fixes a real, stale bug:
+    this used to be unconditionally True on every row (correct back
+    when only DayOrchestrator/DaySelectionGate ever emitted events;
+    wrong once OrderManager started emitting real-action events in
+    Phase 4). See REAL_ACTION_EVENT_TYPES's own comment for the full
+    reasoning on why this is decidable from event_type alone.
     """
     event = dict(event)  # don't mutate the caller's dict
     event_type = event.pop("event_type")
     timestamp = event.pop("timestamp")
+    is_shadow = event_type not in REAL_ACTION_EVENT_TYPES
 
     row = Event(
         event_id=uuid.uuid4(),
@@ -193,8 +203,7 @@ def write_event(db: Session, event: dict, user_id: str, model: str) -> Event:
         event_type=event_type,
         timestamp=timestamp,
         details=event,  # whatever's left (direction, price, bar_index, etc.)
-        is_shadow=True,  # Phase 3: always True. Nothing sets this False
-                          # until Phase 4 ships real order placement.
+        is_shadow=is_shadow,
     )
     db.add(row)
     return row

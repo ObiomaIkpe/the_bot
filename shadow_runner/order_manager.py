@@ -32,7 +32,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from shadow_runner.persistence import get_user_paused_status
+from shadow_runner.persistence import get_max_daily_loss_pct, get_realized_pnl_today, get_user_paused_status
 
 NY_TZ = ZoneInfo("America/New_York")  # matches shadow_runner.runner's own convention --
                                         # every event timestamp elsewhere in this codebase
@@ -189,6 +189,10 @@ class OrderManager:
         self._real_fill_price = None
         self._real_fill_time_utc = None
         self._real_fill_time_ny = None
+        # Phase 4 step 4 Part 2: only emit daily_loss_threshold_crossed
+        # ONCE per day -- naturally resets since a fresh OrderManager is
+        # constructed each day, same as everything else day-scoped here.
+        self._loss_threshold_emitted_today = False
         self._symbol_info_cache = None  # fetched lazily on first use, cached for
                                           # this instance's lifetime (one day) --
                                           # contract specs don't change intraday
@@ -479,6 +483,65 @@ class OrderManager:
             "profit": self._closed_info["profit"] if self._closed_info else None,
             "close_reason": self._closed_info["close_reason"] if self._closed_info else None,
         }
+
+    def check_daily_loss_threshold(self) -> None:
+        """
+        Phase 4 step 4 Part 2. VISIBILITY ONLY -- confirmed design
+        (this phase's chat history): does NOT block new trades from
+        being placed, does NOT force-close anything currently open.
+        Purely journals a daily_loss_threshold_crossed event the first
+        time today's REALIZED net P&L (real trades only, fully closed
+        only -- see get_realized_pnl_today()'s own docstring for what's
+        deliberately excluded) crosses UserSettings.max_daily_loss_pct,
+        for awareness when reviewing logs/reports later. Call once per
+        poll cycle; only emits once per day (self._loss_threshold_emitted_today,
+        naturally resets since a fresh OrderManager is built each day).
+        """
+        if not self.is_active() or self._loss_threshold_emitted_today:
+            return
+
+        db = self.session_factory()
+        try:
+            max_loss_pct = get_max_daily_loss_pct(db, self.user_id)
+            if max_loss_pct is None:
+                return
+            today = self._now_ny().date()
+            realized_pnl = get_realized_pnl_today(db, self.user_id, self.model_config["model_name"], today)
+        except Exception as e:
+            log.error("check_daily_loss_threshold: DB error, will retry next poll: %s", e)
+            return
+        finally:
+            db.close()
+
+        try:
+            acct = self.bridge.account_info()
+            equity = acct["balance"]
+        except Exception as e:
+            log.error("check_daily_loss_threshold: could not fetch balance, will retry next poll: %s", e)
+            return
+        if equity <= 0:
+            return
+
+        realized_loss_pct = -realized_pnl / equity  # positive = a loss, expressed as a fraction of equity
+        if realized_loss_pct < max_loss_pct:
+            return
+
+        self._loss_threshold_emitted_today = True
+        self._emit(
+            {
+                "event_type": "daily_loss_threshold_crossed",
+                "timestamp": self._now_ny(),
+                "realized_pnl": realized_pnl,
+                "realized_loss_pct": realized_loss_pct,
+                "max_daily_loss_pct": max_loss_pct,
+            }
+        )
+        log.warning(
+            "Daily loss threshold crossed for model=%s: realized_loss_pct=%.4f >= "
+            "max_daily_loss_pct=%.4f -- VISIBILITY ONLY, no trades blocked, nothing "
+            "force-closed, per confirmed design.",
+            self.model_config["model_name"], realized_loss_pct, max_loss_pct,
+        )
 
     def _on_fill(self, winning_key: tuple, winning_info: dict, position: dict) -> None:
         self._winner_ticket = winning_info["order_ticket"]
