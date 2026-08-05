@@ -105,6 +105,41 @@ class FakeBridge:
             }
 
 
+
+class FakeSettingsRow:
+    def __init__(self, is_paused=False):
+        self.is_paused = is_paused
+
+
+class FakeSettingsQuery:
+    def __init__(self, row):
+        self._row = row
+
+    def filter(self, *a, **k):
+        return self
+
+    def first(self):
+        return self._row
+
+
+class FakeSettingsDB:
+    """Fake DB for OrderManager's is_paused check (get_user_paused_status).
+    Defaults to not-paused, matching all pre-existing test expectations --
+    only the dedicated pause tests construct one with is_paused=True."""
+
+    def __init__(self, is_paused=False, row_exists=True):
+        self._row = FakeSettingsRow(is_paused) if row_exists else None
+
+    def query(self, model_cls):
+        return FakeSettingsQuery(self._row)
+
+    def close(self):
+        pass
+
+
+DEFAULT_SESSION_FACTORY = lambda: FakeSettingsDB(is_paused=False)  # noqa: E731
+
+
 def make_model_config(status="active", magic=900001):
     return {"model_name": "fvg", "status": status, "risk_pct": 0.01, "magic_number": magic}
 
@@ -119,21 +154,21 @@ def make_candidate_event(direction="long", entry=1.1050, stop=1.1040, raid_bar=1
 
 def test_shadow_model_never_places_real_orders():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(status="shadow"), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(status="shadow"), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     om.on_trade_candidate_ready(make_candidate_event())
     assert bridge.placed == []
 
 
 def test_disabled_model_never_places_real_orders():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(status="disabled"), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(status="disabled"), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     om.on_trade_candidate_ready(make_candidate_event())
     assert bridge.placed == []
 
 
 def test_active_model_places_pending_order_with_correct_comment():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=12))
 
     assert len(bridge.placed) == 1
@@ -145,7 +180,7 @@ def test_active_model_places_pending_order_with_correct_comment():
 
 def test_two_candidates_both_get_pending_orders():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     om.on_trade_candidate_ready(make_candidate_event(raid_bar=12, mss_bar=15))
     om.on_trade_candidate_ready(make_candidate_event(raid_bar=20, mss_bar=23))
     assert len(bridge.placed) == 2
@@ -153,7 +188,7 @@ def test_two_candidates_both_get_pending_orders():
 
 def test_race_winner_cancels_the_loser():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=12, mss_bar=15, entry=1.1050, stop=1.1040))
     om.on_trade_candidate_ready(make_candidate_event(direction="short", raid_bar=20, mss_bar=23, entry=1.1080, stop=1.1090))
 
@@ -170,7 +205,7 @@ def test_race_winner_cancels_the_loser():
 
 def test_no_third_order_placed_after_a_winner_is_decided():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     om.on_trade_candidate_ready(make_candidate_event(raid_bar=12, mss_bar=15))
     bridge.simulate_fill(bridge.placed[0]["order_ticket"], open_price=1.1050)
     om.check_for_fills()
@@ -183,7 +218,7 @@ def test_no_third_order_placed_after_a_winner_is_decided():
 
 def test_attach_target_computes_and_calls_modify():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=12, mss_bar=15, entry=1.1050, stop=1.1040))
     ticket = bridge.placed[0]["order_ticket"]
     bridge.simulate_fill(ticket, open_price=1.1050)
@@ -208,7 +243,7 @@ def test_attach_target_computes_and_calls_modify():
 
 def test_cancel_all_at_day_end_skips_the_winner():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     om.on_trade_candidate_ready(make_candidate_event(raid_bar=12, mss_bar=15))
     om.on_trade_candidate_ready(make_candidate_event(raid_bar=20, mss_bar=23))
     ticket_a, ticket_b = bridge.placed[0]["order_ticket"], bridge.placed[1]["order_ticket"]
@@ -220,7 +255,7 @@ def test_cancel_all_at_day_end_skips_the_winner():
 
 def test_cancel_all_at_day_end_does_not_recancel_the_already_filled_winner():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     om.on_trade_candidate_ready(make_candidate_event(raid_bar=12, mss_bar=15))
     ticket = bridge.placed[0]["order_ticket"]
     bridge.simulate_fill(ticket, open_price=1.1050)
@@ -297,7 +332,7 @@ def test_compute_volume_uses_real_bridge_data_end_to_end():
     bridge = FakeBridge()
     bridge.symbol_info_response = realistic_symbol_info()
     bridge.balance_response = 1000.0
-    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
 
     om.on_trade_candidate_ready(make_candidate_event(entry=1.1050, stop=1.1040))  # 10 pip stop
 
@@ -308,7 +343,7 @@ def test_compute_volume_uses_real_bridge_data_end_to_end():
 def test_compute_volume_falls_back_to_minimum_if_symbol_info_unavailable():
     bridge = FakeBridge()
     bridge.symbol_info_should_fail = True
-    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
 
     om.on_trade_candidate_ready(make_candidate_event())
 
@@ -320,7 +355,7 @@ def test_compute_volume_caches_symbol_info_across_multiple_candidates():
     bridge = FakeBridge()
     bridge.symbol_info_response = realistic_symbol_info()
     bridge.balance_response = 1000.0
-    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
 
     om.on_trade_candidate_ready(make_candidate_event(raid_bar=12, mss_bar=15))
     om.on_trade_candidate_ready(make_candidate_event(raid_bar=20, mss_bar=23))
@@ -355,13 +390,13 @@ def _get_a_winner(bridge, om, entry=1.1050, stop=1.1040):
 
 def test_check_for_close_returns_none_before_any_winner_exists():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     assert om.check_for_close() is None
 
 
 def test_check_for_close_returns_none_while_still_open():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     _get_a_winner(bridge, om)
     assert om.check_for_close() is None  # still open in the fake bridge
 
@@ -369,7 +404,7 @@ def test_check_for_close_returns_none_while_still_open():
 def test_check_for_close_detects_a_real_close_and_emits_event():
     bridge = FakeBridge()
     received = []
-    om = OrderManager(make_model_config(), "EURUSDm", bridge, event_sink=received.append)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1", event_sink=received.append)
     ticket = _get_a_winner(bridge, om)
 
     bridge.simulate_close(ticket, close_price=1.1080, profit=30.0, close_reason="take_profit")
@@ -387,7 +422,7 @@ def test_check_for_close_detects_a_real_close_and_emits_event():
 
 def test_check_for_close_only_reports_once():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     ticket = _get_a_winner(bridge, om)
     bridge.simulate_close(ticket, close_price=1.1080, profit=30.0)
 
@@ -402,7 +437,7 @@ def test_check_for_close_handles_history_cache_lag_without_a_false_negative():
     up yet -- must NOT record anything, must retry on a later poll."""
     bridge = FakeBridge()
     received = []
-    om = OrderManager(make_model_config(), "EURUSDm", bridge, event_sink=received.append)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1", event_sink=received.append)
     ticket = _get_a_winner(bridge, om)
 
     bridge.simulate_close(ticket, close_price=1.1080, profit=30.0, history_ready=False)
@@ -425,7 +460,7 @@ def test_check_for_close_fails_safe_on_bridge_error():
             raise Exception("simulated network failure")
 
     working_bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", working_bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", working_bridge, DEFAULT_SESSION_FACTORY, "user1")
     _get_a_winner(working_bridge, om)  # place/fill against the working bridge
 
     om.bridge = FailingBridge()  # then swap in a failing one for the actual close check
@@ -435,13 +470,13 @@ def test_check_for_close_fails_safe_on_bridge_error():
 
 def test_get_real_outcome_returns_none_before_any_fill():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     assert om.get_real_outcome() is None
 
 
 def test_get_real_outcome_has_fill_data_but_none_close_data_while_open():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     ticket = _get_a_winner(bridge, om, entry=1.1050, stop=1.1040)
 
     outcome = om.get_real_outcome()
@@ -455,7 +490,7 @@ def test_get_real_outcome_has_fill_data_but_none_close_data_while_open():
 
 def test_get_real_outcome_has_both_fill_and_close_data_once_closed():
     bridge = FakeBridge()
-    om = OrderManager(make_model_config(), "EURUSDm", bridge)
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1")
     ticket = _get_a_winner(bridge, om, entry=1.1050, stop=1.1040)
     bridge.simulate_close(ticket, close_price=1.1080, profit=30.0, close_reason="take_profit")
     om.check_for_close()
@@ -465,3 +500,77 @@ def test_get_real_outcome_has_both_fill_and_close_data_once_closed():
     assert outcome["close_price"] == 1.1080
     assert outcome["profit"] == 30.0
     assert outcome["close_reason"] == "take_profit"
+
+
+# ---------- Phase 4 step 4: is_paused safety rail ----------
+
+def test_paused_user_never_places_a_real_order_even_when_active():
+    bridge = FakeBridge()
+    paused_factory = lambda: FakeSettingsDB(is_paused=True)  # noqa: E731
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, paused_factory, "user1")
+
+    om.on_trade_candidate_ready(make_candidate_event())
+    assert bridge.placed == [], "must not place any real order while the account is paused"
+
+
+def test_paused_check_emits_order_skipped_paused_event():
+    bridge = FakeBridge()
+    received = []
+    paused_factory = lambda: FakeSettingsDB(is_paused=True)  # noqa: E731
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, paused_factory, "user1", event_sink=received.append)
+
+    om.on_trade_candidate_ready(make_candidate_event())
+    skip_events = [e for e in received if e.get("event_type") == "order_skipped_paused"]
+    assert len(skip_events) == 1
+
+
+def test_unpaused_user_places_orders_normally():
+    bridge = FakeBridge()
+    unpaused_factory = lambda: FakeSettingsDB(is_paused=False)  # noqa: E731
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, unpaused_factory, "user1")
+
+    om.on_trade_candidate_ready(make_candidate_event())
+    assert len(bridge.placed) == 1
+
+
+def test_is_paused_is_checked_fresh_every_call_not_cached():
+    """The whole point of is_paused is being able to stop trading
+    immediately -- if OrderManager cached the value at construction
+    time, flipping the flag mid-session would silently do nothing until
+    a restart. This test proves it re-checks every time by flipping the
+    underlying value BETWEEN two calls on the same OrderManager instance."""
+    bridge = FakeBridge()
+    state = {"paused": False}
+
+    class TogglingFakeDB(FakeSettingsDB):
+        def __init__(self):
+            super().__init__(is_paused=state["paused"])
+
+        def query(self, model_cls):
+            self._row = FakeSettingsRow(state["paused"])  # re-read the live flag
+            return FakeSettingsQuery(self._row)
+
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, lambda: TogglingFakeDB(), "user1")
+
+    om.on_trade_candidate_ready(make_candidate_event(raid_bar=12, mss_bar=15))
+    assert len(bridge.placed) == 1, "should place normally while not paused"
+
+    state["paused"] = True
+    om.on_trade_candidate_ready(make_candidate_event(raid_bar=20, mss_bar=23))
+    assert len(bridge.placed) == 1, "should NOT place a second order once paused -- flip must take effect immediately"
+
+
+def test_is_user_paused_fails_safe_not_paused_on_db_error():
+    class FailingSettingsDB:
+        def query(self, model_cls):
+            raise Exception("simulated DB failure")
+        def close(self):
+            pass
+
+    bridge = FakeBridge()
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, lambda: FailingSettingsDB(), "user1")
+
+    # Must not raise, and must fail toward NOT paused (proceeds to place normally) --
+    # see _is_user_paused()'s own docstring for the reasoning.
+    om.on_trade_candidate_ready(make_candidate_event())
+    assert len(bridge.placed) == 1

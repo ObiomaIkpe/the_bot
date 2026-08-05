@@ -32,6 +32,8 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from shadow_runner.persistence import get_user_paused_status
+
 NY_TZ = ZoneInfo("America/New_York")  # matches shadow_runner.runner's own convention --
                                         # every event timestamp elsewhere in this codebase
                                         # is NY wall-clock, not UTC (see persistence.py's
@@ -152,22 +154,30 @@ def build_comment(model_name: str, direction: str, raid_bar: int) -> str:
 
 
 class OrderManager:
-    def __init__(self, model_config: dict, symbol: str, bridge, event_sink=None):
+    def __init__(self, model_config: dict, symbol: str, bridge, session_factory, user_id: str, event_sink=None):
         """
         model_config: {"model_name": str, "status": "active"|"shadow"|"disabled",
                         "risk_pct": float, "magic_number": int}
         symbol: e.g. "EURUSDm"
         bridge: shadow_runner.bridge_client.BridgeClient
+        session_factory: e.g. app.core.database.SessionLocal -- Phase 4
+            step 4 addition, needed to check UserSettings.is_paused FRESH
+            on every candidate (never cached -- see
+            on_trade_candidate_ready()'s safety-rail check for why).
+        user_id: whose UserSettings.is_paused to check.
         event_sink: optional callable(event: dict) -> None. Separate
             from DayOrchestrator's own event_sink -- these are
             order-manager-level events (order placed/cancelled/filled,
             target attached), not trading-logic events. New event types
             (see VALID_EVENT_TYPES additions needed in app/models/event.py):
             pending_order_placed, pending_order_cancelled,
-            candidate_filled, target_attached, order_placement_failed.
+            candidate_filled, target_attached, order_placement_failed,
+            order_skipped_paused.
         """
         self.model_config = model_config
         self.symbol = symbol
+        self.session_factory = session_factory
+        self.user_id = user_id
         self.bridge = bridge
         self._emit = event_sink or (lambda e: None)
 
@@ -186,6 +196,28 @@ class OrderManager:
     def is_active(self) -> bool:
         return self.model_config["status"] == "active"
 
+    def _is_user_paused(self) -> bool:
+        """Fresh DB read every call, deliberately not cached -- see
+        __init__'s docstring. Fails toward NOT paused if the read itself
+        fails (bridge is unrelated here, this is a direct DB call, so
+        failure means a real DB problem) -- logged loudly rather than
+        silently either way, since both "wrongly blocked" and "wrongly
+        allowed" are real outcomes worth knowing about, but a DB
+        connectivity problem shouldn't itself become a silent trading
+        halt with no visibility into why."""
+        db = self.session_factory()
+        try:
+            return get_user_paused_status(db, self.user_id)
+        except Exception as e:
+            log.error(
+                "Could not check is_paused status (%s) -- proceeding as NOT paused. "
+                "If this persists, investigate DB connectivity; a broken pause check "
+                "should not itself become a silent, invisible trading halt.", e,
+            )
+            return False
+        finally:
+            db.close()
+
     def _now_ny(self):
         """Real wall-clock NY time -- used for events triggered by
         polling real broker state (fills, cancellations, target
@@ -201,6 +233,23 @@ class OrderManager:
             return
         if self._winner_ticket is not None:
             return  # today's race is already decided
+
+        # Phase 4 step 4: account-wide emergency stop, checked FRESH
+        # every single time (never cached) -- the whole point of
+        # is_paused is being able to stop trading immediately without a
+        # restart. Deliberately separate from ModelConfig.status (a
+        # per-model, more deliberate switch) -- this is "stop
+        # everything for this user right now."
+        if self._is_user_paused():
+            self._emit(
+                {
+                    "event_type": "order_skipped_paused",
+                    "timestamp": event["timestamp"],
+                    "direction": event["direction"],
+                    "entry": event["entry"],
+                }
+            )
+            return
 
         candidate_key = (event["raid_bar"], event["mss_bar"])
         if candidate_key in self._pending:

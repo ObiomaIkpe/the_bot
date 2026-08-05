@@ -83,6 +83,10 @@ VALID_EVENT_TYPES = (
     #    NY half-volume risk-reduction event, distinct from a full
     #    close -- see shadow_runner/position_tracker.py --
     "partial_close_executed",
+    # -- added, Phase 4 step 4 (safety rails): a candidate that would
+    #    have placed a real order, but didn't, because
+    #    UserSettings.is_paused was true at the moment it was checked --
+    "order_skipped_paused",
 )
 
 

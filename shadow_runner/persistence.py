@@ -9,7 +9,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import Event, ModelConfig, Trade
+from app.models import Event, ModelConfig, Trade, UserSettings
 
 log = logging.getLogger("shadow_runner.persistence")
 
@@ -145,6 +145,31 @@ def get_model_config(db: Session, user_id: str, model_name: str) -> dict | None:
         "risk_pct": row.risk_pct,
         "magic_number": row.magic_number,
     }
+
+
+def get_user_paused_status(db: Session, user_id: str) -> bool:
+    """
+    Phase 4 step 4 (safety rails). Account-wide emergency stop --
+    distinct from ModelConfig.status, which is a per-model, more
+    deliberate switch. This is meant to be "stop everything for this
+    user right now," so it's ALWAYS fetched fresh (see
+    OrderManager.on_trade_candidate_ready()'s safety-rail check) --
+    never cached at startup the way model_config is, since a pause
+    that only takes effect after a restart defeats the point.
+
+    Returns False (not paused) if somehow no UserSettings row exists --
+    matches this project's established "fail toward the safer, more
+    conservative interpretation only where that's actually safer" isn't
+    quite right here; failing OPEN (not paused) when settings are
+    missing is a genuine judgment call, flagged rather than silently
+    assumed -- a missing UserSettings row is itself an anomaly worth
+    investigating, not a signal to block trading. Logged by the caller,
+    not here.
+    """
+    row = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+    if row is None:
+        return False
+    return row.is_paused
 
 
 def write_event(db: Session, event: dict, user_id: str, model: str) -> Event:

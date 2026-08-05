@@ -294,6 +294,7 @@ class ShadowRunner:
         if self.model_config is not None:
             cd.order_manager = OrderManager(
                 self.model_config, self.config.symbol, self.bridge,
+                self.session_factory, self.config.user_id,
                 event_sink=cd.todays_events.append,
             )
 
