@@ -15,8 +15,8 @@ import datetime
 from app.models import Event
 from shadow_runner.runner import ShadowRunner, NY_TZ
 from shadow_runner.persistence import get_last_event_timestamp_for_date
-from tests.test_runner_orchestration import make_config
-from tests.test_shadow_runner_recovery import RecoveryFakeDB
+from tests.shadow_runner.test_runner_orchestration import make_config
+from tests.shadow_runner.test_shadow_runner_recovery import RecoveryFakeDB
 
 
 def test_bootstrap_marker_excluded_from_todays_activity_check():

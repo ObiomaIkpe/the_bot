@@ -52,6 +52,7 @@ from shadow_runner.bridge_client import BridgeClient, BridgeError
 from shadow_runner.config import ShadowRunnerConfig
 from shadow_runner.day_state import CurrentDay
 from shadow_runner.order_manager import OrderManager
+from shadow_runner.position_tracker import PositionTracker
 from shadow_runner.persistence import (
     event_type_exists,
     get_current_equity,
@@ -86,6 +87,12 @@ class ShadowRunner:
         # this runner behaves exactly like pre-Phase-4 Phase 3: pure
         # journaling, no order-manager involvement at all.
         self.model_config: dict | None = None
+        # Phase 4 overnight-position handling: constructed once
+        # model_config is loaded (see _load_model_config()), NOT
+        # day-scoped like OrderManager -- survives day rollovers and,
+        # via load_from_db(), restarts too. See position_tracker.py's
+        # module docstring for why this can't be day-scoped.
+        self.position_tracker: PositionTracker | None = None
 
     def _load_model_config(self) -> None:
         db = self.session_factory()
@@ -107,6 +114,10 @@ class ShadowRunner:
                 self.model_config["model_name"], self.model_config["status"],
                 self.model_config["risk_pct"], self.model_config["magic_number"],
             )
+            self.position_tracker = PositionTracker(
+                self.bridge, self.session_factory, self.config.user_id, self.model_config
+            )
+            self.position_tracker.load_from_db()
 
     # ---------- polling ----------
 
@@ -122,6 +133,8 @@ class ShadowRunner:
 
         self._check_order_manager_fills()
         self._check_order_manager_close()
+        if self.position_tracker is not None:
+            self.position_tracker.check_positions()
 
     def _check_order_manager_close(self) -> None:
         """Phase 4 step 3. Checked once per poll cycle, same cadence and
@@ -586,7 +599,7 @@ class ShadowRunner:
             is_shadow = True if self.model_config is None else (self.model_config["status"] != "active")
             real_outcome = cd.order_manager.get_real_outcome() if cd.order_manager is not None else None
 
-            write_trade(
+            row = write_trade(
                 db, trade,
                 entry_time_utc=entry_bar["time_utc"],
                 entry_time_ny=entry_bar["time_ny"],
@@ -606,5 +619,19 @@ class ShadowRunner:
                 cd.date, trade["direction"], self.config.model, trade["outcome"],
                 trade["entry"], trade["exit_price"], is_shadow, real_outcome is not None,
             )
+
+            # Phase 4 overnight-position handling: if a real order filled
+            # but hadn't ALREADY closed by the time this trade row was
+            # written (i.e. real_status == 'open', not 'closed'), hand
+            # off ongoing tracking to PositionTracker -- OrderManager
+            # and its CurrentDay are about to be discarded at the next
+            # bar's day rollover, but this position may still be open
+            # for days. If it already closed same-day (real_status ==
+            # 'closed'), there's nothing to hand off -- write_trade()
+            # already recorded the final outcome directly.
+            if real_outcome is not None and real_outcome["close_price"] is None and self.position_tracker is not None:
+                self.position_tracker.register_new_position(
+                    real_outcome["position_ticket"], row.trade_id, entry_bar["time_ny"]
+                )
         finally:
             db.close()

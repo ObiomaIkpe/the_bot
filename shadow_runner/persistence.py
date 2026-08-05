@@ -296,6 +296,74 @@ def write_trade(
         real_close_time_ny=real_outcome["close_time_ny"] if real_outcome else None,
         real_profit=real_outcome["profit"] if real_outcome else None,
         real_close_reason=real_outcome["close_reason"] if real_outcome else None,
+        # Phase 4 overnight-position handling: 'open' the moment a real
+        # fill exists but hasn't closed yet (the common case -- a real
+        # position rarely resolves within the same poll cycle it's
+        # written on) -- PositionTracker takes over from here, across
+        # however many days it takes. 'closed' in the rare case it
+        # somehow already resolved by write time. None for shadow trades.
+        real_status=(
+            None if real_outcome is None
+            else ("closed" if real_outcome["close_price"] is not None else "open")
+        ),
     )
     db.add(row)
     return row
+
+
+def get_open_real_trades(db: Session, user_id: str, model: str) -> list[dict]:
+    """
+    Phase 4 overnight-position handling. Returns every trade still
+    real_status IN ('open', 'partial_closed') for this (user, model) --
+    used once at startup to rebuild PositionTracker's in-memory state,
+    since a real position can now legitimately span a runner restart or
+    multiple days (see shadow_runner/position_tracker.py).
+    """
+    rows = (
+        db.query(Trade)
+        .filter(
+            Trade.user_id == user_id, Trade.model == model,
+            Trade.real_status.in_(["open", "partial_closed"]),
+        )
+        .all()
+    )
+    return [
+        {
+            "trade_id": r.trade_id,
+            "real_position_ticket": r.real_position_ticket,
+            "real_status": r.real_status,
+            "entry_time_ny": r.entry_time_ny,
+            "direction": r.direction,
+        }
+        for r in rows
+    ]
+
+
+def update_trade_partial_close(
+    db: Session, trade_id, partial_close_price: float, partial_close_time_utc,
+    partial_close_time_ny, partial_close_volume: float, partial_close_profit: float,
+) -> None:
+    """Phase 4 overnight-position handling. Caller commits."""
+    row = db.query(Trade).filter(Trade.trade_id == trade_id).one()
+    row.real_status = "partial_closed"
+    row.partial_close_price = partial_close_price
+    row.partial_close_time_utc = partial_close_time_utc
+    row.partial_close_time_ny = partial_close_time_ny
+    row.partial_close_volume = partial_close_volume
+    row.partial_close_profit = partial_close_profit
+
+
+def update_trade_final_close(
+    db: Session, trade_id, close_price: float, close_time_utc, close_time_ny,
+    profit: float, close_reason: str,
+) -> None:
+    """Phase 4 overnight-position handling. Caller commits. Works
+    whether the trade was ever partially closed or not -- real_close_*
+    always describes the FINAL resolution regardless of path."""
+    row = db.query(Trade).filter(Trade.trade_id == trade_id).one()
+    row.real_status = "closed"
+    row.real_close_price = close_price
+    row.real_close_time_utc = close_time_utc
+    row.real_close_time_ny = close_time_ny
+    row.real_profit = profit
+    row.real_close_reason = close_reason

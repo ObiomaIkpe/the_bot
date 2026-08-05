@@ -79,6 +79,10 @@ VALID_EVENT_TYPES = (
     #    describes what the SIMULATION thinks happened); this is what
     #    ACTUALLY happened, per MT5's own trade history --
     "real_trade_closed",
+    # -- added, Phase 4 step 3 (overnight-position handling): the 5pm
+    #    NY half-volume risk-reduction event, distinct from a full
+    #    close -- see shadow_runner/position_tracker.py --
+    "partial_close_executed",
 )
 
 

@@ -179,6 +179,19 @@ class BridgeClient:
         except requests.RequestException as e:
             raise BridgeError(f"GET /history/position/{ticket} failed: {e}") from e
 
+    def close_position_partial(self, ticket: int, volume: float) -> dict:
+        try:
+            resp = requests.post(
+                f"{self.base_url}/positions/{ticket}/close_partial",
+                json={"volume": volume},
+                timeout=self.timeout_seconds,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            detail = e.response.text if getattr(e, "response", None) is not None else str(e)
+            raise BridgeError(f"POST /positions/{ticket}/close_partial failed: {detail}") from e
+
     def get_symbol_info(self, symbol: str) -> dict:
         """The REAL contract spec for this symbol -- see
         order_manager.py's compute_lot_size() for why this replaced an

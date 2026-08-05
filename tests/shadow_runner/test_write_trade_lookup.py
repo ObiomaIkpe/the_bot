@@ -9,7 +9,7 @@ import datetime
 import shadow_runner.persistence as persistence
 from shadow_runner.day_state import CurrentDay
 from shadow_runner.runner import ShadowRunner
-from tests.test_runner_orchestration import FakeDB, make_config
+from tests.shadow_runner.test_runner_orchestration import FakeDB, make_config
 
 
 class FakeBridge:

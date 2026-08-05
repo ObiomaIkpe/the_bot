@@ -40,6 +40,8 @@ from app.models import (
     Position,
     PositionHistoryResponse,
     PositionsResponse,
+    PartialCloseRequest,
+    PartialCloseResult,
     SymbolInfoResponse,
     TickResponse,
 )
@@ -222,6 +224,22 @@ def close_position(ticket: int):
     except mt5_client.MT5Error as e:
         raise HTTPException(status_code=502, detail=str(e))
     return CloseResult(**data)
+
+
+@app.post("/positions/{ticket}/close_partial", response_model=PartialCloseResult)
+def close_position_partial(ticket: int, request: PartialCloseRequest):
+    """Closes PART of a position's volume, leaving the rest open under
+    the same ticket with its existing stop/target intact -- the
+    5pm-half-risk-reduction mechanic, distinct from a full close."""
+    config = get_config()
+    _require_orders_enabled(config)
+    try:
+        data = mt5_client.close_position_partial(ticket, request.volume)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except mt5_client.MT5Error as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return PartialCloseResult(**data)
 
 
 # ---------------------------------------------------------------------------

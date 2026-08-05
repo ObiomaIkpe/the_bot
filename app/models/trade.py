@@ -65,6 +65,22 @@ class Trade(Base):
     real_profit = Column(Float, nullable=True)
     real_close_reason = Column(String, nullable=True)  # 'stop_loss' | 'take_profit' | 'manual' | 'expert' | 'unknown'
 
+    # Phase 4 step 3 (overnight-position handling): a real trade's own
+    # lifecycle, tracked independently of `outcome` (the SIMULATION's
+    # same-day result, fixed at day-finalize time and never revisited).
+    # null for shadow trades. See shadow_runner/position_tracker.py's
+    # module docstring for the full design -- a real position no longer
+    # necessarily resolves same-day; if still open at 5pm NY, half its
+    # volume closes (partial_close_* below) and the rest keeps running
+    # to natural resolution (real_close_* above, from migration 0004),
+    # however many days that takes.
+    real_status = Column(String, nullable=True)  # 'open' | 'partial_closed' | 'closed'
+    partial_close_price = Column(Float, nullable=True)
+    partial_close_time_utc = Column(DateTime(timezone=True), nullable=True)
+    partial_close_time_ny = Column(DateTime(timezone=True), nullable=True)
+    partial_close_volume = Column(Float, nullable=True)
+    partial_close_profit = Column(Float, nullable=True)
+
     user = relationship("User", back_populates="trades")
 
     __table_args__ = (
@@ -73,5 +89,9 @@ class Trade(Base):
         CheckConstraint(
             "outcome IS NULL OR outcome IN ('win', 'loss', 'scratch')",
             name="ck_trades_outcome_valid",
+        ),
+        CheckConstraint(
+            "real_status IS NULL OR real_status IN ('open', 'partial_closed', 'closed')",
+            name="ck_trades_real_status_valid",
         ),
     )

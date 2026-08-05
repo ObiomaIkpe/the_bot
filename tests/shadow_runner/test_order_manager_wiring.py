@@ -11,9 +11,9 @@ cd.order_manager being None when it shouldn't be).
 import datetime
 
 from shadow_runner.runner import ShadowRunner
-from tests.test_runner_orchestration import make_config, full_day_bars, establish_trend, FakeDB
-from tests.test_trade_candidate_ready import FakeWatch, FakeFVGDetector
-from tests.test_order_manager import FakeBridge as OrderFakeBridge
+from tests.shadow_runner.test_runner_orchestration import make_config, full_day_bars, establish_trend, FakeDB
+from tests.streaming.test_trade_candidate_ready import FakeWatch, FakeFVGDetector
+from tests.shadow_runner.test_order_manager import FakeBridge as OrderFakeBridge
 
 
 class CombinedFakeBridge(OrderFakeBridge):

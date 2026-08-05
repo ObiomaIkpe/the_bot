@@ -128,6 +128,22 @@ class CloseResult(BaseModel):
     broker_comment: str
 
 
+class PartialCloseRequest(BaseModel):
+    volume: float  # portion of the position's volume to close; must be
+                     # > 0 and < the position's current volume
+
+
+class PartialCloseResult(BaseModel):
+    ticket: int
+    closed_volume: float
+    close_price: float
+    remaining_volume: float  # what's left open under the same ticket
+    time_utc: str
+    time_ny: str
+    retcode: int
+    broker_comment: str
+
+
 # ---------------------------------------------------------------------------
 # Phase 4 step 2a: pending limit orders + position modify
 # ---------------------------------------------------------------------------

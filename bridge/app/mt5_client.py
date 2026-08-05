@@ -484,6 +484,85 @@ def close_position(ticket: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Phase 4 step 3 (overnight-position handling): partial close. A trade
+# that hasn't hit its stop or target by 5pm NY now runs to natural
+# resolution instead of being force-scratched (matching the simulation's
+# old day-bound behavior) -- but with half its risk closed at the 5pm
+# crossing, so the account isn't carrying full exposure on a position
+# indefinitely. This is a real, distinct MT5 action from a full close:
+# closes only PART of the position's volume, leaving the remainder open
+# under the SAME position ticket with its existing stop/target intact.
+# ---------------------------------------------------------------------------
+
+
+def _do_close_position_partial(ticket: int, volume: float) -> dict:
+    _ensure_connected()
+    positions = mt5.positions_get(ticket=ticket)
+    if not positions:
+        raise MT5Error(f"No open position found with ticket {ticket}")
+    pos = positions[0]
+
+    if volume <= 0 or volume >= pos.volume:
+        raise ValueError(
+            f"partial-close volume must be > 0 and < the position's current volume "
+            f"({pos.volume}); got {volume} -- use close_position() for a full close instead"
+        )
+
+    t = mt5.symbol_info_tick(pos.symbol)
+    if t is None:
+        _fail(f"mt5.symbol_info_tick({pos.symbol!r}) before partial-closing position")
+
+    # Same direction-flip logic as a full close -- closing part of a BUY
+    # means placing a partial SELL against it, and vice versa. Critically,
+    # "volume" here is ONLY the portion being closed -- MT5 handles
+    # leaving the rest of the position open under the same ticket
+    # automatically, as long as "position" is set to the original ticket.
+    if pos.type == mt5.ORDER_TYPE_BUY:
+        close_type = mt5.ORDER_TYPE_SELL
+        price = t.bid
+    else:
+        close_type = mt5.ORDER_TYPE_BUY
+        price = t.ask
+
+    request = {
+        "action": mt5.TRADE_ACTION_DEAL,
+        "symbol": pos.symbol,
+        "volume": volume,
+        "type": close_type,
+        "position": ticket,
+        "price": price,
+        "deviation": 20,
+        "magic": pos.magic,
+        "comment": "partial_close_5pm",
+        "type_time": mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    result = mt5.order_send(request)
+    if result is None:
+        _fail("mt5.order_send (partial close) returned None")
+    if result.retcode != mt5.TRADE_RETCODE_DONE:
+        raise MT5Error(
+            f"partial close did not complete: retcode={result.retcode}, comment={result.comment!r}"
+        )
+
+    time_utc, time_ny = _to_ny(int(datetime.now(timezone.utc).timestamp()))
+    return {
+        "ticket": ticket,
+        "closed_volume": result.volume,
+        "close_price": result.price,
+        "remaining_volume": round(pos.volume - result.volume, 8),
+        "time_utc": time_utc,
+        "time_ny": time_ny,
+        "retcode": result.retcode,
+        "broker_comment": result.comment,
+    }
+
+
+def close_position_partial(ticket: int, volume: float) -> dict:
+    return _run(_do_close_position_partial, ticket, volume)
+
+
+# ---------------------------------------------------------------------------
 # Phase 4 step 2a: pending limit orders + position modify.
 #
 # WHY THIS EXISTS SEPARATELY FROM place_market_order(): the strategy's

@@ -9,8 +9,8 @@ import datetime
 
 from app.models import Event
 from shadow_runner.runner import ShadowRunner, NY_TZ
-from tests.test_runner_orchestration import make_config
-from tests.test_shadow_runner_recovery import RecoveryFakeDB, RecoveryFakeQuery
+from tests.shadow_runner.test_runner_orchestration import make_config
+from tests.shadow_runner.test_shadow_runner_recovery import RecoveryFakeDB, RecoveryFakeQuery
 
 
 class TrackingFakeDB(RecoveryFakeDB):
