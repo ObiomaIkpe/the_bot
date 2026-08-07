@@ -107,17 +107,23 @@ class BridgeClient:
         try:
             resp = requests.get(
                 f"{self.base_url}/orders/pending",
-                params={"only_ours": True},
+                # BUG FIX (found while building the trade-lifecycle proof
+                # script): only_ours=True resolves server-side to the
+                # BRIDGE WORKER's single configured config.magic_number
+                # (900001) -- NOT the magic passed into this method. Any
+                # caller asking for a different magic (a second model, or
+                # this proof script's 999999 test magic) would always get
+                # an empty list back, silently, even with a real matching
+                # order on the account. only_ours=False returns every
+                # order regardless of magic; the explicit filter below is
+                # what actually narrows it to the magic we want.
+                params={"only_ours": False},
                 timeout=self.timeout_seconds,
             )
             resp.raise_for_status()
             all_orders = resp.json().get("orders", [])
         except requests.RequestException as e:
             raise BridgeError(f"GET /orders/pending failed: {e}") from e
-        # Belt-and-suspenders filter: only_ours=true already filters to
-        # the BRIDGE WORKER's default magic, which may not match this
-        # specific model's magic if multiple models share the worker --
-        # filter explicitly by the exact magic passed in.
         return [o for o in all_orders if o.get("magic") == magic]
 
     def cancel_pending_order(self, ticket: int) -> dict:
@@ -135,7 +141,12 @@ class BridgeClient:
         try:
             resp = requests.get(
                 f"{self.base_url}/positions",
-                params={"only_ours": True},
+                # BUG FIX -- see the matching note in get_pending_orders()
+                # above: only_ours=True filters server-side to the bridge
+                # worker's own config.magic_number (900001), regardless of
+                # the magic argument passed here. only_ours=False returns
+                # every position; we filter explicitly by magic below.
+                params={"only_ours": False},
                 timeout=self.timeout_seconds,
             )
             resp.raise_for_status()
@@ -143,6 +154,22 @@ class BridgeClient:
         except requests.RequestException as e:
             raise BridgeError(f"GET /positions failed: {e}") from e
         return [p for p in all_positions if p.get("magic") == magic]
+
+    def close_position(self, ticket: int) -> dict:
+        """Full close of an open position. The bridge itself has always
+        had POST /positions/{ticket}/close (see bridge/app/main.py) --
+        this client just never wrapped it; only close_position_partial
+        existed here before. Added while building the trade-lifecycle
+        proof script, which needs a real full close for teardown."""
+        try:
+            resp = requests.post(
+                f"{self.base_url}/positions/{ticket}/close", timeout=self.timeout_seconds
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as e:
+            detail = e.response.text if getattr(e, "response", None) is not None else str(e)
+            raise BridgeError(f"POST /positions/{ticket}/close failed: {detail}") from e
 
     def modify_position(self, ticket: int, take_profit: float) -> dict:
         try:
@@ -191,16 +218,3 @@ class BridgeClient:
         except requests.RequestException as e:
             detail = e.response.text if getattr(e, "response", None) is not None else str(e)
             raise BridgeError(f"POST /positions/{ticket}/close_partial failed: {detail}") from e
-
-    def get_symbol_info(self, symbol: str) -> dict:
-        """The REAL contract spec for this symbol -- see
-        order_manager.py's compute_lot_size() for why this replaced an
-        assumed pip-value figure."""
-        try:
-            resp = requests.get(
-                f"{self.base_url}/symbol_info", params={"symbol": symbol}, timeout=self.timeout_seconds
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except requests.RequestException as e:
-            raise BridgeError(f"GET /symbol_info failed: {e}") from e
