@@ -134,10 +134,14 @@ def run(user_id: str, bridge_url: str, symbol: str, direction: str, offset_pips:
     pip_size = 0.0001  # matches order_manager.PIP
 
     if direction == "long":
-        entry = round(current_price + offset_pips * pip_size, 5)
+        # BUY_LIMIT (see bridge/app/mt5_client.py's _do_place_pending_limit_order)
+        # must sit BELOW the current price -- MT5 rejects it otherwise
+        # (retcode 10015, "Invalid price", confirmed against a real run).
+        entry = round(current_price - offset_pips * pip_size, 5)
         stop = round(entry - 15 * pip_size, 5)
     else:
-        entry = round(current_price - offset_pips * pip_size, 5)
+        # SELL_LIMIT must sit ABOVE the current price.
+        entry = round(current_price + offset_pips * pip_size, 5)
         stop = round(entry + 15 * pip_size, 5)
 
     event = build_synthetic_event(direction, entry, stop)
