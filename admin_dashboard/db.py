@@ -9,10 +9,11 @@ out of sync with the real schema the moment a migration changes
 anything over there.
 
 To make that import work without turning this into a copy of the main
-repo, set MAIN_REPO_PATH (in .env or your shell) to the main bot
-repo's root folder -- the one containing the `app/` directory. This
-script adds that path to sys.path at import time, before importing
-`app.models`.
+repo: since this folder now lives inside the_bot itself (a sibling of
+app/, phase1/, shadow_runner/, ...), the repo root is just this file's
+parent directory -- computed automatically below, no config needed.
+Set MAIN_REPO_PATH only if you ever run this dashboard from somewhere
+that *isn't* inside the_bot (it overrides the auto-detected path).
 
 SAFETY: every connection this tool opens is set read-only at the
 Postgres session level (`SET default_transaction_read_only = on`) the
@@ -27,13 +28,12 @@ import sys
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-MAIN_REPO_PATH = os.environ.get("MAIN_REPO_PATH")
-if not MAIN_REPO_PATH:
-    raise RuntimeError(
-        "MAIN_REPO_PATH is not set. Point it at the main bot repo's root "
-        "folder (the one containing app/), e.g. in a .env file or:\n"
-        "  export MAIN_REPO_PATH=/path/to/the_bot-main"
-    )
+# Auto-detected: parent of this file's directory, i.e. the_bot/ itself,
+# since admin_dashboard/ now lives inside it. Override with the
+# MAIN_REPO_PATH env var only if that's ever not true (e.g. running this
+# dashboard from somewhere outside the_bot).
+_AUTO_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MAIN_REPO_PATH = os.environ.get("MAIN_REPO_PATH", _AUTO_REPO_ROOT)
 if MAIN_REPO_PATH not in sys.path:
     sys.path.insert(0, MAIN_REPO_PATH)
 
