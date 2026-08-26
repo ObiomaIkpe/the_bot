@@ -220,6 +220,31 @@ can't do anything meaningful without a working, correctly-scoped API
 underneath it. Then frontend scaffold → Dashboard → Settings → Live, in
 that order.
 
+## Addendum: M4 + M5 -- frontend built (2026-08-26)
+
+Both done together (M5 followed immediately after M4's scaffold, per the
+user's "keep going without stopping for permission" instruction while
+away). `frontend/` (Vite + React + TypeScript + `@tanstack/react-query`,
+`react-router-dom`) now has: `Login` → JWT stored via `AuthContext`,
+`ProtectedRoute` gating everything else; `Dashboard` (event feed + trades
+table, both auto-scoped by the backend's JWT auth, no picker needed);
+`Settings` (per-model status/pause switches via `PATCH /model-configs`,
+account-wide pause + max daily loss via `PATCH /settings`); `Live`
+(positions/pending orders from `/trading/*`, Close/Cancel gated behind
+`ConfirmModal` since these are real, irreversible broker actions).
+
+Verified: `npm run build` (tsc + vite build) and `npm run lint` both
+clean. `npm run dev` confirmed serving correctly via curl. **Not
+verified**: actual interactive browser use of the login → dashboard →
+settings → live flow — no browser tool available in the environment this
+was built in. User should click through it themselves before considering
+this fully done.
+
+Known gap, called out in `frontend/README.md`: no UI yet for creating
+`broker_credentials` rows or minting bridge tokens (still `curl`-only,
+per the paused work tracked in the MT5-credential-cutover plan) --
+worth a page for this later.
+
 ## Process
 
 - **Each milestone (M1 → M2 → M3 → M4 → M5) is implemented and verified
