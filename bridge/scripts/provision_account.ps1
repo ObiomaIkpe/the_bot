@@ -109,7 +109,7 @@
 
 .PARAMETER CredentialApiUrl
   Optional, same idea as BridgeToken. Defaults to
-  https://api.ihsale.com.ng if not given.
+  https://api.ihusale.com.ng if not given.
 
 .EXAMPLE
   .\provision_account.ps1 -AccountLabel friend -Login 12345678 `
@@ -128,7 +128,7 @@ param(
     [string]$DefaultSymbol = "EURUSDm",
     [string]$BridgeRoot = "C:\bridge",
     [string]$BridgeToken = "",
-    [string]$CredentialApiUrl = "https://api.ihsale.com.ng"
+    [string]$CredentialApiUrl = "https://api.ihusale.com.ng"
 )
 
 $ErrorActionPreference = "Stop"

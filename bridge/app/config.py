@@ -94,7 +94,7 @@ def fetch_credential() -> dict:
                              authenticates in one value -- see
                              app/routers/internal_bridge.py.
       CREDENTIAL_API_URL  -- base URL of the api service, e.g.
-                             https://api.ihsale.com.ng (HTTPS -- this
+                             https://api.ihusale.com.ng (HTTPS -- this
                              call sends the token and receives the
                              plaintext password over the wire; see this
                              project's TLS setup for why that's not

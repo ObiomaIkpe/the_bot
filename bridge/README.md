@@ -41,7 +41,7 @@ Set these two env vars before starting the worker:
 
 ```powershell
 $env:BRIDGE_TOKEN = "<minted via POST /broker-credentials/{id}/bridge-token>"
-$env:CREDENTIAL_API_URL = "https://api.ihsale.com.ng"
+$env:CREDENTIAL_API_URL = "https://api.ihusale.com.ng"
 ```
 
 `BRIDGE_TOKEN` is a per-account, rotatable capability token, not a copy of
@@ -57,7 +57,7 @@ front of it on the Hetzner box).
 cd C:\bridge
 venv\Scripts\activate
 $env:BRIDGE_TOKEN = "..."
-$env:CREDENTIAL_API_URL = "https://api.ihsale.com.ng"
+$env:CREDENTIAL_API_URL = "https://api.ihusale.com.ng"
 uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 ```
 
