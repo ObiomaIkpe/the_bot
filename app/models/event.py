@@ -107,6 +107,13 @@ VALID_EVENT_TYPES = (
     # anything in the trading pipeline itself --
     "model_config_updated",
     "account_settings_updated",
+    # -- added, admin API M3: a human directly closed a position or
+    # cancelled a pending order from the admin frontend, via the bridge
+    # -- these describe a real, immediate action against the live
+    # broker connection, so they ARE real-action events (see
+    # REAL_ACTION_EVENT_TYPES below) --
+    "manual_close_requested",
+    "manual_cancel_requested",
 )
 
 # Fixes a real, stale bug: write_event() used to hardcode is_shadow=True
@@ -141,6 +148,8 @@ REAL_ACTION_EVENT_TYPES = frozenset(
         "partial_close_executed",
         "daily_loss_threshold_crossed",
         "safety_check_failed",
+        "manual_close_requested",
+        "manual_cancel_requested",
     }
 )
 

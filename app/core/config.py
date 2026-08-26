@@ -30,5 +30,14 @@ class Settings(BaseSettings):
     def cors_allowed_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
 
+    # Optional, unlike shadow_runner/config.py's BRIDGE_URL (which MUST be
+    # explicit -- see that file's comment). Here, an eager required field
+    # would crash the ENTIRE api service at import time on every
+    # deployment that hasn't set it yet (confirmed: not in the local
+    # .env), even though only the /trading routes actually need it.
+    # Left None until configured; those routes fail clearly at request
+    # time instead (see app/routers/trading.py's get_bridge_client()).
+    bridge_url: str | None = None
+
 
 settings = Settings()
