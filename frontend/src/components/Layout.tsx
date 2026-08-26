@@ -31,6 +31,9 @@ export function Layout() {
         <NavLink to="/live" style={navLinkStyle}>
           Live
         </NavLink>
+        <NavLink to="/broker-credentials" style={navLinkStyle}>
+          Broker Credentials
+        </NavLink>
         <button type="button" onClick={logout} style={{ marginLeft: "auto" }}>
           Log out
         </button>

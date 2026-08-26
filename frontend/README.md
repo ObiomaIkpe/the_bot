@@ -37,15 +37,15 @@ deployed backend). The backend's CORS config already allows
   (`src/components/ConfirmModal.tsx`) since these are real, irreversible
   broker actions once a broker account is actually connected
   (`bridge_url` set on a `broker_credentials` row).
+- `src/pages/BrokerCredentials.tsx` — connect an MT5 account (self-service
+  form), mint/re-mint its bridge token (shown once, with a warning before
+  re-minting since that invalidates whatever token a running bridge
+  worker currently holds).
 - `@tanstack/react-query` handles data fetching/caching/polling
   throughout (e.g. the event feed and Live page auto-refresh) instead of
   Streamlit's meta-refresh-tag approach.
 
 ## Known gaps / next steps
 
-- No UI yet for creating/managing `broker_credentials` rows themselves
-  (submitting MT5 login details, minting a bridge token) — that's
-  currently done via direct API calls (`curl`), not through this
-  frontend. Worth adding a page for this.
 - Styling is minimal/inline — functional, not polished.
 - No tests yet.

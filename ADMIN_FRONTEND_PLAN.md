@@ -240,10 +240,12 @@ settings → live flow — no browser tool available in the environment this
 was built in. User should click through it themselves before considering
 this fully done.
 
-Known gap, called out in `frontend/README.md`: no UI yet for creating
-`broker_credentials` rows or minting bridge tokens (still `curl`-only,
-per the paused work tracked in the MT5-credential-cutover plan) --
-worth a page for this later.
+Follow-up, same session: added `src/pages/BrokerCredentials.tsx` --
+self-service form to connect an MT5 account (`POST /broker-credentials`)
+and mint/re-mint its bridge token, with a warning before re-minting
+(invalidates whatever token a running bridge worker currently holds).
+Closes the gap noted above -- the paused MT5-credential-cutover steps
+(see the plan file) can now be done through this page instead of `curl`.
 
 ## Process
 

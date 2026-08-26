@@ -81,6 +81,24 @@ export interface PendingOrder {
   time_ny: string;
 }
 
+export interface BrokerCredentialOut {
+  credential_id: string;
+  broker_name: string;
+  account_login: string;
+  server: string;
+  account_type: "demo" | "live";
+  is_active: boolean;
+  bridge_configured: boolean;
+}
+
+export interface BrokerCredentialCreate {
+  broker_name: string;
+  account_login: string;
+  account_password: string;
+  server: string;
+  account_type: "demo" | "live";
+}
+
 export interface AccountInfo {
   login: number;
   server: string;
