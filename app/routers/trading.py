@@ -10,6 +10,11 @@ Ownership: bridge/app/models.py's Position and PendingOrder both carry a
 the whole system (see app/models/model_config.py). So a ticket belongs to
 the current user if and only if its magic matches one of THEIR
 model_configs' magic numbers -- fetched fresh per request, never assumed.
+
+Which bridge: resolved per-user from their own active BrokerCredential
+row (broker_credentials.bridge_url -- see migration 0008), not a single
+global setting. Each MT5 account has its own bridge worker/port; a
+global BRIDGE_URL only ever worked for exactly one account.
 """
 import datetime
 from zoneinfo import ZoneInfo
@@ -17,13 +22,13 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.models.broker_credential import BrokerCredential
 from app.models.model_config import ModelConfig
 from app.models.trade import Trade
 from app.models.user import User
-from bridge.app.models import CancelResult, CloseResult, PendingOrder, Position
+from bridge.app.models import AccountInfoResponse, CancelResult, CloseResult, PendingOrder, Position
 from shadow_runner.bridge_client import BridgeClient, BridgeError
 from shadow_runner.persistence import write_event
 
@@ -32,13 +37,21 @@ router = APIRouter(prefix="/trading", tags=["trading"])
 _NY_TZ = ZoneInfo("America/New_York")
 
 
-def get_bridge_client() -> BridgeClient:
-    if not settings.bridge_url:
+def get_bridge_client(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BridgeClient:
+    cred = (
+        db.query(BrokerCredential)
+        .filter(BrokerCredential.user_id == current_user.user_id, BrokerCredential.is_active.is_(True))
+        .first()
+    )
+    if cred is None or not cred.bridge_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="BRIDGE_URL is not configured on this server",
+            detail="No active, bridge-connected broker credential configured for this account",
         )
-    return BridgeClient(settings.bridge_url)
+    return BridgeClient(cred.bridge_url)
 
 
 def _user_model_configs(db: Session, user_id) -> list[ModelConfig]:
@@ -61,6 +74,14 @@ def _find_owned_pending_order(db: Session, bridge: BridgeClient, user_id, order_
             if o["order_ticket"] == order_ticket:
                 return o, mc.model_name
     return None
+
+
+@router.get("/account-info", response_model=AccountInfoResponse)
+def get_account_info(bridge: BridgeClient = Depends(get_bridge_client)):
+    try:
+        return bridge.account_info()
+    except BridgeError as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
 
 
 @router.get("/positions", response_model=list[Position])

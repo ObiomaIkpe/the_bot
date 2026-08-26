@@ -173,13 +173,52 @@ decentralize it rather than route around the snag:
   also handles `is_paused` per-model) journals a single
   `model_config_updated` event with its own natural `model_name`.
 
+## Addendum: M3.5 -- broker credentials + account info (2026-08-26)
+
+Raised mid-build: the whole app is of limited use without a way for a
+user to actually connect their MT5 account and see real account data
+(balance, equity). Two real gaps this closed:
+
+1. `app/models/broker_credential.py` had zero API surface -- nothing
+   ever wrote to or read from it. Added `app/routers/broker_credentials.py`:
+   `POST /broker-credentials` (self-service -- a user submits their own
+   MT5 login/password/broker/server/account_type), `GET
+   /broker-credentials` (scoped, list), `PATCH /broker-credentials/{id}`
+   (sets `bridge_url` and/or `is_active`). The response schema
+   (`BrokerCredentialOut`) deliberately never returns
+   `account_password`, encrypted or not -- only `account_login` (an
+   account number, not secret at the same level) is exposed.
+2. M3's trading router assumed a single global `BRIDGE_URL` for
+   everyone -- only ever correct for exactly one account. Added
+   `bridge_url` to `broker_credentials` (migration `0008`; each MT5
+   account already maps to its own bridge worker/port by design -- see
+   `bridge/app/config.py`) and rewrote `trading.py`'s
+   `get_bridge_client()` to resolve per-user from their own active,
+   bridge-connected credential row instead. Removed the now-dead
+   `Settings.bridge_url` global entirely. Also added
+   `GET /trading/account-info` (balance/equity/margin), proxying the
+   bridge's existing `/account_info` endpoint.
+
+**Important limit, not solved by code:** saving credentials and having
+a bridge worker actually running for that account are two different
+events. MT5 requires a real terminal install on the Windows VPS --
+running two accounts simultaneously means two separate portable
+installs (`terminal64.exe /portable`, each in its own folder, each with
+its own bridge worker process/port/config.json -- the bridge config
+schema already anticipated exactly this). No API can provision that
+automatically. A `broker_credentials` row with `bridge_url` still null
+means "connected in the sense of saved credentials, not yet wired to a
+running worker" -- `/trading/*` returns a clear 503 for that case,
+distinct from "no credentials at all."
+
 ## Suggested build order
 
 Backend first (M1 read routers → M2 DB-flag writes → M3 live bridge
-actions), verified end-to-end via curl/pytest before any frontend code is
-written, since the frontend can't do anything meaningful without a working,
-correctly-scoped API underneath it. Then frontend scaffold → Dashboard →
-Settings → Live, in that order.
+actions → M3.5 broker credentials + account info), verified end-to-end
+via curl/pytest before any frontend code is written, since the frontend
+can't do anything meaningful without a working, correctly-scoped API
+underneath it. Then frontend scaffold → Dashboard → Settings → Live, in
+that order.
 
 ## Process
 

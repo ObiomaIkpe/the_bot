@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.logging import configure_logging
-from app.routers import auth, events, model_configs, settings as settings_router, trades, trading
+from app.routers import auth, broker_credentials, events, model_configs, settings as settings_router, trades, trading
 
 configure_logging()
 logger = logging.getLogger("app")
@@ -25,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(broker_credentials.router)
 app.include_router(events.router)
 app.include_router(trades.router)
 app.include_router(model_configs.router)

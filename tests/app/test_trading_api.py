@@ -3,6 +3,7 @@ import itertools
 import pytest
 
 from app.main import app
+from app.models.broker_credential import BrokerCredential
 from app.models.model_config import ModelConfig
 from app.models.trade import Trade
 from app.routers import trading
@@ -43,6 +44,13 @@ class FakeBridge:
             "ticket": ticket, "close_price": 1.1050, "volume_closed": 1.0,
             "time_utc": "2026-08-26T14:00:00+00:00", "time_ny": "2026-08-26T10:00:00-04:00",
             "retcode": 10009, "broker_comment": "closed by admin",
+        }
+
+    def account_info(self):
+        return {
+            "login": 1, "server": "s", "balance": 10000.0, "equity": 10050.0,
+            "margin": 100.0, "margin_free": 9950.0, "margin_level": 10050.0,
+            "leverage": 100, "currency": "USD",
         }
 
     def cancel_pending_order(self, order_ticket):
@@ -115,9 +123,51 @@ def test_list_positions_requires_auth(client):
 
 
 def test_list_positions_without_bridge_configured_is_503(client, db_session):
+    """No broker_credentials row at all -- exercises the REAL
+    get_bridge_client (not the bridge_client fixture's override)."""
     token = _register_and_login(client, "trad_b@example.com")
     resp = client.get("/trading/positions", headers=_auth_header(token))
     assert resp.status_code == 503
+
+
+def test_positions_503_when_credential_exists_but_bridge_url_unset(client, db_session):
+    """Credentials saved (self-service), but no bridge worker provisioned
+    for it yet -- still 503, distinct from having no credential at all."""
+    token = _register_and_login(client, "trad_i@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+    cred = BrokerCredential(user_id=user_id, broker_name="b", server="s", account_type="demo", is_active=True)
+    cred.account_login = "1"
+    cred.account_password = "p"
+    db_session.add(cred)
+    db_session.commit()
+
+    resp = client.get("/trading/positions", headers=_auth_header(token))
+    assert resp.status_code == 503
+
+
+def test_positions_503_when_only_credential_is_inactive(client, db_session):
+    token = _register_and_login(client, "trad_j@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+    cred = BrokerCredential(
+        user_id=user_id, broker_name="b", server="s", account_type="demo", is_active=False,
+        bridge_url="http://example.invalid:8001",
+    )
+    cred.account_login = "1"
+    cred.account_password = "p"
+    db_session.add(cred)
+    db_session.commit()
+
+    resp = client.get("/trading/positions", headers=_auth_header(token))
+    assert resp.status_code == 503
+
+
+def test_get_account_info(client, db_session, bridge_client):
+    token = _register_and_login(client, "trad_k@example.com")
+    bridge_client(FakeBridge())
+
+    resp = client.get("/trading/account-info", headers=_auth_header(token))
+    assert resp.status_code == 200
+    assert resp.json()["balance"] == 10000.0
 
 
 def test_close_position_succeeds_for_owned_ticket_and_journals(client, db_session, bridge_client):

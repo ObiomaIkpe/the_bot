@@ -27,6 +27,13 @@ class BrokerCredential(Base):
     account_type = Column(String, nullable=False)  # 'demo' or 'live'
     is_active = Column(Boolean, nullable=False, default=True)
 
+    # Which bridge worker (its own process/port/config.json -- see
+    # bridge/app/config.py) actually serves this account. Null until
+    # someone (currently: manual ops, since MT5 requires a real terminal
+    # install on the Windows VPS) has provisioned a worker for it and
+    # set this. See migration 0008 for the full reasoning.
+    bridge_url = Column(String, nullable=True)
+
     user = relationship("User", back_populates="broker_credentials")
 
     @property
