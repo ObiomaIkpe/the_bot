@@ -1,5 +1,5 @@
 """
-Three distinct concerns live here, deliberately kept separate:
+Four distinct concerns live here, deliberately kept separate:
 
 1. User login passwords -- one-way hash (bcrypt). Never recoverable, only
    verifiable.
@@ -8,7 +8,16 @@ Three distinct concerns live here, deliberately kept separate:
 3. Broker credential encryption -- MUST be reversible (the bot needs the
    actual plaintext password to log into MT5), so this is symmetric
    *encryption* (Fernet), not hashing. Do not conflate this with #1.
+4. High-entropy service tokens (e.g. a bridge's fetch token) -- one-way
+   hash, but NOT bcrypt: bcrypt's slow, salted design defends a
+   low-entropy, human-chosen secret against offline brute force. A
+   256-bit value from `secrets.token_urlsafe` is already unguessable, so
+   a fast, unsalted, indexable hash is the correct choice here -- it's
+   also what lets the DB look a row up BY this hash directly, which
+   bcrypt's per-call-random-salt design would make impossible. Do not
+   conflate this with #1 either.
 """
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 from cryptography.fernet import Fernet
@@ -63,3 +72,9 @@ def encrypt_secret(plaintext: str) -> str:
 
 def decrypt_secret(ciphertext: str) -> str:
     return _fernet.decrypt(ciphertext.encode()).decode()
+
+
+# ---------- High-entropy service tokens (one-way, unsalted -- see module docstring) ----------
+
+def hash_service_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()

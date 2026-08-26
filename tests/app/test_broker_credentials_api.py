@@ -115,3 +115,55 @@ def test_patch_404_for_another_users_credential(client, db_session):
 def test_list_broker_credentials_requires_auth(client):
     resp = client.get("/broker-credentials")
     assert resp.status_code == 401
+
+
+def test_issue_bridge_token_requires_auth(client):
+    resp = client.post("/broker-credentials/00000000-0000-0000-0000-000000000000/bridge-token")
+    assert resp.status_code == 401
+
+
+def test_issue_bridge_token_returns_token_and_sets_hash(client, db_session):
+    token = _register_and_login(client, "bc_i@example.com")
+    create_resp = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    )
+    credential_id = create_resp.json()["credential_id"]
+
+    resp = client.post(f"/broker-credentials/{credential_id}/bridge-token", headers=_auth_header(token))
+    assert resp.status_code == 200
+    bridge_token = resp.json()["bridge_token"]
+    assert bridge_token
+
+    row = db_session.query(BrokerCredential).filter(BrokerCredential.credential_id == credential_id).first()
+    assert row.bridge_fetch_token_hash is not None
+    assert row.bridge_fetch_token_hash != bridge_token
+
+
+def test_issue_bridge_token_404_for_another_users_credential(client, db_session):
+    token_a = _register_and_login(client, "bc_j@example.com")
+    token_b = _register_and_login(client, "bc_k@example.com")
+    create_resp = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token_b),
+    )
+    credential_id = create_resp.json()["credential_id"]
+
+    resp = client.post(f"/broker-credentials/{credential_id}/bridge-token", headers=_auth_header(token_a))
+    assert resp.status_code == 404
+
+
+def test_reissuing_bridge_token_rotates_it(client, db_session):
+    token = _register_and_login(client, "bc_l@example.com")
+    create_resp = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    )
+    credential_id = create_resp.json()["credential_id"]
+
+    first = client.post(f"/broker-credentials/{credential_id}/bridge-token", headers=_auth_header(token)).json()["bridge_token"]
+    second = client.post(f"/broker-credentials/{credential_id}/bridge-token", headers=_auth_header(token)).json()["bridge_token"]
+    assert first != second

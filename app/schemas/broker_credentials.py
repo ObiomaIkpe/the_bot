@@ -52,3 +52,9 @@ class BrokerCredentialOut(BaseModel):
             is_active=cred.is_active,
             bridge_configured=bool(cred.bridge_url),
         )
+
+
+class BridgeTokenIssueOut(BaseModel):
+    """Returned exactly once, at mint time -- see
+    app/routers/broker_credentials.py's issue_bridge_token()."""
+    bridge_token: str

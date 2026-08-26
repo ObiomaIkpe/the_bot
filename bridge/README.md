@@ -29,20 +29,35 @@ venv\Scripts\activate
 pip install -r requirements.txt
 
 copy config.example.json config.json
-notepad config.json   REM fill in real login/password/paths
+notepad config.json   REM fill in mt5_terminal_path and port for this account
 ```
 
-`config.json` holds plaintext credentials for v1 — this file must never be
-committed. Add `config.json` (but not `config.example.json`) to `.gitignore`
-if this directory ever goes in the repo. The Postgres-encrypted-credential
-flow from Phase 0 is deferred until the Linux app is ready to drive this
-bridge; right now the bridge is a standalone local service.
+`config.json` now holds only local/non-secret fields (`account_label`,
+`mt5_terminal_path`, `default_symbol`, `port`, `orders_enabled`,
+`magic_number`) — **no login/password/server**. Those are fetched once,
+at startup, from the Postgres-backed `api` service instead of living in a
+local plaintext file (see `bridge/app/config.py`'s `fetch_credential()`).
+Set these two env vars before starting the worker:
+
+```powershell
+$env:BRIDGE_TOKEN = "<minted via POST /broker-credentials/{id}/bridge-token>"
+$env:CREDENTIAL_API_URL = "https://api.ihsale.com.ng"
+```
+
+`BRIDGE_TOKEN` is a per-account, rotatable capability token, not a copy of
+the MT5 password — see `app/routers/internal_bridge.py` in the main repo
+for the full flow. `CREDENTIAL_API_URL` must be `https://` — this call
+sends the token and receives the plaintext password over the wire, so it
+relies on the `api` service actually being served over TLS (Caddy, in
+front of it on the Hetzner box).
 
 ## Run
 
 ```powershell
 cd C:\bridge
 venv\Scripts\activate
+$env:BRIDGE_TOKEN = "..."
+$env:CREDENTIAL_API_URL = "https://api.ihsale.com.ng"
 uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 ```
 
@@ -51,6 +66,19 @@ uvicorn app.main:app --host 0.0.0.0 --port 8001 --workers 1
 For a second account later: copy this whole `C:\bridge` layout (or just
 point `BRIDGE_CONFIG_PATH` at a second config file with a different `port`),
 and run a second `uvicorn` command bound to that port.
+
+`scripts/provision_account.ps1` automates the account-copying and
+config.json-writing part of this (see its own header comment for the
+full flow and what it deliberately does NOT automate -- starting the
+worker persistently, and flipping `orders_enabled`, both stay manual,
+watched steps):
+
+```powershell
+cd C:\bridge\scripts
+.\provision_account.ps1 -AccountLabel friend -Login 12345678 `
+    -Password "the-real-password" -Server "Exness-MT5Trial9" `
+    -Port 8002 -MagicNumber 900002
+```
 
 ## Endpoints (all read-only)
 

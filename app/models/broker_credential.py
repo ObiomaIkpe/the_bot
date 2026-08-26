@@ -34,6 +34,16 @@ class BrokerCredential(Base):
     # set this. See migration 0008 for the full reasoning.
     bridge_url = Column(String, nullable=True)
 
+    # SHA-256 hash of a per-credential bridge token -- lets that specific
+    # bridge worker fetch this row's decrypted login/password/server once
+    # at its own startup (GET /internal/bridge-credentials), instead of
+    # reading them from a local plaintext config.json. Only the hash is
+    # ever stored; the plaintext token is shown once, at mint time
+    # (POST /broker-credentials/{id}/bridge-token), never again. See
+    # migration 0009 and app/core/security.py's service-token section for
+    # why this is a plain SHA-256 hash, not bcrypt like user passwords.
+    bridge_fetch_token_hash = Column(String, nullable=True, unique=True)
+
     user = relationship("User", back_populates="broker_credentials")
 
     @property
