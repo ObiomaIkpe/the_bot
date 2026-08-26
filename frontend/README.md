@@ -45,7 +45,21 @@ deployed backend). The backend's CORS config already allows
   throughout (e.g. the event feed and Live page auto-refresh) instead of
   Streamlit's meta-refresh-tag approach.
 
+## Testing
+
+```
+npm run test
+```
+
+Vitest + React Testing Library. Coverage so far focuses on the parts
+most likely to have subtle bugs: `src/api/client.ts` (token
+attach/clear, 401 handling, form-vs-JSON request bodies) and
+`src/auth/` (login/logout state transitions, `ProtectedRoute`'s
+redirect behavior). No component-level tests for the data-heavy pages
+(Dashboard/Settings/Live/BrokerCredentials) yet — those are thinner
+wrappers around `apiClient` + react-query and mostly amount to
+"does this render a table," lower-value to test than the auth plumbing.
+
 ## Known gaps / next steps
 
 - Styling is minimal/inline — functional, not polished.
-- No tests yet.
