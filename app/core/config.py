@@ -20,5 +20,15 @@ class Settings(BaseSettings):
 
     log_format: str = "text"  # "text" (human-readable) or "json" (structured)
 
+    # Comma-separated list of origins the frontend is served from, e.g.
+    # "http://localhost:5173,https://admin.example.com". Defaults to the
+    # Vite dev server's default port so local frontend dev works with zero
+    # config; override in .env for any real deployment.
+    cors_allowed_origins: str = "http://localhost:5173"
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+
 
 settings = Settings()

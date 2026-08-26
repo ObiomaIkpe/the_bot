@@ -1,20 +1,34 @@
 import logging
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.core.logging import configure_logging
-from app.routers import auth
+from app.routers import auth, events, model_configs, settings as settings_router, trades
 
 configure_logging()
 logger = logging.getLogger("app")
 
 app = FastAPI(title="SMC/ICT Live Bot -- Phase 0 (Foundation)")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allowed_origins_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(auth.router)
+app.include_router(events.router)
+app.include_router(trades.router)
+app.include_router(model_configs.router)
+app.include_router(settings_router.router)
 
 
 @app.exception_handler(Exception)
