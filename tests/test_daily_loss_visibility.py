@@ -9,7 +9,7 @@ import datetime
 
 from shadow_runner.order_manager import OrderManager
 from shadow_runner.persistence import get_realized_pnl_today
-from tests.test_order_manager import FakeBridge, make_candidate_event, make_model_config
+from tests.shadow_runner.test_order_manager import FakeBridge, make_candidate_event, make_model_config
 
 
 class FakeSettingsRow:
