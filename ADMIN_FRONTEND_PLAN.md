@@ -148,6 +148,31 @@ implementation, the next migration number is `0006_...`.
   on a real broker connection, unlike everything else in this plan which
   only touches the app's own Postgres data.
 
+## Addendum: pause decentralized during M2 (2026-08-26)
+
+While building `PATCH /settings`, hit the "settings audit event" snag
+described above for real, and it surfaced a bigger question: `is_paused`
+was originally *only* account-wide (`UserSettings.is_paused`). Decided to
+decentralize it rather than route around the snag:
+
+- **Kept** `UserSettings.is_paused` exactly as it was — the account-wide
+  emergency stop, checked fresh on every trade candidate
+  (`order_manager.py`'s `_is_user_paused()`). This stays because a single
+  action that guarantees "stop everything for this user right now" is a
+  real safety property worth keeping, especially under pressure.
+- **Added** `ModelConfig.is_paused` (migration `0007`) — a second, finer
+  layer for pausing just one model. Checked fresh via a new
+  `_is_model_paused()`, same fail-toward-not-paused discipline as the
+  account-level check. Either one being true blocks that model's real
+  order placement; the account-level check runs first and short-circuits
+  (see `test_account_pause_short_circuits_before_the_model_level_check`).
+- Resolved the original audit-event snag as originally recommended:
+  `PATCH /settings` fans out one `account_settings_updated` event per
+  `model_config` the user has (accurate — an account-wide change really
+  does affect every one of them); `PATCH /model-configs/{id}` (which now
+  also handles `is_paused` per-model) journals a single
+  `model_config_updated` event with its own natural `model_name`.
+
 ## Suggested build order
 
 Backend first (M1 read routers → M2 DB-flag writes → M3 live bridge

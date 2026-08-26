@@ -587,3 +587,77 @@ def test_is_user_paused_fails_safe_not_paused_on_db_error():
     ]
     assert len(paused_check_failures) == 1
     assert len(bridge.placed) == 1
+
+
+# ---------- per-model is_paused (decentralized pause, on top of the account-wide one) ----------
+
+class ModelOnlyPausedDB:
+    """Account-level UserSettings.is_paused is False; only the
+    ModelConfig-level is_paused is True -- distinguishes the two checks,
+    unlike FakeSettingsDB which answers both queries identically."""
+
+    def query(self, model_cls):
+        from app.models import ModelConfig, UserSettings
+        if model_cls is UserSettings:
+            return FakeSettingsQuery(FakeSettingsRow(is_paused=False))
+        assert model_cls is ModelConfig
+        return FakeSettingsQuery(FakeSettingsRow(is_paused=True))
+
+    def close(self):
+        pass
+
+
+def test_model_paused_never_places_a_real_order_even_when_active():
+    bridge = FakeBridge()
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, lambda: ModelOnlyPausedDB(), "user1")
+
+    om.on_trade_candidate_ready(make_candidate_event())
+    assert bridge.placed == [], "must not place any real order while this model is paused"
+
+
+def test_model_paused_check_emits_order_skipped_paused_event_with_reason():
+    bridge = FakeBridge()
+    received = []
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, lambda: ModelOnlyPausedDB(), "user1", event_sink=received.append)
+
+    om.on_trade_candidate_ready(make_candidate_event())
+    skip_events = [e for e in received if e.get("event_type") == "order_skipped_paused"]
+    assert len(skip_events) == 1
+    assert skip_events[0]["reason"] == "model_paused"
+
+
+def test_is_model_paused_fails_safe_not_paused_on_db_error():
+    class FailingSettingsDB:
+        def query(self, model_cls):
+            raise Exception("simulated DB failure")
+        def close(self):
+            pass
+
+    bridge = FakeBridge()
+    received = []
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, lambda: FailingSettingsDB(), "user1", event_sink=received.append)
+
+    om.on_trade_candidate_ready(make_candidate_event())
+    assert len(bridge.placed) == 1
+
+    check_failures = [
+        e for e in received
+        if e.get("event_type") == "safety_check_failed" and e.get("check_name") == "model_is_paused_check"
+    ]
+    assert len(check_failures) == 1
+    assert len(bridge.placed) == 1
+
+
+def test_account_pause_short_circuits_before_the_model_level_check():
+    """When both would be true, the account-wide check must win (it's
+    checked first) -- only one skip event, tagged account_paused, not
+    two."""
+    bridge = FakeBridge()
+    received = []
+    paused_factory = lambda: FakeSettingsDB(is_paused=True)  # noqa: E731
+    om = OrderManager(make_model_config(status="active"), "EURUSDm", bridge, paused_factory, "user1", event_sink=received.append)
+
+    om.on_trade_candidate_ready(make_candidate_event())
+    skip_events = [e for e in received if e.get("event_type") == "order_skipped_paused"]
+    assert len(skip_events) == 1
+    assert skip_events[0]["reason"] == "account_paused"

@@ -8,7 +8,7 @@ individually in one of three states.
 """
 import uuid
 
-from sqlalchemy import CheckConstraint, Column, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, Column, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -54,6 +54,13 @@ class ModelConfig(Base):
     # rather than hardcoded so a future model CAN be given a real cap
     # without another migration.
     max_concurrent_positions = Column(Integer, nullable=True)
+
+    # Per-model pause, distinct from UserSettings.is_paused (the
+    # account-wide emergency stop -- see that column's own docstring in
+    # user_settings.py). This one stops just THIS model without
+    # affecting any others the user runs. Both are checked fresh on
+    # every trade candidate; either one being true blocks a real order.
+    is_paused = Column(Boolean, nullable=False, server_default="false")
 
     user = relationship("User", back_populates="model_configs")
 

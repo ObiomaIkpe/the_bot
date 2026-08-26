@@ -101,6 +101,12 @@ VALID_EVENT_TYPES = (
     #    means a genuine bug can silently do nothing indefinitely with
     #    only a log line as the trace --
     "safety_check_failed",
+    # -- added, admin API M2: a human changed a model's status or
+    # per-model pause, or the account-wide settings (including the
+    # account-wide pause), via the admin frontend/API rather than
+    # anything in the trading pipeline itself --
+    "model_config_updated",
+    "account_settings_updated",
 )
 
 # Fixes a real, stale bug: write_event() used to hardcode is_shadow=True

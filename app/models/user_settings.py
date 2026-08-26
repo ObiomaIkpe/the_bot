@@ -25,6 +25,14 @@ class UserSettings(Base):
     max_daily_loss_pct = Column(Float, nullable=False)
     news_filters = Column(JSONB, nullable=False, default=dict)
     demo_or_live = Column(String, nullable=False)  # 'demo' | 'live'
+
+    # Account-wide emergency stop: stops EVERY model this user runs at
+    # once, checked fresh on every trade candidate (see
+    # order_manager.py's on_trade_candidate_ready()). Deliberately
+    # separate from ModelConfig.is_paused (a per-model, finer-grained
+    # pause added later) -- this one exists specifically so "stop
+    # everything right now" is a single action, not N per-model toggles
+    # that could be forgotten under pressure.
     is_paused = Column(Boolean, nullable=False, default=False)
 
     user = relationship("User", back_populates="settings")

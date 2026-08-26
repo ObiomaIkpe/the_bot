@@ -32,7 +32,12 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from shadow_runner.persistence import get_max_daily_loss_pct, get_realized_pnl_today, get_user_paused_status
+from shadow_runner.persistence import (
+    get_max_daily_loss_pct,
+    get_model_paused_status,
+    get_realized_pnl_today,
+    get_user_paused_status,
+)
 
 NY_TZ = ZoneInfo("America/New_York")  # matches shadow_runner.runner's own convention --
                                         # every event timestamp elsewhere in this codebase
@@ -218,6 +223,19 @@ class OrderManager:
         finally:
             db.close()
 
+    def _is_model_paused(self) -> bool:
+        """Per-model pause -- same fresh-every-call, fail-toward-not-
+        paused discipline as _is_user_paused(), just scoped to this one
+        model instead of the whole account."""
+        db = self.session_factory()
+        try:
+            return get_model_paused_status(db, self.user_id, self.model_config["model_name"])
+        except Exception as e:
+            self._emit_check_failure("model_is_paused_check", e)
+            return False
+        finally:
+            db.close()
+
     def _now_ny(self):
         """Real wall-clock NY time -- used for events triggered by
         polling real broker state (fills, cancellations, target
@@ -273,6 +291,21 @@ class OrderManager:
                     "timestamp": event["timestamp"],
                     "direction": event["direction"],
                     "entry": event["entry"],
+                    "reason": "account_paused",
+                }
+            )
+            return
+
+        # Per-model pause -- same "checked fresh, never cached" rule as
+        # the account-wide check above, just scoped to this one model.
+        if self._is_model_paused():
+            self._emit(
+                {
+                    "event_type": "order_skipped_paused",
+                    "timestamp": event["timestamp"],
+                    "direction": event["direction"],
+                    "entry": event["entry"],
+                    "reason": "model_paused",
                 }
             )
             return

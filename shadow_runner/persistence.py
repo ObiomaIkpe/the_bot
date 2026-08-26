@@ -144,6 +144,7 @@ def get_model_config(db: Session, user_id: str, model_name: str) -> dict | None:
         "status": row.status,
         "risk_pct": row.risk_pct,
         "magic_number": row.magic_number,
+        "is_paused": row.is_paused,
     }
 
 
@@ -167,6 +168,25 @@ def get_user_paused_status(db: Session, user_id: str) -> bool:
     not here.
     """
     row = db.query(UserSettings).filter(UserSettings.user_id == user_id).first()
+    if row is None:
+        return False
+    return row.is_paused
+
+
+def get_model_paused_status(db: Session, user_id: str, model_name: str) -> bool:
+    """
+    Per-model pause -- distinct from get_user_paused_status() (the
+    account-wide emergency stop). Same fetched-fresh-every-call
+    discipline and the same fail-toward-not-paused-when-missing
+    convention: a missing model_configs row is itself an anomaly
+    (get_model_config() already returns None for that case, logged by
+    the caller), not a signal to block trading.
+    """
+    row = (
+        db.query(ModelConfig)
+        .filter(ModelConfig.user_id == user_id, ModelConfig.model_name == model_name)
+        .first()
+    )
     if row is None:
         return False
     return row.is_paused
