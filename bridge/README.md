@@ -34,7 +34,9 @@ notepad config.json   REM fill in mt5_terminal_path and port for this account
 
 `config.json` now holds only local/non-secret fields (`account_label`,
 `mt5_terminal_path`, `default_symbol`, `port`, `orders_enabled`,
-`magic_number`) — **no login/password/server**. Those are fetched once,
+`magic_number`, and optionally `magic_numbers` — a list, only needed
+if this account runs more than one model; defaults to `[magic_number]`
+when omitted, see `bridge/app/config.py`) — **no login/password/server**. Those are fetched once,
 at startup, from the Postgres-backed `api` service instead of living in a
 local plaintext file (see `bridge/app/config.py`'s `fetch_credential()`).
 Set these two env vars before starting the worker:

@@ -30,10 +30,14 @@ this code.
 Two safety layers exist ABOVE the raw mt5.order_send() call:
   1. BridgeConfig.orders_enabled -- checked in main.py before these
      functions are even reachable via HTTP. Defaults to False.
-  2. Every order this bridge places carries BridgeConfig.magic_number,
-     so it's always identifiable (in /positions, and in the MT5
-     terminal's own history) as something THIS system placed, not a
-     manual trade or another tool's.
+  2. Every order this bridge places carries a magic number (an explicit
+     per-order one if given, else BridgeConfig.magic_number), so it's
+     always identifiable (in /positions, and in the MT5 terminal's own
+     history) as something THIS system placed, not a manual trade or
+     another tool's. get_positions()/get_pending_orders() below filter
+     against BridgeConfig.magic_numbers (the account's full set, which
+     may be more than one for a multi-model account), not just the
+     single magic_number.
 Neither of those layers second-guesses an individual order's size,
 direction, or price -- that judgment belongs entirely to the caller
 (the live-trading runner, not the bridge). This file's job is narrow
@@ -395,14 +399,14 @@ def place_market_order(
     return _run(_do_place_market_order, symbol, direction, volume, stop_loss, take_profit, comment, magic)
 
 
-def _do_get_positions(magic: int | None) -> list[dict]:
+def _do_get_positions(magic_numbers: list[int] | None) -> list[dict]:
     _ensure_connected()
     positions = mt5.positions_get()
     if positions is None:
         _fail("mt5.positions_get")
     out = []
     for p in positions:
-        if magic is not None and p.magic != magic:
+        if magic_numbers is not None and p.magic not in magic_numbers:
             continue
         time_utc, time_ny = _to_ny(p.time)
         out.append({
@@ -422,8 +426,8 @@ def _do_get_positions(magic: int | None) -> list[dict]:
     return out
 
 
-def get_positions(magic: int | None = None) -> list[dict]:
-    return _run(_do_get_positions, magic)
+def get_positions(magic_numbers: list[int] | None = None) -> list[dict]:
+    return _run(_do_get_positions, magic_numbers)
 
 
 def _do_close_position(ticket: int) -> dict:
@@ -653,14 +657,14 @@ def place_pending_limit_order(
     )
 
 
-def _do_get_pending_orders(magic: int | None) -> list[dict]:
+def _do_get_pending_orders(magic_numbers: list[int] | None) -> list[dict]:
     _ensure_connected()
     orders = mt5.orders_get()
     if orders is None:
         _fail("mt5.orders_get")
     out = []
     for o in orders:
-        if magic is not None and o.magic != magic:
+        if magic_numbers is not None and o.magic not in magic_numbers:
             continue
         if o.type not in (mt5.ORDER_TYPE_BUY_LIMIT, mt5.ORDER_TYPE_SELL_LIMIT):
             continue  # this bridge only ever places limit orders; ignore anything else on the account
@@ -680,8 +684,8 @@ def _do_get_pending_orders(magic: int | None) -> list[dict]:
     return out
 
 
-def get_pending_orders(magic: int | None = None) -> list[dict]:
-    return _run(_do_get_pending_orders, magic)
+def get_pending_orders(magic_numbers: list[int] | None = None) -> list[dict]:
+    return _run(_do_get_pending_orders, magic_numbers)
 
 
 def _do_cancel_pending_order(ticket: int) -> dict:

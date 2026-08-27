@@ -198,18 +198,19 @@ def get_positions(
     only_ours: bool = Query(
         default=True,
         description=(
-            "If true (default), only return positions tagged with this "
-            "worker's magic number -- excludes anything placed manually "
-            "or by another tool on the same account. Set false to see "
-            "every open position regardless of origin."
+            "If true (default), only return positions tagged with any "
+            "of this account's configured magic numbers (see "
+            "BridgeConfig.magic_numbers) -- excludes anything placed "
+            "manually or by another tool on the same account. Set false "
+            "to see every open position regardless of origin."
         ),
     ),
 ):
     config = get_config()
     _require_orders_enabled(config)
-    magic = config.magic_number if only_ours else None
+    magic_numbers = config.magic_numbers if only_ours else None
     try:
-        rows = mt5_client.get_positions(magic)
+        rows = mt5_client.get_positions(magic_numbers)
     except mt5_client.MT5Error as e:
         raise HTTPException(status_code=502, detail=str(e))
     return PositionsResponse(positions=[Position(**r) for r in rows])
@@ -273,14 +274,14 @@ def place_pending_order(order: PlacePendingOrderRequest):
 def get_pending_orders(
     only_ours: bool = Query(
         default=True,
-        description="If true (default), only this worker's own pending orders (by magic number).",
+        description="If true (default), only pending orders tagged with any of this account's configured magic numbers (see BridgeConfig.magic_numbers).",
     ),
 ):
     config = get_config()
     _require_orders_enabled(config)
-    magic = config.magic_number if only_ours else None
+    magic_numbers = config.magic_numbers if only_ours else None
     try:
-        rows = mt5_client.get_pending_orders(magic)
+        rows = mt5_client.get_pending_orders(magic_numbers)
     except mt5_client.MT5Error as e:
         raise HTTPException(status_code=502, detail=str(e))
     return PendingOrdersResponse(orders=[PendingOrder(**r) for r in rows])

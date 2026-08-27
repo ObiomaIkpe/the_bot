@@ -23,7 +23,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import requests
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class BridgeConfig(BaseModel):
@@ -57,11 +57,28 @@ class BridgeConfig(BaseModel):
     magic_number: int = Field(
         default=900001,
         description=(
-            "MT5 'magic number' tag applied to every order this bridge "
-            "places -- lets /positions (and this account's trade history "
-            "in the MT5 terminal itself) distinguish orders placed by "
-            "this system from anything placed manually or by another "
-            "tool on the same account."
+            "MT5 'magic number' tag applied to an order this bridge "
+            "places when the request itself doesn't specify one (see "
+            "PlaceOrderRequest.magic) -- lets this account's trade "
+            "history in the MT5 terminal itself distinguish orders "
+            "placed by this system from anything placed manually or by "
+            "another tool on the same account. See magic_numbers below "
+            "for the separate, possibly-larger set used for filtering."
+        ),
+    )
+    magic_numbers: list[int] = Field(
+        default_factory=list,
+        description=(
+            "The full set of magic numbers considered 'ours' for the "
+            "/positions and /orders/pending only_ours filters. Empty by "
+            "default -- see _default_magic_numbers below, which fills "
+            "it in from magic_number alone when omitted, so an existing "
+            "config.json (single magic_number, no magic_numbers) keeps "
+            "working identically. A multi-model account (see "
+            "app/models/model_config.py -- each model has its own "
+            "magic number) should list every one of them here so none "
+            "of that account's real positions go missing from the "
+            "default 'my positions' view."
         ),
     )
 
@@ -76,6 +93,18 @@ class BridgeConfig(BaseModel):
                 "mt5_terminal_path does not exist on disk: %s", v
             )
         return v
+
+    @model_validator(mode="after")
+    def _default_magic_numbers(self) -> "BridgeConfig":
+        # Backward compatibility: any config.json written before this
+        # field existed (every account provisioned before this change,
+        # including the live one on the VPS) has no magic_numbers key at
+        # all -- treat that exactly as "this account has one magic
+        # number, and it's magic_number" so filtering behaves identically
+        # to before, with zero required change to already-deployed files.
+        if not self.magic_numbers:
+            self.magic_numbers = [self.magic_number]
+        return self
 
 
 DEFAULT_CONFIG_PATH = r"C:\bridge\config.json"

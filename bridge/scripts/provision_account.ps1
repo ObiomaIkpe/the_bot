@@ -26,10 +26,9 @@
        this script, auto-created at registration (see
        app/core/provisioning.py). This used to be a -MagicNumber value
        the operator typed in by hand, which had no way to agree with
-       what Postgres already had; now it's read, not guessed. Prints
-       all of this account's magic numbers for visibility -- see the
-       "Known limitation" note below on why only one is written to
-       config.json.
+       what Postgres already had; now it's read, not guessed. ALL of
+       them get written to config.json's magic_numbers list (see step 6
+       below and the note right after this list).
     5. Mint this credential's bridge token
        (POST /broker-credentials/{CredentialId}/bridge-token) -- used
        to be a separate manual curl step; now done here so the printed
@@ -43,7 +42,8 @@
     6. Write this account's config.json under
        C:\bridge\accounts\<AccountLabel>\config.json -- LOCAL,
        NON-SECRET fields only (account_label, mt5_terminal_path,
-       default_symbol, port, orders_enabled, magic_number).
+       default_symbol, port, orders_enabled, magic_number,
+       magic_numbers).
        login/password/server are NOT written here anymore -- the bridge
        fetches those itself at its own startup from the api service
        (see bridge/app/config.py's fetch_credential()). orders_enabled
@@ -55,21 +55,18 @@
        same as bridge/README.md's own "Run" section for the first
        account, not something this script backgrounds silently.
 
-  Known limitation, stated honestly: config.json has room for exactly
-  one magic_number (it's the fallback tag for an order that doesn't
-  specify one, and the default for the /positions and /orders/pending
-  "only_ours" filters -- see bridge/app/main.py), but a real account can
-  have several models (fvg, ob, fvg_ob, ...), each with its OWN magic
-  number. This script writes the LOWEST of this account's magic numbers
-  to config.json, matching today's one-value-per-worker shape. This is
-  harmless today because no code path yet places a real order under a
-  model's own magic number (the "active" per-model status isn't wired
-  to real order placement yet -- PlaceOrderRequest.magic already
-  supports an explicit per-order override for when it is). Once that
-  ships, the /positions and /orders/pending "only_ours" default will
-  need to match ALL of an account's magic numbers, not just one -- a
-  separate, deliberate change to bridge/app/config.py and main.py, not
-  done here.
+  A real account can have several models (fvg, ob, fvg_ob, ...), each
+  with its OWN magic number (app/models/model_config.py). This script
+  writes ALL of this account's magic numbers to config.json's
+  magic_numbers list, so the bridge's /positions and /orders/pending
+  "only_ours" filters (bridge/app/main.py) never miss a real position
+  just because it was placed under a model-specific magic number other
+  than the account's default one. config.json's separate, single
+  magic_number field is unchanged in meaning -- it's still just the
+  fallback tag for an order that doesn't specify one (this script uses
+  the lowest of the account's magic numbers for it, an arbitrary but
+  harmless choice since real per-order placement always specifies its
+  own magic explicitly once the "active" per-model pipeline exists).
 
   NOT automated, deliberately:
     - Actually running the bridge worker persistently (as a Windows
@@ -271,7 +268,7 @@ if (-not $modelConfigs -or $modelConfigs.Count -eq 0) {
 
 $allMagicNumbers = $modelConfigs | ForEach-Object { $_.magic_number } | Sort-Object
 $MagicNumber = $allMagicNumbers[0]
-Write-Ok "This account's magic numbers: $($allMagicNumbers -join ', '). Using the lowest ($MagicNumber) for config.json -- see this script's header 'Known limitation' note on why only one is written here."
+Write-Ok "This account's magic numbers: $($allMagicNumbers -join ', '). Using the lowest ($MagicNumber) as config.json's default order-tag; ALL of them go into magic_numbers for filtering (see this script's header comment)."
 
 # ---------------------------------------------------------------------
 # 5. Mint this credential's bridge token -- used to be a separate
@@ -306,6 +303,7 @@ $config = [ordered]@{
     port               = $Port
     orders_enabled     = $false   # deliberate safe default -- see config field's own description
     magic_number       = $MagicNumber
+    magic_numbers      = $allMagicNumbers   # full set, used for /positions and /orders/pending filtering -- see bridge/app/config.py
 }
 $config | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
 Write-Ok "Config written (no credential fields -- see step comment above). orders_enabled=false (flip explicitly, separately, once you've confirmed everything else)."
