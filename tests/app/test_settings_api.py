@@ -1,9 +1,5 @@
-import itertools
-
 from app.models.model_config import ModelConfig
 from app.models.user_settings import UserSettings
-
-_magic_counter = itertools.count(810001)
 
 
 def _register_and_login(client, email):
@@ -22,14 +18,15 @@ def test_get_settings_returns_current_users_row(client, db_session):
     user_a_id = client.get("/auth/me", headers=_auth_header(token_a)).json()["user_id"]
     user_b_id = client.get("/auth/me", headers=_auth_header(token_b)).json()["user_id"]
 
-    db_session.add(UserSettings(
-        user_id=user_a_id, instrument="EURUSDm", max_daily_loss_pct=0.03,
-        demo_or_live="demo", is_paused=False,
-    ))
-    db_session.add(UserSettings(
-        user_id=user_b_id, instrument="EURUSDm", max_daily_loss_pct=0.05,
-        demo_or_live="live", is_paused=True,
-    ))
+    # Registration already provisions a default UserSettings row for
+    # both users (app/core/provisioning.py) -- just tune the values this
+    # test cares about instead of inserting a second row.
+    settings_a = db_session.query(UserSettings).filter_by(user_id=user_a_id).one()
+    settings_a.max_daily_loss_pct = 0.03
+    settings_b = db_session.query(UserSettings).filter_by(user_id=user_b_id).one()
+    settings_b.max_daily_loss_pct = 0.05
+    settings_b.demo_or_live = "live"
+    settings_b.is_paused = True
     db_session.commit()
 
     resp = client.get("/settings", headers=_auth_header(token_a))
@@ -41,6 +38,14 @@ def test_get_settings_returns_current_users_row(client, db_session):
 
 def test_get_settings_404_when_none_configured(client, db_session):
     token = _register_and_login(client, "sc@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+    # Registration now always provisions a settings row -- this test
+    # covers the router's defensive 404-if-missing branch, which is
+    # still real code even though a fresh registration can no longer
+    # naturally land in this state.
+    db_session.query(UserSettings).filter_by(user_id=user_id).delete()
+    db_session.commit()
+
     resp = client.get("/settings", headers=_auth_header(token))
     assert resp.status_code == 404
 
@@ -52,14 +57,6 @@ def test_get_settings_requires_auth(client):
 
 def test_patch_settings_updates_is_paused_and_journals_per_model(client, db_session):
     token = _register_and_login(client, "sd@example.com")
-    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
-    db_session.add(UserSettings(
-        user_id=user_id, instrument="EURUSDm", max_daily_loss_pct=0.03,
-        demo_or_live="demo", is_paused=False,
-    ))
-    db_session.add(ModelConfig(user_id=user_id, model_name="fvg", status="active", risk_pct=0.01, magic_number=next(_magic_counter)))
-    db_session.add(ModelConfig(user_id=user_id, model_name="ob", status="disabled", risk_pct=0.01, magic_number=next(_magic_counter)))
-    db_session.commit()
 
     resp = client.patch("/settings", json={"is_paused": True}, headers=_auth_header(token))
     assert resp.status_code == 200
@@ -67,17 +64,19 @@ def test_patch_settings_updates_is_paused_and_journals_per_model(client, db_sess
 
     events = client.get("/events", headers=_auth_header(token)).json()
     journaled = [e for e in events if e["event_type"] == "account_settings_updated"]
-    assert len(journaled) == 2, "one event per model_config the user has"
-    assert {e["model"] for e in journaled} == {"fvg", "ob"}
+    # Registration auto-provisions all three models (fvg, ob, fvg_ob) --
+    # PATCH /settings fans out one event per model_config the user has.
+    assert len(journaled) == 3, "one event per model_config the user has"
+    assert {e["model"] for e in journaled} == {"fvg", "ob", "fvg_ob"}
 
 
 def test_patch_settings_no_model_configs_is_a_noop_journal(client, db_session):
     token = _register_and_login(client, "se@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
-    db_session.add(UserSettings(
-        user_id=user_id, instrument="EURUSDm", max_daily_loss_pct=0.03,
-        demo_or_live="demo", is_paused=False,
-    ))
+    # Registration now always provisions 3 model_configs -- delete them
+    # to exercise the defensive "user has zero" branch directly, since a
+    # fresh registration can no longer naturally reach that state.
+    db_session.query(ModelConfig).filter_by(user_id=user_id).delete()
     db_session.commit()
 
     resp = client.patch("/settings", json={"is_paused": True}, headers=_auth_header(token))
@@ -89,18 +88,15 @@ def test_patch_settings_no_model_configs_is_a_noop_journal(client, db_session):
 
 def test_patch_settings_404_when_no_settings_row(client, db_session):
     token = _register_and_login(client, "sf@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+    db_session.query(UserSettings).filter_by(user_id=user_id).delete()
+    db_session.commit()
+
     resp = client.patch("/settings", json={"is_paused": True}, headers=_auth_header(token))
     assert resp.status_code == 404
 
 
 def test_patch_settings_no_fields_is_400(client, db_session):
     token = _register_and_login(client, "sg@example.com")
-    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
-    db_session.add(UserSettings(
-        user_id=user_id, instrument="EURUSDm", max_daily_loss_pct=0.03,
-        demo_or_live="demo", is_paused=False,
-    ))
-    db_session.commit()
-
     resp = client.patch("/settings", json={}, headers=_auth_header(token))
     assert resp.status_code == 400

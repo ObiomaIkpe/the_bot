@@ -17,6 +17,67 @@ def test_register_duplicate_email_conflicts(client):
     assert resp.status_code == 409
 
 
+def test_register_provisions_default_models_and_settings(client):
+    resp = client.post(
+        "/auth/register",
+        json={"email": "provision_a@example.com", "password": "a-real-password"},
+    )
+    token = client.post(
+        "/auth/login",
+        data={"username": "provision_a@example.com", "password": "a-real-password"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    configs = client.get("/model-configs", headers=headers).json()
+    assert {c["model_name"] for c in configs} == {"fvg", "ob", "fvg_ob"}
+    assert all(c["status"] == "disabled" for c in configs), "new models must never auto-activate"
+    assert len({c["magic_number"] for c in configs}) == 3, "each model gets its own magic number"
+
+    settings_resp = client.get("/settings", headers=headers)
+    assert settings_resp.status_code == 200, "a settings row must exist immediately, not 404"
+    assert settings_resp.json()["is_paused"] is False
+
+
+def test_register_allocates_distinct_magic_numbers_across_users(client):
+    for email in ("provision_b@example.com", "provision_c@example.com"):
+        client.post("/auth/register", json={"email": email, "password": "a-real-password"})
+
+    token_b = client.post(
+        "/auth/login", data={"username": "provision_b@example.com", "password": "a-real-password"}
+    ).json()["access_token"]
+    token_c = client.post(
+        "/auth/login", data={"username": "provision_c@example.com", "password": "a-real-password"}
+    ).json()["access_token"]
+
+    magics_b = {c["magic_number"] for c in client.get("/model-configs", headers={"Authorization": f"Bearer {token_b}"}).json()}
+    magics_c = {c["magic_number"] for c in client.get("/model-configs", headers={"Authorization": f"Bearer {token_c}"}).json()}
+
+    assert magics_b.isdisjoint(magics_c), "magic numbers must be globally unique, not just per user"
+
+
+def test_provision_new_user_defaults_is_idempotent(client, db_session):
+    from app.core.provisioning import provision_new_user_defaults
+    from app.models.model_config import ModelConfig
+    from app.models.user_settings import UserSettings
+
+    client.post(
+        "/auth/register",
+        json={"email": "provision_d@example.com", "password": "a-real-password"},
+    )
+    token = client.post(
+        "/auth/login", data={"username": "provision_d@example.com", "password": "a-real-password"}
+    ).json()["access_token"]
+    user_id = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"}).json()["user_id"]
+
+    # Registration already called this once -- calling it again directly
+    # (as the backfill script would for an already-provisioned user)
+    # must be a no-op, not a duplicate-row error.
+    provision_new_user_defaults(db_session, user_id)
+
+    assert db_session.query(ModelConfig).filter_by(user_id=user_id).count() == 3
+    assert db_session.query(UserSettings).filter_by(user_id=user_id).count() == 1
+
+
 def test_login_success_returns_token(client):
     client.post(
         "/auth/register",

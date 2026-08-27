@@ -31,6 +31,14 @@ from app.core.database import Base
 # bridge's orders_enabled kill switch: default OFF, explicit opt-in.
 VALID_MODEL_STATUSES = ("disabled", "shadow", "active")
 
+# Mirrors the CHECK constraints already on trades.model and
+# events.model (app/models/trade.py, app/models/event.py) -- the fixed
+# set of models this system currently has a real streaming pipeline
+# for. Every user gets one ModelConfig row per name here, automatically
+# (see app/core/provisioning.py) -- never customer-created, but always
+# present, scoped per user.
+ALL_MODEL_NAMES = ("fvg", "ob", "fvg_ob")
+
 
 class ModelConfig(Base):
     __tablename__ = "model_configs"

@@ -113,7 +113,9 @@ def test_list_positions_filters_to_current_users_magics(client, db_session, brid
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
     magic = next(_magic_counter)
     other_magic = next(_magic_counter)
-    db_session.add(ModelConfig(user_id=user_id, model_name="fvg", status="active", risk_pct=0.01, magic_number=magic))
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
     db_session.commit()
 
     bridge_client(FakeBridge(positions=[_make_position(111, magic), _make_position(222, other_magic)]))
@@ -209,7 +211,9 @@ def test_close_position_succeeds_for_owned_ticket_and_journals(client, db_sessio
     token = _register_and_login(client, "trad_c@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
     magic = next(_magic_counter)
-    db_session.add(ModelConfig(user_id=user_id, model_name="fvg", status="active", risk_pct=0.01, magic_number=magic))
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
     db_session.commit()
 
     fake = bridge_client(FakeBridge(positions=[_make_position(333, magic)]))
@@ -229,7 +233,9 @@ def test_close_position_404_when_ticket_not_owned(client, db_session, bridge_cli
     token = _register_and_login(client, "trad_d@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
     magic = next(_magic_counter)
-    db_session.add(ModelConfig(user_id=user_id, model_name="fvg", status="active", risk_pct=0.01, magic_number=magic))
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
     db_session.commit()
 
     other_magic = next(_magic_counter)
@@ -244,7 +250,9 @@ def test_close_position_maps_bridge_error_to_409(client, db_session, bridge_clie
     token = _register_and_login(client, "trad_e@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
     magic = next(_magic_counter)
-    db_session.add(ModelConfig(user_id=user_id, model_name="fvg", status="active", risk_pct=0.01, magic_number=magic))
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
     db_session.commit()
 
     bridge_client(FakeBridge(positions=[_make_position(555, magic)], raise_on_action=BridgeError("orders_enabled is false")))
@@ -257,7 +265,9 @@ def test_close_position_tags_matching_trade_real_close_reason(client, db_session
     token = _register_and_login(client, "trad_f@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
     magic = next(_magic_counter)
-    db_session.add(ModelConfig(user_id=user_id, model_name="fvg", status="active", risk_pct=0.01, magic_number=magic))
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
     import datetime
     now = datetime.datetime.now(datetime.timezone.utc)
     trade = Trade(
@@ -282,7 +292,9 @@ def test_cancel_pending_order_succeeds_for_owned_ticket_and_journals(client, db_
     token = _register_and_login(client, "trad_g@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
     magic = next(_magic_counter)
-    db_session.add(ModelConfig(user_id=user_id, model_name="fvg", status="active", risk_pct=0.01, magic_number=magic))
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
     db_session.commit()
 
     fake = bridge_client(FakeBridge(pending_orders=[_make_pending_order(777, magic)]))
@@ -300,7 +312,9 @@ def test_cancel_pending_order_404_when_not_owned(client, db_session, bridge_clie
     token = _register_and_login(client, "trad_h@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
     magic = next(_magic_counter)
-    db_session.add(ModelConfig(user_id=user_id, model_name="fvg", status="active", risk_pct=0.01, magic_number=magic))
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
     db_session.commit()
 
     other_magic = next(_magic_counter)

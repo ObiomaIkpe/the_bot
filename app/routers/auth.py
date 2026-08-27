@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.provisioning import provision_new_user_defaults
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models.user import User
 from app.schemas.auth import PasswordChange, Token, UserOut, UserRegister
@@ -25,6 +26,16 @@ def register(payload: UserRegister, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # All models are available to every user automatically, scoped per
+    # user -- never customer-created (see app/core/provisioning.py).
+    # Deliberately a separate step/commit from the user creation above:
+    # if this ever fails after its own internal retries, the user still
+    # exists and can self-heal via the same idempotent function later
+    # (e.g. the backfill script) rather than needing this whole request
+    # to be one all-or-nothing transaction.
+    provision_new_user_defaults(db, user.user_id)
+
     logger.info("User registered: user_id=%s", user.user_id)
     return user
 
