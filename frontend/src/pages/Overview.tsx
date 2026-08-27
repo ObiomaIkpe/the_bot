@@ -6,6 +6,7 @@ import { Badge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
 import { ModelCard } from "../components/ModelCard";
 import { StatTile } from "../components/StatTile";
+import { buttonClasses } from "../lib/buttonStyles";
 import { summarizeTrades } from "../lib/pnl";
 
 function fmtMoney(n: number, currency?: string) {
@@ -63,12 +64,12 @@ export function Overview() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Overview</h1>
+      <div className="flex items-baseline justify-between mb-6">
+        <h1 className="m-0 text-2xl">Overview</h1>
       </div>
 
       {settingsQuery.data?.is_paused && (
-        <div className="banner banner-warning">
+        <div className="px-4 py-3 rounded-lg mb-5 text-sm bg-warning/10 border border-warning/30 text-warning">
           Account-wide pause is active — no model will place new orders.
         </div>
       )}
@@ -78,18 +79,20 @@ export function Overview() {
           title="Connect a broker account"
           message="No active broker account is connected yet, so there's no live account data to show."
           action={
-            <Link to="/broker-credentials" className="btn btn-primary">
+            <Link to="/broker-credentials" className={buttonClasses("primary")}>
               Connect MT5 account
             </Link>
           }
         />
       )}
       {bridgeError && (
-        <div className="banner banner-error">Broker bridge is unreachable right now — account data may be stale.</div>
+        <div className="px-4 py-3 rounded-lg mb-5 text-sm bg-negative/10 border border-negative/30 text-negative">
+          Broker bridge is unreachable right now — account data may be stale.
+        </div>
       )}
 
       {accountInfoQuery.data && (
-        <div className="stat-grid">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-4 mb-6">
           <StatTile label="Balance" value={fmtMoney(accountInfoQuery.data.balance, accountInfoQuery.data.currency)} />
           <StatTile label="Equity" value={fmtMoney(accountInfoQuery.data.equity)} />
           <StatTile label="Margin free" value={fmtMoney(accountInfoQuery.data.margin_free)} />
@@ -97,7 +100,7 @@ export function Overview() {
       )}
 
       {summary && (
-        <div className="stat-grid">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-4 mb-6">
           <StatTile label="P&L today" value={fmtMoney(summary.today)} tone={summary.today >= 0 ? "positive" : "negative"} />
           <StatTile
             label="P&L this week"
@@ -113,13 +116,13 @@ export function Overview() {
         </div>
       )}
 
-      <h2 className="section-title">Models</h2>
+      <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3">Models</h2>
       {modelConfigsQuery.isLoading && <p>Loading...</p>}
       {modelConfigsQuery.data && modelConfigsQuery.data.length === 0 && (
         <EmptyState title="No models configured" message="Models are set up by the operator; check back once one is added." />
       )}
       {modelConfigsQuery.data && modelConfigsQuery.data.length > 0 && (
-        <div className="card-grid" style={{ marginBottom: 32 }}>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 mb-8">
           {modelConfigsQuery.data.map((mc) => (
             <ModelCard
               key={mc.config_id}
@@ -131,28 +134,14 @@ export function Overview() {
         </div>
       )}
 
-      <h2 className="section-title">Recent activity</h2>
+      <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3">Recent activity</h2>
       {eventsQuery.isLoading && <p>Loading...</p>}
-      {eventsQuery.data && eventsQuery.data.length === 0 && (
-        <p style={{ color: "var(--text-muted)" }}>No recent activity.</p>
-      )}
+      {eventsQuery.data && eventsQuery.data.length === 0 && <p className="text-text-muted">No recent activity.</p>}
       {eventsQuery.data && eventsQuery.data.length > 0 && (
-        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+        <ul className="list-none p-0 m-0">
           {eventsQuery.data.map((e) => (
-            <li
-              key={e.event_id}
-              style={{
-                display: "flex",
-                gap: 12,
-                alignItems: "center",
-                padding: "8px 0",
-                borderBottom: "1px solid var(--border)",
-                fontSize: 14,
-              }}
-            >
-              <span style={{ color: "var(--text-muted)", minWidth: 150 }}>
-                {new Date(e.timestamp).toLocaleString()}
-              </span>
+            <li key={e.event_id} className="flex gap-3 items-center py-2 border-b border-line text-sm">
+              <span className="text-text-muted min-w-[150px]">{new Date(e.timestamp).toLocaleString()}</span>
               <Badge variant={e.event_type === "safety_check_failed" ? "error" : e.is_shadow ? "neutral" : "active"}>
                 {e.model}
               </Badge>

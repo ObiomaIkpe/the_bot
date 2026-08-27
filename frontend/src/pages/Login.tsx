@@ -28,16 +28,20 @@ export function Login() {
   }
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center" }}>
+    <div className="flex min-h-screen items-center justify-center">
       <Card style={{ width: 320 }}>
-        <h1 style={{ marginTop: 0, fontSize: 20 }}>Trading Bot Admin</h1>
+        <h1 className="mt-0 text-xl">Trading Bot Admin</h1>
         <form onSubmit={handleSubmit}>
-          <div className="field">
-            <label htmlFor="email">Email</label>
+          <div className="flex flex-col gap-1 mb-3">
+            <label htmlFor="email" className="text-[13px] text-text-muted">
+              Email
+            </label>
             <input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
-          <div className="field">
-            <label htmlFor="password">Password</label>
+          <div className="flex flex-col gap-1 mb-3">
+            <label htmlFor="password" className="text-[13px] text-text-muted">
+              Password
+            </label>
             <input
               id="password"
               type="password"
@@ -46,8 +50,8 @@ export function Login() {
               required
             />
           </div>
-          {error && <p style={{ color: "var(--negative)" }}>{error}</p>}
-          <Button type="submit" variant="primary" disabled={submitting} style={{ width: "100%", justifyContent: "center" }}>
+          {error && <p className="text-negative">{error}</p>}
+          <Button type="submit" variant="primary" disabled={submitting} className="w-full justify-center">
             {submitting ? "Logging in..." : "Log in"}
           </Button>
         </form>

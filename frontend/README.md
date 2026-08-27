@@ -26,24 +26,31 @@ deployed backend). The backend's CORS config already allows
 Dark-mode-first (no light/dark toggle) with a "trading terminal +
 SaaS dashboard" blend: dark surfaces and monospace numerals for
 financial figures, structured with cards/sidebar/whitespace rather than
-a dense terminal layout. No CSS framework — plain CSS files plus a
-handful of small wrapper components:
+a dense terminal layout. Built with **Tailwind CSS v4** (CSS-first
+config, no `tailwind.config.js`) plus a handful of small wrapper
+components:
 
-- `src/styles/tokens.css` — CSS custom properties (colors, fonts). Swap
-  values here to retheme; nothing else hardcodes a color.
-- `src/styles/components.css` — the shared class-based styles
-  (`.card`, `.btn*`, `.badge*`, `.table`, `.stat-tile`, `.empty-state`,
-  `.sidebar*`, forms, the confirm-modal overlay) everything below is
-  built on.
+- `src/index.css` — `@theme` block defining the color/font tokens as
+  real Tailwind theme values (`bg-accent`, `text-positive`, `font-mono`,
+  etc. all come from here) plus a small `@layer base` for body/input
+  defaults. Swap values here to retheme; nothing else hardcodes a color.
+- `src/lib/buttonStyles.ts` — the Tailwind class strings for each
+  `Button` variant, kept in a plain module (not `Button.tsx` itself) so
+  a `<Link>` that needs to look like a button (e.g. Overview's "Connect
+  MT5 account" empty-state action) can reuse the same classes.
 - `src/components/{Card,Button,Badge,StatTile,EmptyState,Table}.tsx` —
-  thin React wrappers around those classes. Use these instead of
-  hand-rolling inline styles in a new page.
+  thin React wrappers applying Tailwind utility classes. Use these
+  instead of hand-rolling className strings in a new page.
 - `src/components/ModelCard.tsx` — the per-model status/P&L/win-rate
   card shared by Overview and Models (same card, different grid).
 - `src/lib/pnl.ts` — client-side trade aggregation (today/week/all-time
   P&L, win rate). There's no backend endpoint for this; the trade
   volume is low enough that computing it from an already-fetched trade
   list is fine.
+
+An earlier pass at this design system used plain hand-written CSS
+classes instead of Tailwind; migrated to Tailwind on request (personal
+tooling preference) — same visual result, no backend or behavior change.
 
 ## What's here
 

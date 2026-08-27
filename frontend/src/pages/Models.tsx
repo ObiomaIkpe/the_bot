@@ -23,19 +23,19 @@ export function Models() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Models</h1>
+      <div className="flex items-baseline justify-between mb-6">
+        <h1 className="m-0 text-2xl">Models</h1>
       </div>
 
       {modelConfigsQuery.isLoading && <p>Loading...</p>}
       {modelConfigsQuery.error && (
-        <p style={{ color: "var(--negative)" }}>Failed to load models: {String(modelConfigsQuery.error)}</p>
+        <p className="text-negative">Failed to load models: {String(modelConfigsQuery.error)}</p>
       )}
       {modelConfigsQuery.data && modelConfigsQuery.data.length === 0 && (
         <EmptyState title="No models configured" message="Models are set up by the operator; check back once one is added." />
       )}
       {modelConfigsQuery.data && modelConfigsQuery.data.length > 0 && (
-        <div className="card-grid">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4">
           {modelConfigsQuery.data.map((mc) => (
             <ModelCard
               key={mc.config_id}

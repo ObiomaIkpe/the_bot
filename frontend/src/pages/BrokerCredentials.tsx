@@ -29,9 +29,9 @@ function ConnectForm({
   error: unknown;
 }) {
   return (
-    <form onSubmit={onSubmit} style={{ maxWidth: 360 }}>
-      <div className="field">
-        <label>Broker name</label>
+    <form onSubmit={onSubmit} className="max-w-[360px]">
+      <div className="flex flex-col gap-1 mb-3">
+        <label className="text-[13px] text-text-muted">Broker name</label>
         <input
           type="text"
           required
@@ -39,8 +39,8 @@ function ConnectForm({
           onChange={(e) => setForm({ ...form, broker_name: e.target.value })}
         />
       </div>
-      <div className="field">
-        <label>MT5 account number</label>
+      <div className="flex flex-col gap-1 mb-3">
+        <label className="text-[13px] text-text-muted">MT5 account number</label>
         <input
           type="text"
           required
@@ -48,8 +48,8 @@ function ConnectForm({
           onChange={(e) => setForm({ ...form, account_login: e.target.value })}
         />
       </div>
-      <div className="field">
-        <label>MT5 password</label>
+      <div className="flex flex-col gap-1 mb-3">
+        <label className="text-[13px] text-text-muted">MT5 password</label>
         <input
           type="password"
           required
@@ -57,8 +57,8 @@ function ConnectForm({
           onChange={(e) => setForm({ ...form, account_password: e.target.value })}
         />
       </div>
-      <div className="field">
-        <label>Server</label>
+      <div className="flex flex-col gap-1 mb-3">
+        <label className="text-[13px] text-text-muted">Server</label>
         <input
           type="text"
           required
@@ -67,8 +67,8 @@ function ConnectForm({
           onChange={(e) => setForm({ ...form, server: e.target.value })}
         />
       </div>
-      <div className="field">
-        <label>Account type</label>
+      <div className="flex flex-col gap-1 mb-3">
+        <label className="text-[13px] text-text-muted">Account type</label>
         <select
           value={form.account_type}
           onChange={(e) => setForm({ ...form, account_type: e.target.value as "demo" | "live" })}
@@ -77,7 +77,7 @@ function ConnectForm({
           <option value="live">live</option>
         </select>
       </div>
-      {error != null && <p style={{ color: "var(--negative)" }}>{String(error)}</p>}
+      {error != null && <p className="text-negative">{String(error)}</p>}
       <Button type="submit" variant="primary" disabled={submitting}>
         {submitting ? "Saving..." : "Save credentials"}
       </Button>
@@ -141,16 +141,16 @@ export function BrokerCredentials() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Broker connection</h1>
+      <div className="flex items-baseline justify-between mb-6">
+        <h1 className="m-0 text-2xl">Broker connection</h1>
       </div>
 
       {!credentialsQuery.isLoading && !hasAccounts && (
         // First-run: no accounts connected yet, so the connect form is
         // the whole point of this page rather than a buried nav item.
-        <Card style={{ maxWidth: 480, marginBottom: 32 }}>
-          <h2 style={{ marginTop: 0 }}>Connect your MT5 account to get started</h2>
-          <p style={{ color: "var(--text-muted)" }}>
+        <Card style={{ maxWidth: 480 }} className="mb-8">
+          <h2 className="mt-0">Connect your MT5 account to get started</h2>
+          <p className="text-text-muted">
             Saving credentials does not automatically start trading — a bridge worker still needs to
             be provisioned for this account (a one-time operator setup step) before it shows up as
             connected on the Live page.
@@ -167,8 +167,8 @@ export function BrokerCredentials() {
 
       {hasAccounts && (
         <>
-          <Card style={{ maxWidth: 480, marginBottom: 32 }}>
-            <h2 style={{ marginTop: 0 }}>Add another account</h2>
+          <Card style={{ maxWidth: 480 }} className="mb-8">
+            <h2 className="mt-0">Add another account</h2>
             <ConnectForm
               form={form}
               setForm={setForm}
@@ -178,10 +178,8 @@ export function BrokerCredentials() {
             />
           </Card>
 
-          <h2 className="section-title">Your accounts</h2>
-          {credentialsQuery.error && (
-            <p style={{ color: "var(--negative)" }}>Failed to load: {String(credentialsQuery.error)}</p>
-          )}
+          <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3">Your accounts</h2>
+          {credentialsQuery.error && <p className="text-negative">Failed to load: {String(credentialsQuery.error)}</p>}
           <Table>
             <thead>
               <tr>

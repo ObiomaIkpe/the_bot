@@ -37,20 +37,20 @@ export function ModelDetail() {
 
   return (
     <div>
-      <div className="page-header">
+      <div className="flex items-baseline justify-between mb-6">
         <div>
-          <Link to="/models" style={{ color: "var(--text-muted)", fontSize: 13, textDecoration: "none" }}>
+          <Link to="/models" className="text-text-muted text-[13px] no-underline">
             &larr; Models
           </Link>
-          <h1 style={{ marginTop: 4 }}>{modelName}</h1>
+          <h1 className="mt-1 text-2xl">{modelName}</h1>
         </div>
         {modelConfig && <Badge variant={modelStatusBadgeVariant(modelConfig.status)}>{modelConfig.status}</Badge>}
       </div>
 
       {modelConfig && (
-        <div className="card" style={{ marginBottom: 24, display: "flex", gap: 24, alignItems: "center", flexWrap: "wrap" }}>
-          <label className="field" style={{ margin: 0 }}>
-            <span>Status</span>
+        <div className="bg-bg-elevated border border-line rounded-lg p-5 mb-6 flex gap-6 items-center flex-wrap">
+          <label className="flex flex-col gap-1">
+            <span className="text-[13px] text-text-muted">Status</span>
             <select
               value={modelConfig.status}
               disabled={patchModelConfig.isPending}
@@ -65,7 +65,7 @@ export function ModelDetail() {
               ))}
             </select>
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <label className="flex items-center gap-2">
             <input
               type="checkbox"
               checked={modelConfig.is_paused}
@@ -76,14 +76,14 @@ export function ModelDetail() {
             />
             Paused
           </label>
-          <span style={{ color: "var(--text-muted)", fontSize: 14 }}>
+          <span className="text-text-muted text-sm">
             Risk {(modelConfig.risk_pct * 100).toFixed(1)}% · Magic {modelConfig.magic_number}
           </span>
         </div>
       )}
 
       {summary && (
-        <div className="stat-grid">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-4 mb-6">
           <StatTile
             label="Total P&L"
             value={summary.allTime.toFixed(2)}
@@ -95,7 +95,7 @@ export function ModelDetail() {
         </div>
       )}
 
-      <h2 className="section-title">Trade history</h2>
+      <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3">Trade history</h2>
       {tradesQuery.isLoading && <p>Loading...</p>}
       {tradesQuery.data && tradesQuery.data.length === 0 && (
         <EmptyState title="No trades yet" message="This model hasn't logged any trades yet." />
@@ -117,15 +117,10 @@ export function ModelDetail() {
               <tr key={t.trade_id}>
                 <td>{new Date(t.entry_time_ny).toLocaleString()}</td>
                 <td>{t.direction}</td>
-                <td style={{ fontFamily: "var(--font-mono)" }}>{t.entry_price}</td>
-                <td style={{ fontFamily: "var(--font-mono)" }}>{t.exit_price ?? "-"}</td>
+                <td className="font-mono">{t.entry_price}</td>
+                <td className="font-mono">{t.exit_price ?? "-"}</td>
                 <td>{t.outcome ?? "open"}</td>
-                <td
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    color: (t.real_profit ?? 0) >= 0 ? "var(--positive)" : "var(--negative)",
-                  }}
-                >
+                <td className={`font-mono ${(t.real_profit ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
                   {t.real_profit ?? "-"}
                 </td>
               </tr>

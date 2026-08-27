@@ -21,18 +21,18 @@ export function AccountSettings() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Account settings</h1>
+      <div className="flex items-baseline justify-between mb-6">
+        <h1 className="m-0 text-2xl">Account settings</h1>
       </div>
 
       {settingsQuery.isLoading && <p>Loading...</p>}
       {settingsQuery.error instanceof ApiError && settingsQuery.error.status === 404 && (
-        <p style={{ color: "var(--text-muted)" }}>No account settings configured yet.</p>
+        <p className="text-text-muted">No account settings configured yet.</p>
       )}
       {settingsQuery.data && (
-        <div className="card" style={{ maxWidth: 420 }}>
-          <div style={{ marginBottom: 16 }}>
-            <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="bg-bg-elevated border border-line rounded-lg p-5 max-w-[420px]">
+          <div className="mb-4">
+            <label className="flex items-center gap-2">
               <input
                 type="checkbox"
                 checked={settingsQuery.data.is_paused}
@@ -41,12 +41,10 @@ export function AccountSettings() {
               />
               <strong>Pause everything for this account</strong>
             </label>
-            <p style={{ color: "var(--text-muted)", fontSize: 13, margin: "4px 0 0 24px" }}>
-              Emergency stop — affects every model at once.
-            </p>
+            <p className="text-text-muted text-[13px] mt-1 ml-6">Emergency stop — affects every model at once.</p>
           </div>
-          <label className="field">
-            <span>Max daily loss %</span>
+          <label className="flex flex-col gap-1">
+            <span className="text-[13px] text-text-muted">Max daily loss %</span>
             <input
               type="number"
               step="0.01"
@@ -58,7 +56,7 @@ export function AccountSettings() {
                   patchSettings.mutate({ max_daily_loss_pct: value });
                 }
               }}
-              style={{ width: 100 }}
+              className="w-24"
             />
           </label>
         </div>

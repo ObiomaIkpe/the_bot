@@ -26,11 +26,11 @@ export function ConfirmModal({
   variant = "destructive",
 }: ConfirmModalProps) {
   return (
-    <div className="modal-overlay">
-      <div className="modal-card">
-        <h3 style={{ marginTop: 0 }}>{title}</h3>
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100]">
+      <div className="bg-bg-elevated border border-line rounded-lg p-6 min-w-80 max-w-[480px]">
+        <h3 className="mt-0">{title}</h3>
         <p>{message}</p>
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+        <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={onCancel} disabled={busy}>
             Cancel
           </Button>

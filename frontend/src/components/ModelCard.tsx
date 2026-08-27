@@ -22,27 +22,19 @@ export function ModelCard({ modelConfig, trades, openPositionsCount }: ModelCard
 
   return (
     <Card>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-        <Link
-          to={`/models/${modelConfig.model_name}`}
-          style={{ fontWeight: 600, color: "inherit", textDecoration: "none" }}
-        >
+      <div className="flex items-center justify-between gap-2">
+        <Link to={`/models/${modelConfig.model_name}`} className="font-semibold text-text no-underline hover:underline">
           {modelConfig.model_name}
         </Link>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div className="flex gap-1.5">
           {modelConfig.is_paused && <Badge variant="paused">paused</Badge>}
           <Badge variant={modelStatusBadgeVariant(modelConfig.status)}>{modelConfig.status}</Badge>
         </div>
       </div>
-      <div style={{ marginTop: 12, fontSize: 14, color: "var(--text-muted)", display: "grid", gap: 4 }}>
+      <div className="mt-3 text-sm text-text-muted grid gap-1">
         <div>
           Today P&L:{" "}
-          <span
-            style={{
-              fontFamily: "var(--font-mono)",
-              color: summary.today >= 0 ? "var(--positive)" : "var(--negative)",
-            }}
-          >
+          <span className={`font-mono ${summary.today >= 0 ? "text-positive" : "text-negative"}`}>
             {summary.today.toFixed(2)}
           </span>
         </div>

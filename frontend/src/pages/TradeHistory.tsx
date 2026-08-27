@@ -65,13 +65,13 @@ export function TradeHistory() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Trade history</h1>
+      <div className="flex items-baseline justify-between mb-6">
+        <h1 className="m-0 text-2xl">Trade history</h1>
       </div>
 
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-end", marginBottom: 20, flexWrap: "wrap" }}>
-        <label className="field" style={{ margin: 0 }}>
-          <span>Model</span>
+      <div className="flex gap-4 items-end mb-5 flex-wrap">
+        <label className="flex flex-col gap-1">
+          <span className="text-[13px] text-text-muted">Model</span>
           <select value={modelFilter} onChange={(e) => setModelFilter(e.target.value)}>
             <option value="">all</option>
             {MODELS.map((m) => (
@@ -81,8 +81,8 @@ export function TradeHistory() {
             ))}
           </select>
         </label>
-        <label className="field" style={{ margin: 0 }}>
-          <span>Outcome</span>
+        <label className="flex flex-col gap-1">
+          <span className="text-[13px] text-text-muted">Outcome</span>
           <select value={outcomeFilter} onChange={(e) => setOutcomeFilter(e.target.value)}>
             <option value="">all</option>
             {OUTCOMES.map((o) => (
@@ -92,29 +92,29 @@ export function TradeHistory() {
             ))}
           </select>
         </label>
-        <label className="field" style={{ margin: 0 }}>
-          <span>Shadow</span>
+        <label className="flex flex-col gap-1">
+          <span className="text-[13px] text-text-muted">Shadow</span>
           <select value={shadowFilter} onChange={(e) => setShadowFilter(e.target.value as "" | "true" | "false")}>
             <option value="">all</option>
             <option value="true">shadow only</option>
             <option value="false">real only</option>
           </select>
         </label>
-        <label className="field" style={{ margin: 0 }}>
-          <span>Days back</span>
+        <label className="flex flex-col gap-1">
+          <span className="text-[13px] text-text-muted">Days back</span>
           <input
             type="number"
             min={1}
             max={3650}
             value={daysBack}
             onChange={(e) => setDaysBack(Number(e.target.value))}
-            style={{ width: 80 }}
+            className="w-20"
           />
         </label>
       </div>
 
       {tradesQuery.isLoading && <p>Loading...</p>}
-      {tradesQuery.error && <p style={{ color: "var(--negative)" }}>Failed to load trades: {String(tradesQuery.error)}</p>}
+      {tradesQuery.error && <p className="text-negative">Failed to load trades: {String(tradesQuery.error)}</p>}
       {!tradesQuery.isLoading && sorted.length === 0 && (
         <EmptyState title="No trades" message="No trades match these filters." />
       )}
@@ -122,21 +122,21 @@ export function TradeHistory() {
         <Table>
           <thead>
             <tr>
-              <th style={{ cursor: "pointer" }} onClick={() => toggleSort("entry_time_ny")}>
+              <th className="cursor-pointer" onClick={() => toggleSort("entry_time_ny")}>
                 Entry (NY){sortIndicator("entry_time_ny")}
               </th>
-              <th style={{ cursor: "pointer" }} onClick={() => toggleSort("model")}>
+              <th className="cursor-pointer" onClick={() => toggleSort("model")}>
                 Model{sortIndicator("model")}
               </th>
               <th>Shadow</th>
               <th>Direction</th>
               <th>Entry</th>
               <th>Exit</th>
-              <th style={{ cursor: "pointer" }} onClick={() => toggleSort("outcome")}>
+              <th className="cursor-pointer" onClick={() => toggleSort("outcome")}>
                 Outcome{sortIndicator("outcome")}
               </th>
               <th>Real status</th>
-              <th style={{ cursor: "pointer" }} onClick={() => toggleSort("real_profit")}>
+              <th className="cursor-pointer" onClick={() => toggleSort("real_profit")}>
                 Real profit{sortIndicator("real_profit")}
               </th>
             </tr>
@@ -148,16 +148,11 @@ export function TradeHistory() {
                 <td>{t.model}</td>
                 <td>{t.is_shadow ? "yes" : "no"}</td>
                 <td>{t.direction}</td>
-                <td style={{ fontFamily: "var(--font-mono)" }}>{t.entry_price}</td>
-                <td style={{ fontFamily: "var(--font-mono)" }}>{t.exit_price ?? "-"}</td>
+                <td className="font-mono">{t.entry_price}</td>
+                <td className="font-mono">{t.exit_price ?? "-"}</td>
                 <td>{t.outcome ?? "open"}</td>
                 <td>{t.real_status ?? "-"}</td>
-                <td
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    color: (t.real_profit ?? 0) >= 0 ? "var(--positive)" : "var(--negative)",
-                  }}
-                >
+                <td className={`font-mono ${(t.real_profit ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
                   {t.real_profit ?? "-"}
                 </td>
               </tr>

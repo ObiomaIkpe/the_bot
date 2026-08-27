@@ -15,27 +15,33 @@ export function Layout() {
   const { logout } = useAuth();
 
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="sidebar-brand">Trading Bot Admin</div>
-        <nav className="sidebar-nav">
+    <div className="flex min-h-screen">
+      <aside className="w-[220px] shrink-0 bg-bg-elevated border-r border-line flex flex-col py-5">
+        <div className="px-5 pb-4 mb-3 border-b border-line font-bold text-[15px]">Trading Bot Admin</div>
+        <nav className="flex flex-col gap-0.5 flex-1">
           {NAV_ITEMS.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
-              className={({ isActive }) => `sidebar-link${isActive ? " active" : ""}`}
+              className={({ isActive }) =>
+                `px-5 py-2.5 text-sm no-underline border-l-[3px] ${
+                  isActive
+                    ? "text-text border-accent bg-bg-elevated-2 font-semibold"
+                    : "text-text-muted border-transparent hover:text-text hover:bg-bg-elevated-2"
+                }`
+              }
             >
               {item.label}
             </NavLink>
           ))}
         </nav>
-        <div className="sidebar-footer">
-          <Button variant="ghost" onClick={logout} style={{ width: "100%" }}>
+        <div className="px-5 pt-3 mt-3 border-t border-line">
+          <Button variant="ghost" onClick={logout} className="w-full justify-center">
             Log out
           </Button>
         </div>
       </aside>
-      <main className="main-content">
+      <main className="flex-1 p-8 max-w-[1200px]">
         <Outlet />
       </main>
     </div>
