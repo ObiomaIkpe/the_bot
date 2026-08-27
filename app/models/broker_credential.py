@@ -41,6 +41,20 @@ class BrokerCredential(Base):
 
     server = Column(String, nullable=False)  # e.g. 'FOREXcom-Demo' -- not secret
     account_type = Column(String, nullable=False)  # 'demo' or 'live'
+
+    # A user can have any number of rows here (demo + live, an old
+    # broker kept around after switching, a closed/replaced account
+    # left inactive rather than deleted, etc) -- but at most one can be
+    # active at once, enforced both here (create/update deactivate any
+    # other active one first) and at the DB level (see __table_args__
+    # above). Exclusive because trading.py's endpoints each answer a
+    # singular question -- "what's THE account balance," "what are MY
+    # open positions" -- for exactly one real MT5 account; two active
+    # credentials would make that ambiguous (whose balance?). Contrast
+    # with ModelConfig.status (model_config.py), which is deliberately
+    # NOT exclusive: models are independent strategies meant to run in
+    # parallel on that one active account, not alternatives to pick
+    # between.
     is_active = Column(Boolean, nullable=False, default=True)
 
     # Which bridge worker (its own process/port/config.json -- see

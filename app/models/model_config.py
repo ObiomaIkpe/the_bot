@@ -5,6 +5,16 @@ per user. Confirmed design (this phase's chat history): every model
 runs independently, detects its own setups, and manages its own trades;
 there is no single "the live model" anymore, just a set of models each
 individually in one of three states.
+
+Deliberately NOT exclusive like BrokerCredential.is_active (see that
+column's own comment) -- multiple models can be "active" for the same
+user at once, on purpose. A broker credential answers "which single
+real account is this," which only makes sense as one at a time; a
+model answers "which of my strategies may trade on that account right
+now," and MT5 itself already supports several strategies running
+concurrently on one account (that's what magic_number distinguishes
+them by -- see trading.py's module docstring). Different question,
+different shape of constraint.
 """
 import uuid
 
