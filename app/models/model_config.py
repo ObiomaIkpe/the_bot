@@ -60,6 +60,13 @@ VALID_MODEL_STATUSES = ("disabled", "shadow", "active")
 #      get the new model too (new registrations get it automatically
 #      the moment step 3 lands) -- it's idempotent, so this only ever
 #      adds what's missing, never touches anyone's existing rows.
+#
+# bridge/scripts/provision_account.ps1 fetches these rows' magic_number
+# values via GET /model-configs when setting up a new account's bridge
+# worker, rather than an operator re-deriving or guessing one -- see
+# that script's own header comment for why, and its "Known limitation"
+# note on why only one of an account's several magic numbers ends up in
+# the bridge worker's config.json.
 ALL_MODEL_NAMES = ("fvg", "ob", "fvg_ob")
 
 

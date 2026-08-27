@@ -22,6 +22,9 @@ def list_model_configs(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # Also called directly by bridge/scripts/provision_account.ps1 (to
+    # read this account's real magic numbers, not just by the admin UI)
+    # -- check that script before changing this response shape.
     return (
         db.query(ModelConfig)
         .filter(ModelConfig.user_id == current_user.user_id)

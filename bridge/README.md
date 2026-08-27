@@ -67,17 +67,21 @@ For a second account later: copy this whole `C:\bridge` layout (or just
 point `BRIDGE_CONFIG_PATH` at a second config file with a different `port`),
 and run a second `uvicorn` command bound to that port.
 
-`scripts/provision_account.ps1` automates the account-copying and
-config.json-writing part of this (see its own header comment for the
-full flow and what it deliberately does NOT automate -- starting the
-worker persistently, and flipping `orders_enabled`, both stay manual,
-watched steps):
+`scripts/provision_account.ps1` automates the account-copying,
+magic-number lookup, bridge-token minting, and config.json-writing
+parts of this (see its own header comment for the full flow and what
+it deliberately does NOT automate -- starting the worker persistently,
+and flipping `orders_enabled`, both stay manual, watched steps). It
+needs the new account's `broker_credentials` row to already exist
+(created via the admin UI/curl first) and a JWT for that account's
+owner:
 
 ```powershell
 cd C:\bridge\scripts
 .\provision_account.ps1 -AccountLabel friend -Login 12345678 `
     -Password "the-real-password" -Server "Exness-MT5Trial9" `
-    -Port 8002 -MagicNumber 900002
+    -Port 8002 -CredentialId "3fa85f64-5717-4562-b3fc-2c963f66afa6" `
+    -Jwt "eyJhbGciOi..."
 ```
 
 ## Endpoints (all read-only)

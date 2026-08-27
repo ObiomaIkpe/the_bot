@@ -110,6 +110,10 @@ def issue_bridge_token(
     Calling this again for the same credential ROTATES it: the previous
     token's hash is overwritten, so it stops working immediately. No
     separate revoke endpoint needed.
+
+    Also called directly by bridge/scripts/provision_account.ps1 (not
+    just the admin UI) -- check that script before changing this
+    endpoint's request/response shape or auth requirement.
     """
     row = (
         db.query(BrokerCredential)

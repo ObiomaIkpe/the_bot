@@ -21,7 +21,26 @@
        Python package the bridge itself uses (bridge/scripts/verify_mt5_login.py)
        -- not just "the process started", but "account_info() actually
        returned real data".
-    4. Write this account's config.json under
+    4. Fetch this account's REAL magic numbers from the admin API
+       (GET /model-configs) -- these already exist by the time you run
+       this script, auto-created at registration (see
+       app/core/provisioning.py). This used to be a -MagicNumber value
+       the operator typed in by hand, which had no way to agree with
+       what Postgres already had; now it's read, not guessed. Prints
+       all of this account's magic numbers for visibility -- see the
+       "Known limitation" note below on why only one is written to
+       config.json.
+    5. Mint this credential's bridge token
+       (POST /broker-credentials/{CredentialId}/bridge-token) -- used
+       to be a separate manual curl step; now done here so the printed
+       $env:BRIDGE_TOKEN line is immediately usable. Re-running this
+       script mints a NEW token each time, rotating out any previous
+       one for this credential (documented, expected behavior of that
+       endpoint -- see its own docstring in
+       app/routers/broker_credentials.py). Don't re-run against a
+       credential whose worker is already live unless you intend to
+       rotate its token and restart it.
+    6. Write this account's config.json under
        C:\bridge\accounts\<AccountLabel>\config.json -- LOCAL,
        NON-SECRET fields only (account_label, mt5_terminal_path,
        default_symbol, port, orders_enabled, magic_number).
@@ -31,10 +50,26 @@
        is deliberately left at its safe default (false) -- flip it
        explicitly, separately, only once you've confirmed everything
        else works.
-    5. Print (does NOT run) the exact `uvicorn` command to start this
+    7. Print (does NOT run) the exact `uvicorn` command to start this
        account's worker -- starting it is a manual, watched action,
        same as bridge/README.md's own "Run" section for the first
        account, not something this script backgrounds silently.
+
+  Known limitation, stated honestly: config.json has room for exactly
+  one magic_number (it's the fallback tag for an order that doesn't
+  specify one, and the default for the /positions and /orders/pending
+  "only_ours" filters -- see bridge/app/main.py), but a real account can
+  have several models (fvg, ob, fvg_ob, ...), each with its OWN magic
+  number. This script writes the LOWEST of this account's magic numbers
+  to config.json, matching today's one-value-per-worker shape. This is
+  harmless today because no code path yet places a real order under a
+  model's own magic number (the "active" per-model status isn't wired
+  to real order placement yet -- PlaceOrderRequest.magic already
+  supports an explicit per-order override for when it is). Once that
+  ships, the /positions and /orders/pending "only_ours" default will
+  need to match ALL of an account's magic numbers, not just one -- a
+  separate, deliberate change to bridge/app/config.py and main.py, not
+  done here.
 
   NOT automated, deliberately:
     - Actually running the bridge worker persistently (as a Windows
@@ -42,15 +77,11 @@
       the existing first account doesn't appear to have either
       (bridge/README.md only documents a plain foreground `uvicorn`
       command). Don't invent that standard here.
-    - Creating the broker_credentials row and minting its bridge token
-      (POST /broker-credentials, then POST .../bridge-token) -- both
-      require the account owner's JWT, which this Windows-side script
-      has no business holding. Also, sequencing: the credential must
-      exist BEFORE a token can be minted for it, and this script runs
-      BEFORE that row exists -- see the printed next-steps.
-    - Creating the matching `model_configs` row in Postgres (the admin
-      API's own concern) -- but see the MagicNumber reminder printed
-      at the end; it MUST match what you create there.
+    - Creating the broker_credentials row itself (POST /broker-credentials)
+      -- still requires the account owner's JWT and happens via the
+      admin UI/curl BEFORE this script runs; this script needs the
+      resulting CredentialId as an input (see -CredentialId below), it
+      doesn't create it.
     - orders_enabled: true -- a deliberate, separately-confirmed action
       per this project's "default off, explicit opt-in" convention
       (see bridge/app/config.py's own field description).
@@ -80,13 +111,19 @@
   with any existing account's port (8001 is already Tony's per
   config.example.json).
 
-.PARAMETER MagicNumber
-  Magic number this account's orders will be tagged with. Must be
-  globally unique across every account AND match exactly what you
-  create as this account's model_configs.magic_number via the admin
-  API afterward (app/models/model_config.py enforces this at the DB
-  level) -- the script only reminds you, it can't enforce a cross-system
-  invariant like that itself.
+.PARAMETER CredentialId
+  The UUID of this account's ALREADY-CREATED broker_credentials row
+  (from POST /broker-credentials, done via the admin UI or curl BEFORE
+  running this script -- see this script's own "NOT automated" list
+  above for why that step stays separate). This script uses it to mint
+  a bridge token and to look up this account's real magic numbers.
+
+.PARAMETER Jwt
+  A valid access token for this account owner's user
+  (POST /auth/login), passed in just for this one run -- never stored
+  anywhere by this script. Used to call GET /model-configs and
+  POST /broker-credentials/{CredentialId}/bridge-token on their behalf.
+  Get a fresh one if it's expired; this script doesn't refresh it.
 
 .PARAMETER SourceMt5Path
   Path to an EXISTING, already-installed portable MT5 folder to copy
@@ -99,22 +136,15 @@
 .PARAMETER BridgeRoot
   Where the bridge codebase lives. Defaults to C:\bridge, per README.md.
 
-.PARAMETER BridgeToken
-  Optional. If you've ALREADY created this account's broker_credentials
-  row and minted its token (POST /broker-credentials/{id}/bridge-token)
-  before running this script, pass it here so the printed next-steps
-  show the real, ready-to-paste `$env:BRIDGE_TOKEN` line instead of a
-  placeholder. Usually you won't have this yet on a first run -- that's
-  fine, see the printed next-steps for the normal order.
-
 .PARAMETER CredentialApiUrl
-  Optional, same idea as BridgeToken. Defaults to
-  https://api.ihusale.com.ng if not given.
+  Base URL of the admin API this script calls for the magic-number
+  lookup and bridge-token mint. Defaults to https://api.ihusale.com.ng.
 
 .EXAMPLE
   .\provision_account.ps1 -AccountLabel friend -Login 12345678 `
       -Password "the-real-password" -Server "Exness-MT5Trial9" `
-      -Port 8002 -MagicNumber 900002
+      -Port 8002 -CredentialId "3fa85f64-5717-4562-b3fc-2c963f66afa6" `
+      -Jwt "eyJhbGciOi..."
 #>
 [CmdletBinding()]
 param(
@@ -123,11 +153,11 @@ param(
     [Parameter(Mandatory = $true)][string]$Password,
     [Parameter(Mandatory = $true)][string]$Server,
     [Parameter(Mandatory = $true)][int]$Port,
-    [Parameter(Mandatory = $true)][int]$MagicNumber,
+    [Parameter(Mandatory = $true)][string]$CredentialId,
+    [Parameter(Mandatory = $true)][string]$Jwt,
     [string]$SourceMt5Path = "C:\MT5-Tony",
     [string]$DefaultSymbol = "EURUSDm",
     [string]$BridgeRoot = "C:\bridge",
-    [string]$BridgeToken = "",
     [string]$CredentialApiUrl = "https://api.ihusale.com.ng"
 )
 
@@ -221,7 +251,45 @@ if ($verifyExit -ne 0) {
 Write-Ok "Login verified -- account_info() returned real data."
 
 # ---------------------------------------------------------------------
-# 4. Write this account's config.json -- LOCAL, NON-SECRET fields only.
+# 4. Fetch this account's REAL magic numbers from the admin API --
+#    these already exist (auto-created at registration, see
+#    app/core/provisioning.py), so this is a lookup, not a guess. Used
+#    to be a -MagicNumber value the operator typed in by hand, with no
+#    way to agree with what Postgres already had.
+# ---------------------------------------------------------------------
+Write-Step "Fetching this account's magic numbers from $CredentialApiUrl/model-configs"
+$authHeaders = @{ Authorization = "Bearer $Jwt" }
+
+try {
+    $modelConfigs = Invoke-RestMethod -Method Get -Uri "$CredentialApiUrl/model-configs" -Headers $authHeaders
+} catch {
+    throw "Failed to fetch magic numbers from $CredentialApiUrl/model-configs: $_. Check -Jwt is a valid, unexpired access token for this account's owner (POST /auth/login) and -CredentialApiUrl is reachable from this VPS."
+}
+if (-not $modelConfigs -or $modelConfigs.Count -eq 0) {
+    throw "GET /model-configs returned no rows for this user -- every registered user should have some (see app/core/provisioning.py). Something is wrong upstream; this script won't guess a magic number."
+}
+
+$allMagicNumbers = $modelConfigs | ForEach-Object { $_.magic_number } | Sort-Object
+$MagicNumber = $allMagicNumbers[0]
+Write-Ok "This account's magic numbers: $($allMagicNumbers -join ', '). Using the lowest ($MagicNumber) for config.json -- see this script's header 'Known limitation' note on why only one is written here."
+
+# ---------------------------------------------------------------------
+# 5. Mint this credential's bridge token -- used to be a separate
+#    manual curl step; now done here. Re-running this script rotates
+#    out any previous token for this credential (see this script's
+#    header comment).
+# ---------------------------------------------------------------------
+Write-Step "Minting a bridge token for credential $CredentialId"
+try {
+    $tokenResponse = Invoke-RestMethod -Method Post -Uri "$CredentialApiUrl/broker-credentials/$CredentialId/bridge-token" -Headers $authHeaders
+} catch {
+    throw "Failed to mint a bridge token at $CredentialApiUrl/broker-credentials/$CredentialId/bridge-token: $_. Check -CredentialId is correct and owned by the user -Jwt belongs to."
+}
+$BridgeToken = $tokenResponse.bridge_token
+Write-Ok "Bridge token minted (shown once, used below in the printed next-steps -- it is NOT saved to disk by this script)."
+
+# ---------------------------------------------------------------------
+# 6. Write this account's config.json -- LOCAL, NON-SECRET fields only.
 #    login/password/server are deliberately NOT written here -- the
 #    bridge fetches those itself at startup (see bridge/app/config.py's
 #    fetch_credential()). This is the whole point of this change: the
@@ -243,29 +311,20 @@ $config | ConvertTo-Json | Set-Content -Path $configPath -Encoding UTF8
 Write-Ok "Config written (no credential fields -- see step comment above). orders_enabled=false (flip explicitly, separately, once you've confirmed everything else)."
 
 # ---------------------------------------------------------------------
-# 5. Print (don't run) the remaining steps -- credential-flow ones
-#    reordered to match reality: the broker_credentials row (and its
-#    bridge token) can only be created/minted AFTER this script has
-#    already run, since they live in Postgres via the admin API, not
-#    here. Starting the worker now REQUIRES that token (BRIDGE_TOKEN
-#    env var) -- config.json alone is no longer enough, unlike before
-#    this change.
+# 7. Print (don't run) the remaining steps -- everything credential-
+#    related (magic numbers, bridge token) is already done above, so
+#    all that's left is starting the worker (a manual, watched action,
+#    on purpose -- see this script's header) and the one-time bridge_url
+#    hookup.
 # ---------------------------------------------------------------------
-$bridgeTokenLine = if ($BridgeToken) { "`$env:BRIDGE_TOKEN = `"$BridgeToken`"" } else { "`$env:BRIDGE_TOKEN = `"<paste the token from step 2 below>`"" }
+$bridgeTokenLine = "`$env:BRIDGE_TOKEN = `"$BridgeToken`""
 
-Write-Step "Setup complete for account '$AccountLabel' (local files + MT5 login only -- not yet startable)"
+Write-Step "Setup complete for account '$AccountLabel'"
 Write-Host @"
 
 Next steps, IN THIS ORDER (manual, on purpose -- see this script's header):
 
-  1. Create this account's broker_credentials row via the admin API
-     (POST /broker-credentials), using the SAME login/server/account_type
-     you just verified against MT5 above.
-
-  2. Mint a bridge token for that row (POST /broker-credentials/{id}/bridge-token).
-     Copy the returned "bridge_token" value -- shown only this once.
-
-  3. Start the worker (watch its output the first time):
+  1. Start the worker (watch its output the first time):
        cd $BridgeRoot
        venv\Scripts\activate
        `$env:BRIDGE_CONFIG_PATH = "$configPath"
@@ -273,21 +332,17 @@ Next steps, IN THIS ORDER (manual, on purpose -- see this script's header):
        `$env:CREDENTIAL_API_URL = "$CredentialApiUrl"
        uvicorn app.main:app --host 0.0.0.0 --port $Port --workers 1
 
-  4. Verify it, same as bridge/README.md's own "Verify after starting":
+  2. Verify it, same as bridge/README.md's own "Verify after starting":
        curl http://localhost:$Port/health
        curl http://localhost:$Port/account_info
 
-  5. Once confirmed, set this credential's bridge_url via the admin API
+  3. Once confirmed, set this credential's bridge_url via the admin API
      (PATCH /broker-credentials/{id}) to whatever address the Linux
      `api` service can actually reach this port on -- e.g.
      http://<this-VPS-dedicated-IP>:$Port, same pattern as the first
      account's bridge_url.
 
-  6. Create a model_configs row for this account with
-     magic_number = $MagicNumber (must match config.json exactly --
-     nothing enforces this across systems automatically).
-
-  7. Only once all of the above is confirmed working: decide whether to
+  4. Only once all of the above is confirmed working: decide whether to
      flip orders_enabled to true in $configPath, and separately whether
      this worker needs to survive a VPS reboot (a Windows service /
      Task Scheduler entry) -- neither is set up by this script, and the
