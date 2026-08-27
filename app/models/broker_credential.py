@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, String
+from sqlalchemy import Boolean, Column, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -10,6 +10,22 @@ from app.core.security import decrypt_secret, encrypt_secret
 
 class BrokerCredential(Base):
     __tablename__ = "broker_credentials"
+
+    __table_args__ = (
+        # Partial unique index: only rows where is_active is true
+        # participate, so a user can have any number of *inactive*
+        # credentials but never more than one active one at a time --
+        # this is the DB-level backstop for what app/routers/
+        # broker_credentials.py's create/update logic already enforces
+        # by deactivating others first (radio-button semantics). See
+        # migration 0010 for why this needs a data-cleanup step first.
+        Index(
+            "uq_broker_credentials_one_active_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_active"),
+        ),
+    )
 
     credential_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)

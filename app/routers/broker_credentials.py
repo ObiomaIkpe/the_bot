@@ -34,6 +34,16 @@ def create_broker_credential(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # A new credential still defaults to is_active=True (unchanged --
+    # preserves the single-account case exactly as before). Deactivating
+    # any other active one first means connecting a new account
+    # naturally becomes "the" active one instead of silently leaving two
+    # active at once (see migration 0010's DB-level backstop for this).
+    db.query(BrokerCredential).filter(
+        BrokerCredential.user_id == current_user.user_id,
+        BrokerCredential.is_active.is_(True),
+    ).update({"is_active": False})
+
     cred = BrokerCredential(
         user_id=current_user.user_id,
         broker_name=payload.broker_name,
@@ -66,6 +76,16 @@ def update_broker_credential(
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No fields provided to update")
+
+    if changes.get("is_active") is True:
+        # Same radio-button behavior as create -- explicitly switching
+        # which account is active deactivates whichever one was active
+        # before, rather than ever leaving two active at once.
+        db.query(BrokerCredential).filter(
+            BrokerCredential.user_id == current_user.user_id,
+            BrokerCredential.credential_id != credential_id,
+            BrokerCredential.is_active.is_(True),
+        ).update({"is_active": False})
 
     for field, value in changes.items():
         setattr(row, field, value)

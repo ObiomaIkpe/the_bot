@@ -112,7 +112,8 @@ def test_two_credentials_with_same_password_have_different_ciphertext(db_session
     cred_a.account_password = "SamePassword123"
 
     cred_b = BrokerCredential(
-        user_id=user.user_id, broker_name="forex.com", server="FOREXcom-Demo", account_type="demo"
+        user_id=user.user_id, broker_name="forex.com", server="FOREXcom-Demo", account_type="demo",
+        is_active=False,  # only one active credential per user is allowed (migration 0010) -- irrelevant to what this test checks
     )
     cred_b.account_login = "222"
     cred_b.account_password = "SamePassword123"

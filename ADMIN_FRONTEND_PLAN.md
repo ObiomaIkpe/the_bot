@@ -358,6 +358,36 @@ Full plan/rationale at `~/.claude/plans/misty-seeking-crescent.md`.
 
 Verified: 217 passed, same 10 pre-existing unrelated failures.
 
+## Addendum: at most one active broker credential per user (2026-08-27)
+
+Second bug from the earlier review, now fixed. `create_broker_credential()`
+never set `is_active` explicitly, so every new credential defaulted to
+`True` — connecting a second MT5 account left two active rows for the
+same user, and `get_bridge_client()`'s `.filter(is_active=True).first()`
+(no `ORDER BY`) would arbitrarily pick one. Full plan at
+`~/.claude/plans/misty-seeking-crescent.md`.
+
+- Radio-button semantics: `create_broker_credential()`/
+  `update_broker_credential()` now deactivate any other active
+  credential for that user before activating one — connecting or
+  switching accounts "just works," no extra step for the common
+  single-account case.
+- DB-level backstop: migration `0010` adds a partial unique index
+  (`unique=True, postgresql_where="is_active"`) on `(user_id)` — at
+  most one active row per user, enforced even if some future code path
+  forgets the application-side logic above. Verified drift-free via
+  `alembic revision --autogenerate` (only the pre-existing, unrelated
+  `user_settings` drift showed up).
+- Caught and fixed one incidental regression:
+  `test_broker_credential_encryption.py` had an unrelated test creating
+  two same-user credentials that both defaulted active — fixed by
+  marking one explicitly inactive (irrelevant to what that test
+  actually checks).
+
+Verified: 220 passed, same 10 pre-existing unrelated failures. Manual
+curl check: connecting a second account correctly deactivates the
+first.
+
 ## Process
 
 - **Each milestone (M1 → M2 → M3 → M4 → M5) is implemented and verified
