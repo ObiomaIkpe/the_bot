@@ -37,6 +37,19 @@ VALID_MODEL_STATUSES = ("disabled", "shadow", "active")
 # for. Every user gets one ModelConfig row per name here, automatically
 # (see app/core/provisioning.py) -- never customer-created, but always
 # present, scoped per user.
+#
+# To add a new model, in this order:
+#   1. Build its real streaming pipeline (this list existing alone
+#      changes nothing -- new rows still land status="disabled" until
+#      there's something real behind them).
+#   2. Migrate the CHECK constraints on trades.model and events.model
+#      to include the new name -- otherwise its first real trade/event
+#      write fails at the DB level the moment it tries to run.
+#   3. Add its name here.
+#   4. Re-run app/scripts/backfill_user_defaults.py so existing users
+#      get the new model too (new registrations get it automatically
+#      the moment step 3 lands) -- it's idempotent, so this only ever
+#      adds what's missing, never touches anyone's existing rows.
 ALL_MODEL_NAMES = ("fvg", "ob", "fvg_ob")
 
 

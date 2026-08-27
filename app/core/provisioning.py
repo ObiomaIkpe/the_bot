@@ -6,6 +6,12 @@ codebase ever creates. Called automatically at registration
 existed, via the one-time backfill script
 (app/scripts/backfill_user_defaults.py). Idempotent by design so both
 call sites can use the exact same function safely.
+
+Adding a new model later? New registrations pick it up automatically
+the moment it's added to ALL_MODEL_NAMES (app/models/model_config.py) --
+existing users need app/scripts/backfill_user_defaults.py re-run
+(safe, idempotent, only adds what's missing). See ALL_MODEL_NAMES's own
+comment for the full ordered sequence (pipeline -> migration -> here).
 """
 import uuid
 
