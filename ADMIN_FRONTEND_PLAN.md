@@ -247,6 +247,50 @@ and mint/re-mint its bridge token, with a warning before re-minting
 Closes the gap noted above -- the paused MT5-credential-cutover steps
 (see the plan file) can now be done through this page instead of `curl`.
 
+## Addendum: screens restructuring + design system (2026-08-27)
+
+M1-M5 shipped functional but visually bare (inline styles only, no
+shared design system) and organized around the order backend endpoints
+happened to get built rather than what a customer actually needs first.
+Since this is meant for paying customers, restructured the original 5
+pages into 7 and added a design-system foundation. Full plan (context,
+rationale, exact scope decisions) at
+`~/.claude/plans/misty-seeking-crescent.md`.
+
+- **Design system**: `frontend/src/styles/tokens.css` (dark-mode-first
+  CSS custom properties, monospace stack for financial figures) +
+  `components.css` (shared classes), consumed by new wrapper components
+  (`Card`, `Button`, `Badge`, `StatTile`, `EmptyState`, `Table`,
+  `ModelCard`). `Layout.tsx` moved from a flat top-nav to a left sidebar.
+- **Overview** (new, replaces `Dashboard` as the default landing page):
+  connection health, balance/equity, P&L today/week/all-time, a
+  per-model card grid, trimmed recent-activity feed.
+- **Models** (new list + `/models/:modelName` detail): per-model
+  P&L/win-rate/trade history, computed client-side from the existing
+  `GET /trades?model=X` (no backend changes — `Trade.model` and
+  `ModelConfig.model_name` already share the same string values).
+- **Live**: unchanged data/actions, restyled only.
+- **Trade History** (new, split out of the old `Dashboard`): full trades
+  table with real filters + client-side column sort.
+- **Broker Connection** (`BrokerCredentials.tsx`, reframed): a customer
+  with zero connected accounts now sees a prominent first-run connect
+  form instead of a buried settings row; `RootRedirect.tsx` sends new
+  users here by default instead of Overview.
+- **Account Settings** (new, split out of the old `Settings`):
+  account-wide pause + max daily loss % only; per-model controls moved
+  to Models.
+
+Explicitly out of scope this round: new backend endpoints (connection
+health is inferred from the existing 503/502 responses on
+`GET /trading/account-info`, same pattern `Live.tsx` already used),
+charting library, light/dark toggle, profile/password screen.
+
+Verified: backend baseline unchanged (207 passed / 10 pre-existing
+unrelated failures — no backend files touched), frontend `npm run
+build`/`npm run lint`/`npm run test` (13 tests) all clean. **Not
+verified**: interactive browser click-through — no browser tool
+available in this environment.
+
 ## Process
 
 - **Each milestone (M1 → M2 → M3 → M4 → M5) is implemented and verified

@@ -1,0 +1,26 @@
+/* Design tokens for the admin frontend: dark, data-dense "trading
+ * terminal" surface colors + a monospace stack for financial figures,
+ * combined with SaaS-dashboard structure (cards/sidebar) elsewhere.
+ * Single visual identity for now -- no light-mode variant/toggle. */
+:root {
+  --bg: #0b0e14;
+  --bg-elevated: #131720;
+  --bg-elevated-2: #1a2029;
+  --border: #262b38;
+
+  --text: #e6e8ec;
+  --text-muted: #8b93a7;
+
+  --accent: #4f8cff;
+  --accent-hover: #6ea0ff;
+
+  --positive: #33c481;
+  --negative: #f0576b;
+  --warning: #f0b429;
+  --paused: #c98a3e;
+
+  --radius: 10px;
+
+  --font-sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+}

@@ -2,6 +2,8 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { ApiError } from "../api/client";
+import { Button } from "../components/Button";
+import { Card } from "../components/Card";
 
 export function Login() {
   const [email, setEmail] = useState("");
@@ -17,7 +19,7 @@ export function Login() {
     setSubmitting(true);
     try {
       await login(email, password);
-      navigate("/dashboard");
+      navigate("/");
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : "Login failed");
     } finally {
@@ -26,36 +28,30 @@ export function Login() {
   }
 
   return (
-    <div style={{ maxWidth: 320, margin: "80px auto", fontFamily: "sans-serif" }}>
-      <h1>Trading Bot Admin</h1>
-      <form onSubmit={handleSubmit}>
-        <div style={{ marginBottom: 12 }}>
-          <label htmlFor="email">Email</label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            style={{ width: "100%", padding: 8, boxSizing: "border-box" }}
-          />
-        </div>
-        <div style={{ marginBottom: 12 }}>
-          <label htmlFor="password">Password</label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            style={{ width: "100%", padding: 8, boxSizing: "border-box" }}
-          />
-        </div>
-        {error && <p style={{ color: "crimson" }}>{error}</p>}
-        <button type="submit" disabled={submitting} style={{ width: "100%", padding: 10 }}>
-          {submitting ? "Logging in..." : "Log in"}
-        </button>
-      </form>
+    <div style={{ display: "flex", minHeight: "100vh", alignItems: "center", justifyContent: "center" }}>
+      <Card style={{ width: 320 }}>
+        <h1 style={{ marginTop: 0, fontSize: 20 }}>Trading Bot Admin</h1>
+        <form onSubmit={handleSubmit}>
+          <div className="field">
+            <label htmlFor="email">Email</label>
+            <input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          </div>
+          <div className="field">
+            <label htmlFor="password">Password</label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
+          {error && <p style={{ color: "var(--negative)" }}>{error}</p>}
+          <Button type="submit" variant="primary" disabled={submitting} style={{ width: "100%", justifyContent: "center" }}>
+            {submitting ? "Logging in..." : "Log in"}
+          </Button>
+        </form>
+      </Card>
     </div>
   );
 }

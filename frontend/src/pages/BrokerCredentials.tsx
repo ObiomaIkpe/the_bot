@@ -2,10 +2,10 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "../api/client";
 import type { BrokerCredentialCreate, BrokerCredentialOut } from "../api/types";
+import { Button } from "../components/Button";
+import { Card } from "../components/Card";
 import { ConfirmModal } from "../components/ConfirmModal";
-
-const thStyle: React.CSSProperties = { textAlign: "left", padding: "6px 10px", borderBottom: "2px solid #ddd" };
-const tdStyle: React.CSSProperties = { padding: "6px 10px", borderBottom: "1px solid #eee" };
+import { Table } from "../components/Table";
 
 const emptyForm: BrokerCredentialCreate = {
   broker_name: "",
@@ -14,6 +14,76 @@ const emptyForm: BrokerCredentialCreate = {
   server: "",
   account_type: "demo",
 };
+
+function ConnectForm({
+  form,
+  setForm,
+  onSubmit,
+  submitting,
+  error,
+}: {
+  form: BrokerCredentialCreate;
+  setForm: (form: BrokerCredentialCreate) => void;
+  onSubmit: (e: FormEvent) => void;
+  submitting: boolean;
+  error: unknown;
+}) {
+  return (
+    <form onSubmit={onSubmit} style={{ maxWidth: 360 }}>
+      <div className="field">
+        <label>Broker name</label>
+        <input
+          type="text"
+          required
+          value={form.broker_name}
+          onChange={(e) => setForm({ ...form, broker_name: e.target.value })}
+        />
+      </div>
+      <div className="field">
+        <label>MT5 account number</label>
+        <input
+          type="text"
+          required
+          value={form.account_login}
+          onChange={(e) => setForm({ ...form, account_login: e.target.value })}
+        />
+      </div>
+      <div className="field">
+        <label>MT5 password</label>
+        <input
+          type="password"
+          required
+          value={form.account_password}
+          onChange={(e) => setForm({ ...form, account_password: e.target.value })}
+        />
+      </div>
+      <div className="field">
+        <label>Server</label>
+        <input
+          type="text"
+          required
+          placeholder="e.g. Exness-MT5Trial9"
+          value={form.server}
+          onChange={(e) => setForm({ ...form, server: e.target.value })}
+        />
+      </div>
+      <div className="field">
+        <label>Account type</label>
+        <select
+          value={form.account_type}
+          onChange={(e) => setForm({ ...form, account_type: e.target.value as "demo" | "live" })}
+        >
+          <option value="demo">demo</option>
+          <option value="live">live</option>
+        </select>
+      </div>
+      {error != null && <p style={{ color: "var(--negative)" }}>{String(error)}</p>}
+      <Button type="submit" variant="primary" disabled={submitting}>
+        {submitting ? "Saving..." : "Save credentials"}
+      </Button>
+    </form>
+  );
+}
 
 export function BrokerCredentials() {
   const queryClient = useQueryClient();
@@ -67,133 +137,89 @@ export function BrokerCredentials() {
     }
   }
 
+  const hasAccounts = (credentialsQuery.data?.length ?? 0) > 0;
+
   return (
     <div>
-      <h1>Broker credentials</h1>
-      <p style={{ color: "#666", maxWidth: 600 }}>
-        Connect your MT5 account here. Saving credentials does not automatically start trading --
-        a bridge worker still needs to be provisioned for this account (a manual, one-time setup
-        step) before it shows up as connected on the Live page.
-      </p>
+      <div className="page-header">
+        <h1>Broker connection</h1>
+      </div>
 
-      <h2>Add an account</h2>
-      <form onSubmit={handleSubmit} style={{ maxWidth: 360, marginBottom: 32 }}>
-        <div style={{ marginBottom: 10 }}>
-          <label>
-            Broker name
-            <input
-              type="text"
-              required
-              value={form.broker_name}
-              onChange={(e) => setForm({ ...form, broker_name: e.target.value })}
-              style={{ width: "100%", padding: 8, boxSizing: "border-box" }}
-            />
-          </label>
-        </div>
-        <div style={{ marginBottom: 10 }}>
-          <label>
-            MT5 account number
-            <input
-              type="text"
-              required
-              value={form.account_login}
-              onChange={(e) => setForm({ ...form, account_login: e.target.value })}
-              style={{ width: "100%", padding: 8, boxSizing: "border-box" }}
-            />
-          </label>
-        </div>
-        <div style={{ marginBottom: 10 }}>
-          <label>
-            MT5 password
-            <input
-              type="password"
-              required
-              value={form.account_password}
-              onChange={(e) => setForm({ ...form, account_password: e.target.value })}
-              style={{ width: "100%", padding: 8, boxSizing: "border-box" }}
-            />
-          </label>
-        </div>
-        <div style={{ marginBottom: 10 }}>
-          <label>
-            Server
-            <input
-              type="text"
-              required
-              placeholder="e.g. Exness-MT5Trial9"
-              value={form.server}
-              onChange={(e) => setForm({ ...form, server: e.target.value })}
-              style={{ width: "100%", padding: 8, boxSizing: "border-box" }}
-            />
-          </label>
-        </div>
-        <div style={{ marginBottom: 10 }}>
-          <label>
-            Account type
-            <select
-              value={form.account_type}
-              onChange={(e) => setForm({ ...form, account_type: e.target.value as "demo" | "live" })}
-              style={{ width: "100%", padding: 8 }}
-            >
-              <option value="demo">demo</option>
-              <option value="live">live</option>
-            </select>
-          </label>
-        </div>
-        {createCredential.error && <p style={{ color: "crimson" }}>{String(createCredential.error)}</p>}
-        <button type="submit" disabled={createCredential.isPending} style={{ padding: "8px 16px" }}>
-          {createCredential.isPending ? "Saving..." : "Save credentials"}
-        </button>
-      </form>
+      {!credentialsQuery.isLoading && !hasAccounts && (
+        // First-run: no accounts connected yet, so the connect form is
+        // the whole point of this page rather than a buried nav item.
+        <Card style={{ maxWidth: 480, marginBottom: 32 }}>
+          <h2 style={{ marginTop: 0 }}>Connect your MT5 account to get started</h2>
+          <p style={{ color: "var(--text-muted)" }}>
+            Saving credentials does not automatically start trading — a bridge worker still needs to
+            be provisioned for this account (a one-time operator setup step) before it shows up as
+            connected on the Live page.
+          </p>
+          <ConnectForm
+            form={form}
+            setForm={setForm}
+            onSubmit={handleSubmit}
+            submitting={createCredential.isPending}
+            error={createCredential.error}
+          />
+        </Card>
+      )}
 
-      <h2>Your accounts</h2>
-      {credentialsQuery.isLoading && <p>Loading...</p>}
-      {credentialsQuery.error && <p style={{ color: "crimson" }}>Failed to load: {String(credentialsQuery.error)}</p>}
-      {credentialsQuery.data && (
-        <table style={{ borderCollapse: "collapse", width: "100%", maxWidth: 800 }}>
-          <thead>
-            <tr>
-              <th style={thStyle}>Broker</th>
-              <th style={thStyle}>Account</th>
-              <th style={thStyle}>Server</th>
-              <th style={thStyle}>Type</th>
-              <th style={thStyle}>Active</th>
-              <th style={thStyle}>Bridge connected</th>
-              <th style={thStyle}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {credentialsQuery.data.length === 0 && (
+      {hasAccounts && (
+        <>
+          <Card style={{ maxWidth: 480, marginBottom: 32 }}>
+            <h2 style={{ marginTop: 0 }}>Add another account</h2>
+            <ConnectForm
+              form={form}
+              setForm={setForm}
+              onSubmit={handleSubmit}
+              submitting={createCredential.isPending}
+              error={createCredential.error}
+            />
+          </Card>
+
+          <h2 className="section-title">Your accounts</h2>
+          {credentialsQuery.error && (
+            <p style={{ color: "var(--negative)" }}>Failed to load: {String(credentialsQuery.error)}</p>
+          )}
+          <Table>
+            <thead>
               <tr>
-                <td style={tdStyle} colSpan={7}>
-                  No accounts connected yet.
-                </td>
+                <th>Broker</th>
+                <th>Account</th>
+                <th>Server</th>
+                <th>Type</th>
+                <th>Active</th>
+                <th>Bridge connected</th>
+                <th></th>
               </tr>
-            )}
-            {credentialsQuery.data.map((cred) => (
-              <tr key={cred.credential_id}>
-                <td style={tdStyle}>{cred.broker_name}</td>
-                <td style={tdStyle}>{cred.account_login}</td>
-                <td style={tdStyle}>{cred.server}</td>
-                <td style={tdStyle}>{cred.account_type}</td>
-                <td style={tdStyle}>
-                  <input
-                    type="checkbox"
-                    checked={cred.is_active}
-                    disabled={toggleActive.isPending}
-                    onChange={(e) => toggleActive.mutate({ id: cred.credential_id, is_active: e.target.checked })}
-                  />
-                </td>
-                <td style={tdStyle}>{cred.bridge_configured ? "yes" : "not yet"}</td>
-                <td style={tdStyle}>
-                  <button type="button" disabled={mintToken.isPending} onClick={() => handleMintClick(cred)}>
-                    {cred.bridge_configured ? "Re-mint bridge token" : "Mint bridge token"}
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {credentialsQuery.data!.map((cred) => (
+                <tr key={cred.credential_id}>
+                  <td>{cred.broker_name}</td>
+                  <td>{cred.account_login}</td>
+                  <td>{cred.server}</td>
+                  <td>{cred.account_type}</td>
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={cred.is_active}
+                      disabled={toggleActive.isPending}
+                      onChange={(e) => toggleActive.mutate({ id: cred.credential_id, is_active: e.target.checked })}
+                    />
+                  </td>
+                  <td>{cred.bridge_configured ? "yes" : "not yet"}</td>
+                  <td>
+                    <Button variant="secondary" disabled={mintToken.isPending} onClick={() => handleMintClick(cred)}>
+                      {cred.bridge_configured ? "Re-mint bridge token" : "Mint bridge token"}
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </>
       )}
 
       {mintedToken && (
@@ -201,6 +227,7 @@ export function BrokerCredentials() {
           title="Bridge token minted"
           message={`Copy this now -- it won't be shown again: ${mintedToken}`}
           confirmLabel="I've copied it"
+          variant="primary"
           onConfirm={() => setMintedToken(null)}
           onCancel={() => setMintedToken(null)}
         />

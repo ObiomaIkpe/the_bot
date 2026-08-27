@@ -1,3 +1,5 @@
+import { Button, type ButtonVariant } from "./Button";
+
 interface ConfirmModalProps {
   title: string;
   message: string;
@@ -5,39 +7,36 @@ interface ConfirmModalProps {
   onConfirm: () => void;
   onCancel: () => void;
   busy?: boolean;
+  /** Most callers confirm a destructive broker action (close/cancel),
+   * hence the default -- pass "primary" for a non-destructive confirm
+   * (e.g. "I've copied the token"). */
+  variant?: Extract<ButtonVariant, "destructive" | "primary">;
 }
 
 /** Real, irreversible broker actions (close a position, cancel a pending
  * order) go through this -- no bare-click destructive buttons, per
  * ADMIN_FRONTEND_PLAN.md's explicit requirement for the Live page. */
-export function ConfirmModal({ title, message, confirmLabel, onConfirm, onCancel, busy }: ConfirmModalProps) {
+export function ConfirmModal({
+  title,
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+  busy,
+  variant = "destructive",
+}: ConfirmModalProps) {
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 100,
-      }}
-    >
-      <div style={{ background: "#fff", padding: 24, borderRadius: 8, minWidth: 320 }}>
+    <div className="modal-overlay">
+      <div className="modal-card">
         <h3 style={{ marginTop: 0 }}>{title}</h3>
         <p>{message}</p>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-          <button type="button" onClick={onCancel} disabled={busy}>
+          <Button variant="secondary" onClick={onCancel} disabled={busy}>
             Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={busy}
-            style={{ background: "#c0392b", color: "#fff", border: "none", padding: "8px 16px", borderRadius: 4 }}
-          >
+          </Button>
+          <Button variant={variant} onClick={onConfirm} disabled={busy}>
             {busy ? "Working..." : confirmLabel}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
