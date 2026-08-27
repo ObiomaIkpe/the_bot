@@ -332,6 +332,32 @@ library, not an error. **Not verified**: interactive browser
 click-through, especially the light theme's contrast/feel — no browser
 tool available in this environment.
 
+## Addendum: auto-provision default models + settings (2026-08-27)
+
+Found two real gaps while reviewing what was left: `ModelConfig` rows
+were never created anywhere except by hand (Models page permanently
+empty for a new signup), and the identical gap existed for
+`UserSettings` (`GET`/`PATCH /settings` 404 forever). Decision: models
+stay developer/system-controlled, never customer-created, but all
+models are available to every user automatically, scoped per user.
+Full plan/rationale at `~/.claude/plans/misty-seeking-crescent.md`.
+
+- `app/core/provisioning.py`: `provision_new_user_defaults()` — creates
+  a user's `fvg`/`ob`/`fvg_ob` `ModelConfig` rows (`status="disabled"`,
+  never auto-activated) with collision-safe magic-number allocation,
+  plus a default `UserSettings` row. Idempotent, so it's shared by both
+  `POST /auth/register` (new signups) and
+  `app/scripts/backfill_user_defaults.py` (existing users — run once
+  locally, confirmed your test account picked up its 3 models +
+  settings).
+- Required updating 16 existing test call sites across 3 files that
+  manually inserted a `ModelConfig`/`UserSettings` row right after
+  registering (now collides with the auto-provisioned one), plus
+  rewriting 2 tests whose premise — a registered user has zero
+  models/settings — is no longer reachable via the public API.
+
+Verified: 217 passed, same 10 pre-existing unrelated failures.
+
 ## Process
 
 - **Each milestone (M1 → M2 → M3 → M4 → M5) is implemented and verified
