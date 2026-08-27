@@ -71,3 +71,81 @@ def test_me_returns_current_user_with_valid_token(client):
     resp = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     assert resp.json()["email"] == "me@example.com"
+
+
+def test_change_password_requires_auth(client):
+    resp = client.post(
+        "/auth/change-password",
+        json={"current_password": "a-real-password", "new_password": "a-new-password"},
+    )
+    assert resp.status_code == 401
+
+
+def test_change_password_wrong_current_password_rejected(client):
+    client.post(
+        "/auth/register",
+        json={"email": "pwchange_a@example.com", "password": "a-real-password"},
+    )
+    login_resp = client.post(
+        "/auth/login",
+        data={"username": "pwchange_a@example.com", "password": "a-real-password"},
+    )
+    token = login_resp.json()["access_token"]
+
+    resp = client.post(
+        "/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "not-the-password", "new_password": "a-new-password"},
+    )
+    assert resp.status_code == 400
+
+
+def test_change_password_too_short_rejected(client):
+    client.post(
+        "/auth/register",
+        json={"email": "pwchange_b@example.com", "password": "a-real-password"},
+    )
+    login_resp = client.post(
+        "/auth/login",
+        data={"username": "pwchange_b@example.com", "password": "a-real-password"},
+    )
+    token = login_resp.json()["access_token"]
+
+    resp = client.post(
+        "/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "a-real-password", "new_password": "short"},
+    )
+    assert resp.status_code == 422
+
+
+def test_change_password_succeeds_and_old_password_stops_working(client):
+    client.post(
+        "/auth/register",
+        json={"email": "pwchange_c@example.com", "password": "a-real-password"},
+    )
+    login_resp = client.post(
+        "/auth/login",
+        data={"username": "pwchange_c@example.com", "password": "a-real-password"},
+    )
+    token = login_resp.json()["access_token"]
+
+    resp = client.post(
+        "/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "a-real-password", "new_password": "a-new-password"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["email"] == "pwchange_c@example.com"
+
+    old_login = client.post(
+        "/auth/login",
+        data={"username": "pwchange_c@example.com", "password": "a-real-password"},
+    )
+    assert old_login.status_code == 401
+
+    new_login = client.post(
+        "/auth/login",
+        data={"username": "pwchange_c@example.com", "password": "a-new-password"},
+    )
+    assert new_login.status_code == 200

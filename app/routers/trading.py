@@ -28,7 +28,7 @@ from app.models.broker_credential import BrokerCredential
 from app.models.model_config import ModelConfig
 from app.models.trade import Trade
 from app.models.user import User
-from bridge.app.models import AccountInfoResponse, CancelResult, CloseResult, PendingOrder, Position
+from bridge.app.models import AccountInfoResponse, CancelResult, CloseResult, HealthResponse, PendingOrder, Position
 from shadow_runner.bridge_client import BridgeClient, BridgeError
 from shadow_runner.persistence import write_event
 
@@ -80,6 +80,18 @@ def _find_owned_pending_order(db: Session, bridge: BridgeClient, user_id, order_
 def get_account_info(bridge: BridgeClient = Depends(get_bridge_client)):
     try:
         return bridge.account_info()
+    except BridgeError as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+
+
+@router.get("/health", response_model=HealthResponse)
+def get_bridge_health(bridge: BridgeClient = Depends(get_bridge_client)):
+    """Distinct from account-info's 503/502: this can also report 200
+    with connected=False, meaning the bridge process itself is reachable
+    but its MT5 terminal isn't -- a third state account-info alone can't
+    tell apart from "bridge unreachable" (502)."""
+    try:
+        return bridge.health()
     except BridgeError as e:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
 

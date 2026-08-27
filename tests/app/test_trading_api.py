@@ -53,6 +53,14 @@ class FakeBridge:
             "leverage": 100, "currency": "USD",
         }
 
+    def health(self):
+        if self._raise_on_action:
+            raise self._raise_on_action
+        return {
+            "status": "ok", "account_label": "demo-1", "login": 1,
+            "connected": True, "trade_allowed": True, "detail": None,
+        }
+
     def cancel_pending_order(self, order_ticket):
         if self._raise_on_action:
             raise self._raise_on_action
@@ -168,6 +176,33 @@ def test_get_account_info(client, db_session, bridge_client):
     resp = client.get("/trading/account-info", headers=_auth_header(token))
     assert resp.status_code == 200
     assert resp.json()["balance"] == 10000.0
+
+
+def test_get_bridge_health(client, db_session, bridge_client):
+    token = _register_and_login(client, "trad_health_a@example.com")
+    bridge_client(FakeBridge())
+
+    resp = client.get("/trading/health", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is True
+    assert body["status"] == "ok"
+
+
+def test_get_bridge_health_without_bridge_configured_is_503(client, db_session):
+    """No broker_credentials row at all -- exercises the REAL
+    get_bridge_client (not the bridge_client fixture's override)."""
+    token = _register_and_login(client, "trad_health_b@example.com")
+    resp = client.get("/trading/health", headers=_auth_header(token))
+    assert resp.status_code == 503
+
+
+def test_get_bridge_health_maps_bridge_error_to_502(client, db_session, bridge_client):
+    token = _register_and_login(client, "trad_health_c@example.com")
+    bridge_client(FakeBridge(raise_on_action=BridgeError("connection refused")))
+
+    resp = client.get("/trading/health", headers=_auth_header(token))
+    assert resp.status_code == 502
 
 
 def test_close_position_succeeds_for_owned_ticket_and_journals(client, db_session, bridge_client):
