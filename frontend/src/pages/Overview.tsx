@@ -1,13 +1,14 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient, ApiError } from "../api/client";
-import type { AccountInfo, EventOut, ModelConfigOut, Position, TradeOut, UserSettingsOut } from "../api/types";
+import type { AccountInfo, BridgeHealth, EventOut, ModelConfigOut, Position, TradeOut, UserSettingsOut } from "../api/types";
 import { Badge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
 import { ModelCard } from "../components/ModelCard";
+import { PnlChart } from "../components/PnlChart";
 import { StatTile } from "../components/StatTile";
 import { buttonClasses } from "../lib/buttonStyles";
-import { summarizeTrades } from "../lib/pnl";
+import { buildCumulativeSeries, summarizeTrades } from "../lib/pnl";
 
 function fmtMoney(n: number, currency?: string) {
   return `${n.toFixed(2)}${currency ? ` ${currency}` : ""}`;
@@ -17,6 +18,16 @@ export function Overview() {
   const accountInfoQuery = useQuery({
     queryKey: ["account-info"],
     queryFn: () => apiClient.get<AccountInfo>("/trading/account-info"),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+
+  // Distinguishes three states the old account-info-only inference
+  // couldn't: not configured (503), bridge unreachable (502), and
+  // reachable-but-MT5-disconnected (200, connected: false).
+  const bridgeHealthQuery = useQuery({
+    queryKey: ["bridge-health"],
+    queryFn: () => apiClient.get<BridgeHealth>("/trading/health"),
     retry: false,
     refetchInterval: 30_000,
   });
@@ -58,9 +69,11 @@ export function Overview() {
     refetchInterval: 30_000,
   });
 
-  const noBridge = accountInfoQuery.error instanceof ApiError && accountInfoQuery.error.status === 503;
-  const bridgeError = accountInfoQuery.error instanceof ApiError && accountInfoQuery.error.status === 502;
+  const notConfigured = bridgeHealthQuery.error instanceof ApiError && bridgeHealthQuery.error.status === 503;
+  const bridgeUnreachable = bridgeHealthQuery.error instanceof ApiError && bridgeHealthQuery.error.status === 502;
+  const mt5Disconnected = bridgeHealthQuery.data && !bridgeHealthQuery.data.connected;
   const summary = tradesQuery.data ? summarizeTrades(tradesQuery.data) : null;
+  const series = tradesQuery.data ? buildCumulativeSeries(tradesQuery.data) : [];
 
   return (
     <div>
@@ -74,7 +87,7 @@ export function Overview() {
         </div>
       )}
 
-      {noBridge && (
+      {notConfigured && (
         <EmptyState
           title="Connect a broker account"
           message="No active broker account is connected yet, so there's no live account data to show."
@@ -85,9 +98,15 @@ export function Overview() {
           }
         />
       )}
-      {bridgeError && (
+      {bridgeUnreachable && (
         <div className="px-4 py-3 rounded-lg mb-5 text-sm bg-negative/10 border border-negative/30 text-negative">
           Broker bridge is unreachable right now — account data may be stale.
+        </div>
+      )}
+      {mt5Disconnected && (
+        <div className="px-4 py-3 rounded-lg mb-5 text-sm bg-warning/10 border border-warning/30 text-warning">
+          The bridge is reachable, but its MT5 terminal isn't currently connected
+          {bridgeHealthQuery.data?.detail ? ` — ${bridgeHealthQuery.data.detail}` : "."}
         </div>
       )}
 
@@ -115,6 +134,11 @@ export function Overview() {
           <StatTile label="Win rate" value={summary.winRate === null ? "—" : `${summary.winRate.toFixed(0)}%`} />
         </div>
       )}
+
+      <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3">P&L over time</h2>
+      <div className="mb-8">
+        <PnlChart data={series} />
+      </div>
 
       <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3">Models</h2>
       {modelConfigsQuery.isLoading && <p>Loading...</p>}

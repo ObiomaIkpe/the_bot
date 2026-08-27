@@ -10,6 +10,7 @@ import { Login } from "./pages/Login";
 import { ModelDetail } from "./pages/ModelDetail";
 import { Models } from "./pages/Models";
 import { Overview } from "./pages/Overview";
+import { Profile } from "./pages/Profile";
 import { TradeHistory } from "./pages/TradeHistory";
 
 function App() {
@@ -32,6 +33,7 @@ function App() {
           <Route path="/trades" element={<TradeHistory />} />
           <Route path="/broker-credentials" element={<BrokerCredentials />} />
           <Route path="/account-settings" element={<AccountSettings />} />
+          <Route path="/profile" element={<Profile />} />
           {/* Old routes from before this restructuring -- kept as
               redirects so no bookmarked/typed URL goes dead. */}
           <Route path="/dashboard" element={<Navigate to="/overview" replace />} />

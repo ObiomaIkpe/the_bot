@@ -4,10 +4,11 @@ import { apiClient } from "../api/client";
 import type { ModelConfigOut, ModelStatus, TradeOut } from "../api/types";
 import { Badge } from "../components/Badge";
 import { EmptyState } from "../components/EmptyState";
+import { PnlChart } from "../components/PnlChart";
 import { StatTile } from "../components/StatTile";
 import { Table } from "../components/Table";
 import { modelStatusBadgeVariant } from "../lib/modelStatus";
-import { summarizeTrades } from "../lib/pnl";
+import { buildCumulativeSeries, summarizeTrades } from "../lib/pnl";
 
 const STATUSES: ModelStatus[] = ["disabled", "shadow", "active"];
 
@@ -34,6 +35,7 @@ export function ModelDetail() {
 
   const modelConfig = modelConfigsQuery.data?.find((mc) => mc.model_name === modelName);
   const summary = tradesQuery.data ? summarizeTrades(tradesQuery.data) : null;
+  const series = tradesQuery.data ? buildCumulativeSeries(tradesQuery.data) : [];
 
   return (
     <div>
@@ -94,6 +96,11 @@ export function ModelDetail() {
           <StatTile label="Open" value={String(summary.openCount)} />
         </div>
       )}
+
+      <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3">P&L over time</h2>
+      <div className="mb-8">
+        <PnlChart data={series} />
+      </div>
 
       <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3">Trade history</h2>
       {tradesQuery.isLoading && <p>Loading...</p>}

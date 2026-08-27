@@ -57,3 +57,22 @@ export function summarizeTrades(trades: TradeOut[]): PnlSummary {
     openCount: open,
   };
 }
+
+export interface PnlPoint {
+  date: string;
+  cumulative: number;
+}
+
+/** Running-sum P&L over time, for PnlChart. Trades are sorted ascending
+ * (the /trades API always returns them newest-first) before summing. */
+export function buildCumulativeSeries(trades: TradeOut[]): PnlPoint[] {
+  const sorted = [...trades].sort(
+    (a, b) => new Date(a.entry_time_ny).getTime() - new Date(b.entry_time_ny).getTime(),
+  );
+
+  let running = 0;
+  return sorted.map((trade) => {
+    running += profitOf(trade);
+    return { date: trade.entry_time_ny, cumulative: running };
+  });
+}

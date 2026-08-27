@@ -110,3 +110,18 @@ export interface AccountInfo {
   leverage: number;
   currency: string;
 }
+
+export interface BridgeHealth {
+  status: string;
+  account_label: string;
+  login: number;
+  connected: boolean;
+  trade_allowed: boolean | null;
+  detail: string | null;
+}
+
+export interface CurrentUser {
+  user_id: string;
+  email: string;
+  is_active: boolean;
+}

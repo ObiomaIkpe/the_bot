@@ -29,6 +29,33 @@
   --radius-lg: 10px;
 }
 
+/* Light palette, toggled via ThemeContext setting document.documentElement's
+ * data-theme attribute. Every existing component already reads the
+ * semantic --color-* variables above (Tailwind's generated utilities
+ * compile to e.g. `background-color: var(--color-bg-elevated)`, not an
+ * inlined hex), so overriding them here re-themes the whole app with no
+ * component changes needed. Colors used directly as text (positive/
+ * negative/warning/paused) are darker/more saturated than their dark-
+ * theme counterparts, for contrast against a light background -- a
+ * first pass, not vetted in an actual browser. */
+:root[data-theme="light"] {
+  --color-bg: #f6f7f9;
+  --color-bg-elevated: #ffffff;
+  --color-bg-elevated-2: #eef0f3;
+  --color-line: #e2e5ea;
+
+  --color-text: #14171f;
+  --color-text-muted: #5b6272;
+
+  --color-accent: #3667d6;
+  --color-accent-hover: #2b55b3;
+
+  --color-positive: #1f9d63;
+  --color-negative: #d93a52;
+  --color-warning: #b9790a;
+  --color-paused: #a5691f;
+}
+
 @layer base {
   html,
   body,

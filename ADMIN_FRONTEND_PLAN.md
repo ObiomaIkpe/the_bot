@@ -291,6 +291,47 @@ build`/`npm run lint`/`npm run test` (13 tests) all clean. **Not
 verified**: interactive browser click-through — no browser tool
 available in this environment.
 
+## Addendum: the four scoped-out gaps, built (2026-08-27)
+
+The screens redesign explicitly called out four things as deliberately
+out of scope. Built all four on request. Full plan at
+`~/.claude/plans/misty-seeking-crescent.md`.
+
+- **Backend `GET /trading/health`**: wraps the already-existing but
+  previously-unexposed `BridgeClient.health()`, reusing
+  `get_bridge_client`/the bridge's own `HealthResponse` model exactly
+  like `account-info` does. Distinguishes three states account-info's
+  503/502 alone couldn't: not configured (503), bridge unreachable
+  (502), and bridge reachable but MT5 itself disconnected (200,
+  `connected: false`). `Overview.tsx`/`Live.tsx` now use it directly
+  instead of inferring health from account-info's error status.
+- **`POST /auth/change-password`**: new endpoint on `app/routers/auth.py`,
+  reusing the exact `verify_password`/`hash_password` functions
+  register/login already use — no new crypto. New `Profile.tsx` page
+  (fetches the already-existing `GET /auth/me`) shows account info + a
+  password-change form. Known limitation, by design: no session/token
+  invalidation on change, no re-verification email.
+- **Light/dark theme toggle**: `ThemeContext.tsx` (same shape as
+  `AuthContext.tsx`) toggles a `data-theme` attribute + localStorage.
+  Because every component already reads semantic Tailwind utilities
+  backed by real CSS custom properties, this needed **zero changes to
+  any existing component** — just a light-palette override block in
+  `index.css` keyed off `[data-theme="light"]`. First-pass color values,
+  not visually verified.
+- **P&L-over-time chart**: added `recharts` (the one new runtime
+  dependency), a `PnlChart.tsx` wrapper themed via CSS vars (so it
+  re-themes automatically with the toggle above), wired into Overview
+  (all-models) and Model detail (single-model) using trade data already
+  fetched on those pages.
+
+Verified: backend 214 passed / same 10 pre-existing unrelated failures
+(7 new tests: 3 for `/trading/health`, 4 for change-password). Frontend
+`build`/`lint`/`test` (16 tests) all clean; build now warns about bundle
+size (656KB vs. the previous 298KB) — expected, from adding a charting
+library, not an error. **Not verified**: interactive browser
+click-through, especially the light theme's contrast/feel — no browser
+tool available in this environment.
+
 ## Process
 
 - **Each milestone (M1 → M2 → M3 → M4 → M5) is implemented and verified

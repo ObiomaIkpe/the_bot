@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { apiClient, ApiError } from "../api/client";
-import type { AccountInfo, PendingOrder, Position } from "../api/types";
+import type { AccountInfo, BridgeHealth, PendingOrder, Position } from "../api/types";
 import { Button } from "../components/Button";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { EmptyState } from "../components/EmptyState";
@@ -26,6 +26,13 @@ export function Live() {
   const accountInfoQuery = useQuery({
     queryKey: ["account-info"],
     queryFn: () => apiClient.get<AccountInfo>("/trading/account-info"),
+    retry: false,
+    refetchInterval: 30_000,
+  });
+
+  const bridgeHealthQuery = useQuery({
+    queryKey: ["bridge-health"],
+    queryFn: () => apiClient.get<BridgeHealth>("/trading/health"),
     retry: false,
     refetchInterval: 30_000,
   });
@@ -67,6 +74,13 @@ export function Live() {
       <div className="flex items-baseline justify-between mb-6">
         <h1 className="m-0 text-2xl">Live</h1>
       </div>
+
+      {bridgeHealthQuery.data && !bridgeHealthQuery.data.connected && (
+        <div className="px-4 py-3 rounded-lg mb-5 text-sm bg-warning/10 border border-warning/30 text-warning">
+          The bridge is reachable, but its MT5 terminal isn't currently connected
+          {bridgeHealthQuery.data.detail ? ` — ${bridgeHealthQuery.data.detail}` : "."}
+        </div>
+      )}
 
       {accountInfoQuery.isLoading && <p>Loading...</p>}
       {accountInfoQuery.error && noBridge(accountInfoQuery.error) && <NoBridgeConfigured />}

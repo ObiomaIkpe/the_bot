@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { Button } from "./Button";
+import { ThemeToggle } from "./ThemeToggle";
 
 const NAV_ITEMS = [
   { to: "/overview", label: "Overview" },
@@ -9,6 +10,7 @@ const NAV_ITEMS = [
   { to: "/trades", label: "Trade History" },
   { to: "/broker-credentials", label: "Broker Connection" },
   { to: "/account-settings", label: "Account Settings" },
+  { to: "/profile", label: "Profile" },
 ];
 
 export function Layout() {
@@ -35,7 +37,8 @@ export function Layout() {
             </NavLink>
           ))}
         </nav>
-        <div className="px-5 pt-3 mt-3 border-t border-line">
+        <div className="px-5 pt-3 mt-3 border-t border-line flex flex-col gap-1">
+          <ThemeToggle />
           <Button variant="ghost" onClick={logout} className="w-full justify-center">
             Log out
           </Button>
