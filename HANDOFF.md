@@ -199,19 +199,23 @@ set of trusted callers).
    not on anything technical -- the bridge architecture already
    supports it. Pick up whenever available: new `config.json`, new
    port, second `uvicorn` process.
-5. **Wire the bridge worker into a real process supervisor** (Task
-   Scheduler or NSSM) on the Windows VPS. As of 2026-08-28, Tony's real
-   account (476123801, Exness-MT5Trial9) was cut over to the
-   Postgres-backed credential flow and confirmed working
-   (`/health` -> `connected: true`), but the worker still runs as a
-   plain foreground `uvicorn` process in a PowerShell window --
-   deliberately, so the first hours of the new setup are watched
-   directly rather than silently auto-restarting. It stops if that
-   window closes, the VPS reboots, or it crashes, with nothing bringing
-   it back. Move it to a real service once it's proven stable for a few
-   days. (Also then: delete the pre-cutover backup files left in the
-   scratchpad on that VPS -- `config.json.v1....bak` still has the
-   plaintext MT5 password.)
+5. ~~Wire the bridge worker into a real process supervisor~~ **DONE
+   2026-08-28.** Tony's real account (476123801, Exness-MT5Trial9) is
+   now supervised by NSSM as a real Windows service (`MT5Bridge-Tony`,
+   `C:\nssm\nssm.exe`), `StartType: Automatic` -- survives a reboot,
+   auto-restarts on crash. Confirmed via `/health` -> `connected: true`
+   after the cutover. Hit one real snag worth remembering: the service
+   initially crash-looped (`KeyError: 'BRIDGE_TOKEN'`) because
+   `AppEnvironmentExtra` was never actually set on it -- fix was
+   `nssm set MT5Bridge-Tony AppEnvironmentExtra BRIDGE_TOKEN=... CREDENTIAL_API_URL=...`
+   (both as separate space-separated arguments to one `nssm set` call,
+   not joined). Also: the *old* foreground `uvicorn` process was still
+   silently holding port 8001 the whole time (had to `Stop-Process` it
+   before NSSM's copy could bind) -- so the account was never actually
+   down during any of this, just running on the old process until the
+   cutover completed. Still outstanding: delete the pre-cutover backup
+   files left in the VPS scratchpad (`config.json.v1....bak` still has
+   the plaintext MT5 password).
 6. **Strategy-level research gaps (block real money, NOT the build):**
    no slippage/spread/commission modeling anywhere (material at ~1.1
    avg realized R:R); out-of-sample validation never done. Phase 4
