@@ -16,11 +16,16 @@ class BrokerCredentialCreate(BaseModel):
 
 
 class BrokerCredentialUpdate(BaseModel):
-    """bridge_url: set once a bridge worker has been provisioned for
-    this account (currently a manual step -- see migration 0008).
-    is_active: which credential trading endpoints should use, if a user
-    has more than one."""
-    bridge_url: str | None = None
+    """is_active: which credential trading endpoints should use, if a
+    user has more than one.
+
+    bridge_url deliberately NOT settable here (removed as part of
+    self-service provisioning, Phase 0): it used to be a manual,
+    operator-set field (migration 0008), but now that provisioning_status/
+    bridge_url are meant to be trustworthy automated state (see
+    app/routers/internal_provisioning.py), a user PATCHing their own
+    bridge_url directly would let them fake "connected." It's now
+    settable only by the internal /complete endpoint."""
     is_active: bool | None = None
 
 

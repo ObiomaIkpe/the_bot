@@ -1,11 +1,20 @@
 import uuid
 
-from sqlalchemy import Boolean, Column, ForeignKey, Index, String, text
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
 from app.core.security import decrypt_secret, encrypt_secret
+
+# Self-service MT5 provisioning, Phase 0 (schema + internal API only --
+# nothing sets a row to "pending" automatically yet; see
+# app/routers/internal_provisioning.py and
+# app/scripts/register_provisioning_machine.py). "claimed" and "in
+# progress" are deliberately one status, not two -- provisioning_claimed_at
+# already gives staleness detection for a crashed poller without a
+# second status value.
+VALID_PROVISIONING_STATUSES = ("not_requested", "pending", "in_progress", "active", "failed")
 
 
 class BrokerCredential(Base):
@@ -24,6 +33,10 @@ class BrokerCredential(Base):
             "user_id",
             unique=True,
             postgresql_where=text("is_active"),
+        ),
+        CheckConstraint(
+            "provisioning_status IN ('not_requested', 'pending', 'in_progress', 'active', 'failed')",
+            name="ck_broker_credentials_provisioning_status_valid",
         ),
     )
 
@@ -73,6 +86,34 @@ class BrokerCredential(Base):
     # migration 0009 and app/core/security.py's service-token section for
     # why this is a plain SHA-256 hash, not bcrypt like user passwords.
     bridge_fetch_token_hash = Column(String, nullable=True, unique=True)
+
+    # Self-service provisioning state -- see VALID_PROVISIONING_STATUSES
+    # above. "not_requested" (the default) is today's only reachable
+    # state via the real create endpoint; the rest are driven entirely
+    # by app/routers/internal_provisioning.py's claim/complete/fail
+    # endpoints, called by a machine's poller (not built yet -- Phase 1).
+    provisioning_status = Column(String, nullable=False, server_default="not_requested")
+    # Human-readable failure detail, set by the /fail endpoint. Cleared
+    # (set back to null) whenever a job is retried or completes.
+    provisioning_error = Column(String, nullable=True)
+    # Which machine claimed this job -- null until claimed. Not a
+    # relationship() on purpose; nothing needs to traverse from a
+    # credential to the full ProvisioningMachine row, just compare IDs
+    # (see the ownership check in internal_provisioning.py's
+    # complete/fail endpoints).
+    provisioning_machine_id = Column(UUID(as_uuid=True), ForeignKey("provisioning_machines.machine_id"), nullable=True)
+    # Set at claim time -- lets a stuck job (claimed but never completed
+    # or failed, e.g. a poller that crashed mid-job) be recognized by age
+    # without a separate status value. No automatic requeue-after-timeout
+    # sweep exists yet (deliberately deferred -- see the Phase 0 plan).
+    provisioning_claimed_at = Column(DateTime(timezone=True), nullable=True)
+    # Deterministic, human-readable folder/service-name component (e.g.
+    # "C:\MT5-<this>\", an NSSM service name) -- derived from
+    # credential_id at claim time (str(credential_id)[:8]), not chosen by
+    # the user. Stable across a retry so a failed job's leftover files
+    # are recognizable and safely replaceable, not orphaned under a new
+    # name each attempt.
+    provisioning_account_label = Column(String, nullable=True)
 
     user = relationship("User", back_populates="broker_credentials")
 

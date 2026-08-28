@@ -79,7 +79,14 @@ def test_create_broker_credential_rejects_invalid_account_type(client, db_sessio
     assert resp.status_code == 422
 
 
-def test_patch_sets_bridge_url(client, db_session):
+def test_patch_cannot_set_bridge_url(client, db_session):
+    """bridge_url used to be user-settable via PATCH (migration 0008-era
+    manual flow); removed from BrokerCredentialUpdate as part of
+    self-service provisioning (Phase 0) since it's now meant to be
+    trustworthy automated state -- see app/routers/internal_provisioning.py's
+    /complete endpoint, the only thing allowed to set it now. An unknown
+    field is silently dropped by pydantic, so a bridge_url-only payload
+    ends up with nothing to change."""
     token = _register_and_login(client, "bc_f@example.com")
     create_resp = client.post(
         "/broker-credentials",
@@ -93,8 +100,11 @@ def test_patch_sets_bridge_url(client, db_session):
         json={"bridge_url": "http://38.247.137.208:8002"},
         headers=_auth_header(token),
     )
-    assert resp.status_code == 200
-    assert resp.json()["bridge_configured"] is True
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "No fields provided to update"
+
+    resp = client.get("/broker-credentials", headers=_auth_header(token))
+    assert resp.json()[0]["bridge_configured"] is False
 
 
 def test_patch_404_for_another_users_credential(client, db_session):

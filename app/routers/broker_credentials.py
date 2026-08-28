@@ -1,12 +1,11 @@
-import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.bridge_provisioning import mint_bridge_token
 from app.core.database import get_db
 from app.core.deps import get_current_user
-from app.core.security import hash_service_token
 from app.models.broker_credential import BrokerCredential
 from app.models.user import User
 from app.schemas.broker_credentials import (
@@ -114,6 +113,11 @@ def issue_bridge_token(
     Also called directly by bridge/scripts/provision_account.ps1 (not
     just the admin UI) -- check that script before changing this
     endpoint's request/response shape or auth requirement.
+
+    Token generation itself lives in app.core.bridge_provisioning.mint_bridge_token
+    -- shared with the internal, machine-facing claim endpoint
+    (app/routers/internal_provisioning.py), which mints a token the same
+    way as part of automated provisioning.
     """
     row = (
         db.query(BrokerCredential)
@@ -123,8 +127,7 @@ def issue_bridge_token(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Broker credential not found")
 
-    token = secrets.token_urlsafe(32)
-    row.bridge_fetch_token_hash = hash_service_token(token)
+    token = mint_bridge_token(row)
     db.commit()
 
     return BridgeTokenIssueOut(bridge_token=token)
