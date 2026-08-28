@@ -184,11 +184,13 @@ set of trusted callers).
 
 1. **Phase 3 step 3: day-selection-gate as real code.** See "Phase 3
    progress" above -- this is the actual next coding task.
-2. **Commit the Hetzner deployment files.** `Dockerfile` and the
-   Hetzner-specific `docker-compose.yml` currently only exist on the
-   Hetzner box itself, not in the repo. Same class of gap as `bridge/`
-   below -- worth fixing before either drifts from what's actually
-   running.
+2. **Commit the Hetzner `docker-compose.yml`.** `Dockerfile` is now
+   committed (2026-08-28, commit `6dd1892` -- reconstructed after the
+   original, never-committed copy on the Hetzner box went missing with
+   no trace, discovered while fixing a stale-image CORS bug). The
+   Hetzner-specific `docker-compose.yml` still only exists on the box
+   itself, not in the repo -- same risk as the Dockerfile had, worth
+   fixing before it drifts or disappears the same way.
 3. **Decide where `bridge/` lives in version control.** Currently only
    exists on the VPS filesystem, not committed anywhere. Given it's a
    genuinely separate deployable (Windows-only, different hardware),
@@ -197,12 +199,25 @@ set of trusted callers).
    not on anything technical -- the bridge architecture already
    supports it. Pick up whenever available: new `config.json`, new
    port, second `uvicorn` process.
-5. **Strategy-level research gaps (block real money, NOT the build):**
+5. **Wire the bridge worker into a real process supervisor** (Task
+   Scheduler or NSSM) on the Windows VPS. As of 2026-08-28, Tony's real
+   account (476123801, Exness-MT5Trial9) was cut over to the
+   Postgres-backed credential flow and confirmed working
+   (`/health` -> `connected: true`), but the worker still runs as a
+   plain foreground `uvicorn` process in a PowerShell window --
+   deliberately, so the first hours of the new setup are watched
+   directly rather than silently auto-restarting. It stops if that
+   window closes, the VPS reboots, or it crashes, with nothing bringing
+   it back. Move it to a real service once it's proven stable for a few
+   days. (Also then: delete the pre-cutover backup files left in the
+   scratchpad on that VPS -- `config.json.v1....bak` still has the
+   plaintext MT5 password.)
+6. **Strategy-level research gaps (block real money, NOT the build):**
    no slippage/spread/commission modeling anywhere (material at ~1.1
    avg realized R:R); out-of-sample validation never done. Phase 4
    ends at demo orders; real money is a separate go/no-go gated on
    these.
-6. **Optional hardening backlog:** randomized-slice differential
+7. **Optional hardening backlog:** randomized-slice differential
    testing; per-bar performance profiling; Phase 0 prod items (rate
    limiting on /auth/login, CORS, secrets manager, dev/staging/prod
    separation); passlib deprecation (bcrypt<4.0 pin); pydantic
