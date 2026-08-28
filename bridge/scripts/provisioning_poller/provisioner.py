@@ -38,23 +38,38 @@ def provision_account(job: dict, config: PollerConfig) -> str:
     report back on success; raises ProvisioningError (or lets a genuine
     bug's exception propagate) on any failure -- runner.py is
     responsible for catching and reporting either case back to the
-    admin API."""
+    admin API.
+
+    Cleans up after itself on BOTH ends of a failed attempt: once at the
+    start (handles a job that was already tried and failed before --
+    see _cleanup_prior_attempt) and once more if THIS attempt itself
+    fails partway through, so a bad password/server doesn't leave a
+    half-provisioned MT5 folder, orphaned NSSM service, or open
+    firewall rule sitting on disk indefinitely just because nobody's
+    retried the job yet. Either way, the original exception is
+    re-raised unchanged -- cleanup must never mask or replace the real
+    failure reason reported back to the admin API."""
     label = job["account_label"]
     mt5_dest = Path(rf"C:\MT5-{label}")
     accounts_dir = Path(config.bridge_root) / "accounts" / label
     config_path = accounts_dir / "config.json"
     service_name = f"bridge-{label}"
 
-    _cleanup_prior_attempt(mt5_dest, accounts_dir, service_name, config)
-    _copy_mt5_install(config.source_mt5_path, mt5_dest)
-    terminal_path = mt5_dest / "terminal64.exe"
-    _launch_and_login(terminal_path, job, config)
-    _verify_login(terminal_path, job, config)
-    port = _next_free_port(config)
-    _write_config_json(config_path, accounts_dir, label, terminal_path, port, job, config)
-    _install_and_start_service(service_name, config_path, job, port, config)
-    _open_firewall_port(service_name, label, port, config)
-    _wait_for_health(port, service_name, config)
+    _cleanup_prior_attempt(mt5_dest, accounts_dir, service_name, label, config)
+    try:
+        _copy_mt5_install(config.source_mt5_path, mt5_dest)
+        terminal_path = mt5_dest / "terminal64.exe"
+        _launch_and_login(terminal_path, job, config)
+        _verify_login(terminal_path, job, config)
+        port = _next_free_port(config)
+        _write_config_json(config_path, accounts_dir, label, terminal_path, port, job, config)
+        _install_and_start_service(service_name, config_path, job, port, config)
+        _open_firewall_port(service_name, label, port, config)
+        _wait_for_health(port, service_name, config)
+    except Exception:
+        log.info("Provisioning failed for %s -- cleaning up before reporting failure", label)
+        _cleanup_prior_attempt(mt5_dest, accounts_dir, service_name, label, config)
+        raise
     return f"http://{config.public_host}:{port}"
 
 
@@ -62,16 +77,24 @@ def _run_nssm(config: PollerConfig, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run([config.nssm_path, *args], capture_output=True, text=True)
 
 
-def _cleanup_prior_attempt(mt5_dest: Path, accounts_dir: Path, service_name: str, config: PollerConfig) -> None:
-    """Deliberate deviation from provision_account.ps1's step 0, which
+def _cleanup_prior_attempt(
+    mt5_dest: Path, accounts_dir: Path, service_name: str, label: str, config: PollerConfig
+) -> None:
+    """Removes everything a previous attempt at this same job (whether
+    it failed just now, or failed on an earlier try and is only being
+    retried later) may have left behind: the NSSM service, the copied
+    MT5 folder (and, first, the specific terminal64.exe process running
+    from it), the account's config directory, and its firewall rule.
+    Called both at the START of every attempt (a no-op on a genuine
+    first attempt, since none of this exists yet) and again if THIS
+    attempt fails partway through -- see provision_account()'s
+    docstring.
+
+    Deliberate deviation from provision_account.ps1's step 0, which
     REFUSES if C:\\MT5-<label> already exists -- correct for a human
-    doing first-time setup, wrong for an automated retry of a job whose
-    account_label is stable across attempts (set once at first claim,
-    see BrokerCredential.provisioning_account_label's own docstring). A
-    retried job (network blip during NSSM install, MT5 login timeout,
-    etc) must be able to clean up and start over on its own. Runs
-    unconditionally at the start of every attempt -- a no-op on a
-    first attempt, since none of these exist yet."""
+    doing first-time setup, wrong here since account_label is stable
+    across retries (set once at first claim, see
+    BrokerCredential.provisioning_account_label's own docstring)."""
     status = _run_nssm(config, "status", service_name)
     if status.returncode == 0:
         log.info("Prior attempt left service %s behind -- removing it", service_name)
@@ -95,6 +118,14 @@ def _cleanup_prior_attempt(mt5_dest: Path, accounts_dir: Path, service_name: str
 
     if accounts_dir.exists():
         shutil.rmtree(accounts_dir, ignore_errors=True)
+
+    # Idempotent -- succeeds (as a no-op) whether or not a rule from a
+    # prior attempt actually exists. A failed job shouldn't leave an
+    # open inbound port rule for a service that no longer exists.
+    subprocess.run(
+        ["netsh", "advfirewall", "firewall", "delete", "rule", f"name=MT5 Bridge {label}"],
+        capture_output=True, text=True,
+    )
 
 
 def _copy_mt5_install(source_path: str, mt5_dest: Path) -> None:
