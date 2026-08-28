@@ -223,7 +223,8 @@ export function BrokerCredentials() {
       {mintedToken && (
         <ConfirmModal
           title="Bridge token minted"
-          message={`Copy this now -- it won't be shown again: ${mintedToken}`}
+          message="Copy this now -- it won't be shown again."
+          copyText={mintedToken}
           confirmLabel="I've copied it"
           variant="primary"
           onConfirm={() => setMintedToken(null)}
