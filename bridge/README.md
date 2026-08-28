@@ -86,6 +86,19 @@ cd C:\bridge\scripts
     -Jwt "eyJhbGciOi..."
 ```
 
+`scripts/provisioning_poller/` is the automated equivalent of the manual
+flow above -- a persistent process (its own NSSM service,
+`MT5Provisioner`) that polls the admin API's
+`/internal/provisioning-jobs/*` endpoints for pending accounts and does
+everything `provision_account.ps1` does by hand, plus installing that
+account's own NSSM service (`bridge-<label>`, distinct from the
+manually-created `MT5Bridge-Tony`, which predates this and isn't
+touched by it) and opening its firewall port. Not yet wired into the
+real signup flow -- `POST /broker-credentials` doesn't set anything to
+`pending` automatically yet, so jobs still get queued by hand today. See
+`bridge/scripts/provisioning_poller/main.py`'s own docstring for how
+it's run, and the self-service-provisioning plan for the full design.
+
 ## Endpoints (all read-only)
 
 | Endpoint | Purpose |
