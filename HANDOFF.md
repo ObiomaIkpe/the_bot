@@ -295,6 +295,29 @@ set of trusted callers).
    `_next_free_port` to 8003+ (safe to `rm -rf`). See the
    `self_service_mt5_provisioning` memory for the full design and every
    real bug found/fixed along the way.
+
+   **Account removal (decommission), same night, commit `0243786`:**
+   users had no way back -- `PATCH .../is_active` only soft-disables
+   trading, nothing ever tore down a provisioned account's real MT5
+   terminal/NSSM service/firewall rule. Added the teardown half of the
+   same state machine (`decommissioning -> removing ->
+   removed/decommission_failed`, mirroring `pending -> in_progress ->
+   active/failed`) instead of inventing a hard-delete convention this
+   codebase has never used anywhere. `POST
+   /broker-credentials/{id}/remove` is immediate when nothing was ever
+   provisioned (no VPS round trip needed); otherwise it queues a real
+   job claimed via new parallel `/internal/decommission-jobs/*`
+   endpoints, which drive the already-battle-tested
+   `_cleanup_prior_attempt()` from a new trigger -- no new Windows-side
+   logic needed at all. **Verified live end-to-end same night**: fired
+   a real removal against account `476786959`
+   (`44f4e73d-8b62-48e5-b8e8-da0995571a31`) and confirmed on the VPS
+   directly afterward -- `C:\MT5-44f4e73d` gone, its NSSM service gone
+   ("service does not exist"), its firewall rule gone, its
+   `C:\bridge\accounts\44f4e73d` config dir gone. Also clicked through
+   the real "Remove" button in the browser UI successfully -- full
+   parity of proof with provisioning's own (API/curl AND real
+   click-through both verified).
 7. **Strategy-level research gaps (block real money, NOT the build):**
    no slippage/spread/commission modeling anywhere (material at ~1.1
    avg realized R:R); out-of-sample validation never done. Phase 4
