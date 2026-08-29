@@ -188,13 +188,21 @@ set of trusted callers).
    runner's whole cycle (10am decision, backfill, and a real journaled
    trade if a signal fires) against genuinely live bars, not the
    engineered test data used to find/fix the two cold-start bugs.
-2. **Commit the Hetzner `docker-compose.yml`.** `Dockerfile` is now
-   committed (2026-08-28, commit `6dd1892` -- reconstructed after the
-   original, never-committed copy on the Hetzner box went missing with
-   no trace, discovered while fixing a stale-image CORS bug). The
-   Hetzner-specific `docker-compose.yml` still only exists on the box
-   itself, not in the repo -- same risk as the Dockerfile had, worth
-   fixing before it drifts or disappears the same way.
+2. ✅ **Commit the Hetzner `docker-compose.yml`.** DONE 2026-08-29,
+   commit `0a9c571` (same risk class `Dockerfile` already had once --
+   `6dd1892` -- the original, never-committed copy on the Hetzner box
+   went missing with no trace, discovered while fixing a stale-image
+   CORS bug). The real file's `db.environment` had `POSTGRES_PASSWORD`
+   hardcoded in plaintext -- caught before committing anything,
+   replaced with `${POSTGRES_PASSWORD}` (Compose reads this from a
+   `.env` file in the same directory, same convention every other
+   secret in this project already follows). **Required one-time
+   follow-up on Hetzner, not yet confirmed done**: add
+   `POSTGRES_PASSWORD=<the real value>` to `/app4/the-bot/.env`
+   (gitignored, never committed) before the next `git pull` +
+   `docker compose up` there -- without it, the substitution resolves
+   to empty and the `db` container won't start with the right
+   password.
 3. ✅ **`C:\bridge`/checkout sync gap -- fully fixed and verified live,
    both halves (2026-08-29).** Was: `bridge/`
    lived only in the git checkout (`C:\the_bot_temp`); the VPS's
