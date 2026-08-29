@@ -374,56 +374,52 @@ code path, which raw SQL can't do correctly.
 
 ## Windows VPS (`C:\bridge`)
 
-### Deploying the whole provisioning_poller/ folder after a Phase 2-style change
+### Deploying a provisioning poller change (current, post-sync-gap-fix)
+
+```powershell
+cd C:\bridge\bridge
+git pull
+Stop-ScheduledTask -TaskName "MT5ProvisioningPollerTask"
+Start-Sleep -Seconds 2
+Start-ScheduledTask -TaskName "MT5ProvisioningPollerTask"
+```
+
+**Purpose:** `C:\bridge\bridge` (2026-08-29 onward) IS a real git
+checkout -- a cone-mode sparse-checkout of just the `bridge/` subtree,
+rooted at `C:\bridge`. `git pull` alone is now sufficient; there is no
+`Copy-Item` step anymore for the poller. The Scheduled Task still needs
+an explicit restart to load new code, same as any long-running process.
+See `HANDOFF.md` open item 3 for the full migration story (a real
+`git checkout -b` quirk hit `app/main.py` outside the intended scope
+during the one-time setup, resolved via `git rm --cached --sparse`, and
+confirmed Tony's real file was never touched).
+
+**`MT5Bridge-Tony` is NOT yet on this new checkout** -- it's still the
+old, separate, hand-deployed `C:\bridge\app\`, deliberately not
+migrated yet (see `HANDOFF.md` item 3's "Still open" section). A change
+to `bridge/app/` (the actual bridge worker code, not the poller) still
+needs the old manual `Copy-Item` into `C:\bridge\app\` until that
+migration happens:
 
 ```powershell
 cd C:\the_bot_temp
 git pull
-Copy-Item -Path C:\the_bot_temp\bridge\scripts\provisioning_poller\* -Destination C:\bridge\scripts\provisioning_poller\ -Recurse -Force
-C:\nssm\nssm.exe restart MT5Provisioner
+Copy-Item -Path C:\the_bot_temp\bridge\app\* -Destination C:\bridge\app\ -Recurse -Force
+C:\nssm\nssm.exe restart MT5Bridge-Tony
 ```
-
-**Purpose:** whenever more than one file in `provisioning_poller/`
-changed (e.g. `admin_client.py` + `provisioner.py` + `runner.py`
-together, as in Phase 2), copy the whole folder's contents rather than
-one file at a time -- `-Force` overwrites existing files, `*` (not the
-folder itself) keeps the destination folder identity intact.
-`MT5Provisioner` needs an explicit restart afterward to actually load
-the new code -- copying files alone doesn't reload a running process.
-
----
-
-### Deploying a code change from git to the actual running bridge
-
-```powershell
-cd C:\the_bot_temp
-git pull
-Copy-Item -Path C:\the_bot_temp\bridge\scripts\provisioning_poller -Destination C:\bridge\scripts\provisioning_poller -Recurse -Force
-```
-
-**Purpose:** `C:\bridge` (what actually runs) and `C:\the_bot_temp`
-(the git checkout) are two SEPARATE directories on this VPS -- `git
-pull` only updates the checkout. Every new/changed file under
-`bridge/` needs an explicit copy into `C:\bridge` afterward, or it's
-silently missing (`ModuleNotFoundError`/`FileNotFoundError`, usually
-discovered mid-deploy). Hit this twice in one night (the whole
-`provisioning_poller/` folder, then `verify_mt5_login.py` separately) --
-see `HANDOFF.md` open item 3, this needs a real fix at some point
-(make `C:\bridge` itself a git checkout, or a small sync script). For
-a single file instead of a whole folder, drop `-Recurse` and point
-`-Path`/`-Destination` at the file directly.
 
 ---
 
 ### Run the provisioning poller manually (foreground, for testing)
 
 ```powershell
-cd C:\bridge
+cd C:\bridge\bridge
 venv\Scripts\activate
 $env:MACHINE_TOKEN = "<machine token>"
 $env:CREDENTIAL_API_URL = "https://api.ihusale.com.ng"
 $env:PROVISIONING_PUBLIC_HOST = "38.247.137.208"
 $env:FIREWALL_REMOTE_IP = "<Hetzner box's IP>"
+$env:BRIDGE_ROOT = "C:\bridge\bridge"
 python -m scripts.provisioning_poller.main
 ```
 
@@ -436,7 +432,14 @@ for minting `MACHINE_TOKEN`.
 
 ---
 
-### Install the poller as a permanent NSSM service
+### Install the poller as a permanent NSSM service (superseded)
+
+**No longer how the poller actually runs** -- NSSM services execute in
+Windows Session 0, which has no desktop, and `terminal64.exe` (a GUI
+app) can't launch from there at all. The poller now runs as
+`MT5ProvisioningPollerTask`, a Scheduled Task under a real interactive
+logon session -- see `HANDOFF.md` open item 6 for the full Session-0
+diagnosis. Kept here for history/rollback reference only.
 
 ```powershell
 C:\nssm\nssm.exe install MT5Provisioner C:\bridge\venv\Scripts\python.exe -m scripts.provisioning_poller.main
@@ -576,15 +579,18 @@ it's a port conflict without checking this first.
 ### Verify a deployed file actually has the fix you think it has
 
 ```powershell
-Select-String -Path C:\bridge\scripts\provisioning_poller\provisioner.py -Pattern "_rmtree_with_retry"
+Select-String -Path C:\bridge\bridge\scripts\provisioning_poller\provisioner.py -Pattern "_rmtree_with_retry"
 ```
 
-**Purpose:** the single most useful command tonight for catching the
-`C:\bridge` vs `C:\the_bot_temp` deploy gap early -- a `git pull` +
-`Copy-Item` can silently copy the WRONG version, or skip a file
-entirely, and nothing about the poller's own startup will tell you
-that. Always confirm the actual fix's marker text is present in the
-deployed copy before re-running a test and assuming a fix didn't work.
+**Purpose:** the single most useful command tonight for catching a
+stale/incomplete deploy early -- a `git pull` + `Copy-Item` (still true
+for `MT5Bridge-Tony`'s `app/` code, see the deploy recipe above) can
+silently copy the WRONG version, or skip a file entirely, and nothing
+about a service's own startup will tell you that. Always confirm the
+actual fix's marker text is present in the deployed copy before
+re-running a test and assuming a fix didn't work. (Path shown is
+`C:\bridge\bridge\...` -- the provisioning poller's own checkout,
+post-sync-gap-fix; use `C:\bridge\app\...` for `MT5Bridge-Tony`.)
 
 ---
 
@@ -605,17 +611,20 @@ an error) confirms no orphaned NSSM service was left behind either.
 
 ---
 
-### Check what's actually deployed to `C:\bridge` vs the git checkout
+### Check what's actually deployed to `C:\bridge\app` vs the git checkout
 
 ```powershell
-dir C:\bridge\scripts
-dir C:\the_bot_temp\bridge\scripts
+dir C:\bridge\app
+dir C:\the_bot_temp\bridge\app
 ```
 
-**Purpose:** side-by-side comparison to spot anything present in the
-checkout but missing from the deployed copy -- run this any time a
-`ModuleNotFoundError`/`FileNotFoundError` shows up on the VPS after a
-`git pull`, before assuming the code itself is wrong.
+**Purpose:** now only relevant for `MT5Bridge-Tony`'s `app/` code --
+the provisioning poller no longer has this gap at all (`C:\bridge\bridge`
+IS the checkout, see the deploy recipe above). Side-by-side comparison
+to spot anything present in the checkout but missing from the deployed
+copy -- run this any time a `ModuleNotFoundError`/`FileNotFoundError`
+shows up on the VPS after a `git pull`, before assuming the code itself
+is wrong.
 
 ---
 

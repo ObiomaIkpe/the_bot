@@ -195,19 +195,56 @@ set of trusted callers).
    Hetzner-specific `docker-compose.yml` still only exists on the box
    itself, not in the repo -- same risk as the Dockerfile had, worth
    fixing before it drifts or disappears the same way.
-3. **Decide where `bridge/` lives in version control.** Currently only
-   exists on the VPS filesystem, not committed anywhere. Given it's a
-   genuinely separate deployable (Windows-only, different hardware),
-   worth deciding: subfolder in the main repo, or its own repo. **Real
-   cost of leaving this undecided, hit twice on 2026-08-29**: the
-   deployed `C:\bridge` and the git checkout (`C:\the_bot_temp`) are
-   two separate directories on the VPS -- `git pull` only updates the
-   checkout, so every new file under `bridge/` needs a manual
-   `Copy-Item` into `C:\bridge` afterward, or it's silently missing
-   (`ModuleNotFoundError`/`FileNotFoundError` at the worst possible
-   moment, mid-deploy). Either make `C:\bridge` itself the git
-   checkout, or write a small sync script -- this will keep costing
-   real time every deploy until it's fixed.
+3. **`C:\bridge`/checkout sync gap -- fixed for the provisioning poller
+   (2026-08-29), Tony's bridge worker still pending.** Was: `bridge/`
+   lived only in the git checkout (`C:\the_bot_temp`); the VPS's
+   actually-running `C:\bridge` was a separate, hand-copied directory,
+   so every new/changed file under `bridge/` needed a manual
+   `Copy-Item` or it was silently missing -- hit twice in one night
+   before this was fixed. Real fix: `C:\bridge` is now itself a real
+   git working directory, sparse-checked-out to just the `bridge/`
+   subtree (cone mode: `git sparse-checkout set bridge`), landing at
+   `C:\bridge\bridge\...`. A fresh, separate venv was created there
+   (`C:\bridge\bridge\venv`) rather than moving the existing
+   `C:\bridge\venv` -- that one's still the configured interpreter for
+   `MT5Bridge-Tony` and the live `bridge-476787945` worker, and moving
+   it would have broken either on its next restart. The provisioning
+   poller (`MT5ProvisioningPollerTask`) was cut over to the new
+   checkout -- its env vars now include `BRIDGE_ROOT=C:\bridge\bridge`
+   (already-existing, environment-overridable config, no code change
+   needed), and its Scheduled Task action points at the new script
+   path. **Verified live**: a real, brand-new commit
+   (`cc89ff9`..`8f746dd`) flowed onto the VPS via a plain `git pull`
+   with zero `Copy-Item`, confirmed via a marker comment actually
+   appearing in the file afterward.
+
+   One real hiccup along the way, resolved cleanly: the first
+   `git checkout -b main origin/main` of a brand-new branch under
+   sparse-checkout populated one file (`app/main.py`) outside the
+   intended `bridge/` scope, colliding by coincidence with Tony's own
+   pre-existing `C:\bridge\app\main.py` (same relative path, totally
+   unrelated files -- the top-level repo's FastAPI backend vs. the
+   bridge worker). Confirmed directly (content + an unchanged
+   `LastWriteTime` predating the whole session) that Tony's real file
+   was never touched -- git's own "already present, not updated"
+   safety behavior held. Fixed with `git rm --cached --sparse
+   app/main.py` (index-only, never touches the working tree) --
+   left staged-uncommitted intentionally; never push that removal, the
+   real backend file must stay in shared history.
+
+   **Still open**: `MT5Bridge-Tony`'s own NSSM service still points at
+   the old `C:\bridge` (unmigrated, untouched, working exactly as
+   before). Cutting it over needs: move `C:\bridge\config.json` into
+   `C:\bridge\bridge\config.json`, set its `AppDirectory` to
+   `C:\bridge\bridge`, and explicitly set `BRIDGE_CONFIG_PATH` via
+   `AppEnvironmentExtra` (alongside its existing `BRIDGE_TOKEN`/
+   `CREDENTIAL_API_URL` -- `nssm set` replaces the whole list, not just
+   adds) rather than relying on the old hardcoded default. Deliberately
+   deferred to its own moment, same reasoning as the auto-logon/reboot
+   deferral elsewhere in this file: this is the one service touching
+   Tony's real, live trading account. Once done, the old top-level
+   `C:\bridge\app\`/`C:\bridge\scripts\` can be deleted as unused
+   duplicates.
 4. **Second broker account (friend's).** Still blocked on credentials,
    not on anything technical -- the bridge architecture already
    supports it. Pick up whenever available: new `config.json`, new
