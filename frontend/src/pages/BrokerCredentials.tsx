@@ -31,11 +31,20 @@ function ConnectForm({
   error: unknown;
 }) {
   return (
-    <form onSubmit={onSubmit} className="max-w-[360px]">
+    // autoComplete="off" on the form + explicit non-standard name/
+    // autoComplete on every field below: a real incident, not just
+    // tidiness -- browser autofill once put a saved login EMAIL into
+    // "MT5 account number" (a plain text field immediately followed by
+    // a password field reads as a username/password pair to Chrome's
+    // heuristics regardless of label text), and the resulting bad
+    // broker_credentials row had to be found and deleted by hand.
+    <form onSubmit={onSubmit} className="max-w-[360px]" autoComplete="off">
       <div className="flex flex-col gap-1 mb-3">
         <label className="text-[13px] text-text-muted">Broker name</label>
         <input
           type="text"
+          name="mt5-broker-name"
+          autoComplete="off"
           required
           value={form.broker_name}
           onChange={(e) => setForm({ ...form, broker_name: e.target.value })}
@@ -45,6 +54,8 @@ function ConnectForm({
         <label className="text-[13px] text-text-muted">MT5 account number</label>
         <input
           type="text"
+          name="mt5-account-login"
+          autoComplete="off"
           required
           value={form.account_login}
           onChange={(e) => setForm({ ...form, account_login: e.target.value })}
@@ -54,6 +65,8 @@ function ConnectForm({
         <label className="text-[13px] text-text-muted">MT5 password</label>
         <input
           type="password"
+          name="mt5-account-password"
+          autoComplete="new-password"
           required
           value={form.account_password}
           onChange={(e) => setForm({ ...form, account_password: e.target.value })}
@@ -63,6 +76,8 @@ function ConnectForm({
         <label className="text-[13px] text-text-muted">Server</label>
         <input
           type="text"
+          name="mt5-server"
+          autoComplete="off"
           required
           placeholder="e.g. Exness-MT5Trial9"
           value={form.server}
