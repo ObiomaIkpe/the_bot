@@ -11,7 +11,7 @@ plan's Verification section.
 import json
 
 from provisioning_poller.config import PollerConfig
-from provisioning_poller.provisioner import _next_free_port, _write_config_json
+from provisioning_poller.provisioner import _copy_mt5_install, _next_free_port, _write_config_json
 
 
 def _make_config(monkeypatch, bridge_root, **overrides):
@@ -79,3 +79,30 @@ def test_write_config_json_has_no_secrets_and_expected_shape(tmp_path, monkeypat
     assert "super-secret-should-not-appear" not in raw_text
     assert "also-should-not-appear" not in raw_text
     assert "12345678" not in raw_text  # account_login itself never written either
+
+
+def test_copy_mt5_install_skips_temp_logs_and_history(tmp_path):
+    """Regression test for a real failure hit on the first live VPS run:
+    copying from an actively-running source terminal raised WinError 32
+    (file in use) on files under temp/ and Bases/<server>/history/ --
+    both get skipped now, and none of them matter for a fresh install
+    anyway (see _ignore_volatile_mt5_dirs's docstring)."""
+    source = tmp_path / "MT5-Tony"
+    (source / "temp" / "EBWebView" / "Default" / "Network").mkdir(parents=True)
+    (source / "temp" / "EBWebView" / "Default" / "Network" / "Cookies").write_text("locked-in-real-life")
+    (source / "logs").mkdir()
+    (source / "logs" / "20260829.log").write_text("tony's own log, irrelevant to a new account")
+    (source / "Bases" / "Exness-MT5Trial9" / "history" / "EURUSDm").mkdir(parents=True)
+    (source / "Bases" / "Exness-MT5Trial9" / "history" / "EURUSDm" / "2026.hcc").write_text("locked-in-real-life")
+    (source / "config").mkdir()
+    (source / "config" / "common.ini").write_text("real config that SHOULD be copied")
+    (source / "terminal64.exe").write_text("pretend-binary")
+
+    dest = tmp_path / "MT5-newaccount"
+    _copy_mt5_install(str(source), dest)
+
+    assert (dest / "terminal64.exe").exists()
+    assert (dest / "config" / "common.ini").exists()
+    assert not (dest / "temp").exists()
+    assert not (dest / "logs").exists()
+    assert not (dest / "Bases" / "Exness-MT5Trial9" / "history").exists()

@@ -128,9 +128,27 @@ def _cleanup_prior_attempt(
     )
 
 
+def _ignore_volatile_mt5_dirs(_dir_path: str, names: list[str]) -> list[str]:
+    """Skips temp/, logs/, and cached history/ subdirectories wherever
+    they appear in the tree. Found live, on the very first real VPS
+    test run: copying from an ACTIVELY RUNNING source terminal
+    (Tony's real C:\\MT5-Tony) hits WinError 32 (file in use) on
+    exactly these -- MT5's embedded browser cache
+    (temp\\EBWebView\\...\\Cookies) and per-symbol history cache files
+    (Bases\\<server>\\history\\<symbol>\\*.hcc) are both actively held
+    open by a live terminal. None of them matter for a fresh install
+    anyway: MT5 re-downloads price history itself on first connect,
+    and temp/logs are per-instance runtime scratch data, not
+    configuration -- skipping them is strictly better than copying
+    them even when the source terminal ISN'T running."""
+    return [n for n in names if n.lower() in ("temp", "logs", "history")]
+
+
 def _copy_mt5_install(source_path: str, mt5_dest: Path) -> None:
-    """Mirrors provision_account.ps1 step 1 exactly."""
-    shutil.copytree(source_path, mt5_dest)
+    """Mirrors provision_account.ps1 step 1, minus the volatile
+    directories _ignore_volatile_mt5_dirs skips -- see that function's
+    docstring for why."""
+    shutil.copytree(source_path, mt5_dest, ignore=_ignore_volatile_mt5_dirs)
     if not (mt5_dest / "terminal64.exe").exists():
         raise ProvisioningError(f"Copy completed but terminal64.exe is missing at {mt5_dest}")
 
