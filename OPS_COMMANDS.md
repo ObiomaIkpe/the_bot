@@ -156,6 +156,59 @@ worker actually binds to for this account.
 
 ---
 
+### Rebuild the api container and apply migrations after a git pull
+
+```bash
+cd /app4/the-bot
+git pull
+docker compose build api
+docker compose up -d api
+docker compose exec api alembic upgrade head
+```
+
+**Purpose:** `git pull` alone changes nothing running -- the `api`
+container is a built image, not a live mount of the repo, so new code
+needs an explicit rebuild, and new migrations need an explicit
+`alembic upgrade head` (check first with
+`docker compose exec api alembic current` vs `alembic heads` if
+unsure whether it's actually behind). Forgetting the rebuild is how a
+stale image silently outlives several real code changes (this exact
+gap caused a CORS bug once already -- the running image was three
+weeks older than the code that was supposed to be live).
+
+---
+
+### Check a provisioning job's live status
+
+```bash
+docker compose exec -T db psql -U bot_user -d trading_bot -c "select provisioning_status, provisioning_error, bridge_url, provisioning_machine_id from broker_credentials where credential_id='<credential_id>';"
+```
+
+**Purpose:** the single query used over and over tonight to see what
+actually happened after each poller run -- whether a job is still
+`pending` (poller hasn't claimed it, check the machine's capacity),
+`in_progress` (claimed, working), `active` (done, check `bridge_url`),
+or `failed` (check `provisioning_error` for the real reason).
+
+---
+
+### Check a provisioning machine's registered capacity and current load
+
+```bash
+docker compose exec -T db psql -U bot_user -d trading_bot -c "select label, max_accounts from provisioning_machines where label='<label>';"
+docker compose exec -T db psql -U bot_user -d trading_bot -c "select count(*) from broker_credentials where provisioning_machine_id=(select machine_id from provisioning_machines where label='<label>') and provisioning_status in ('in_progress','active');"
+```
+
+**Purpose:** diagnoses the exact silent failure mode hit tonight -- a
+machine at capacity returns `{"job": null, "reason": "at_capacity"}`
+from `claim`, logged only at debug level, so nothing at all appears in
+the poller's console output. If a queued job never gets claimed and
+there's no error anywhere, this is the first thing to check (run the
+two queries separately -- keep `where`/`select` spaced correctly, a
+squashed `wherelabel=` is a real syntax error, not just untidy).
+
+---
+
 ## Windows VPS (`C:\bridge`)
 
 ### Deploying a code change from git to the actual running bridge
@@ -311,3 +364,103 @@ healthy -- it says nothing about whether the port is actually reachable
 from outside. The Hetzner-side `curl` is the real proof the firewall
 rule works, since that's the only machine that's actually supposed to
 reach it.
+
+---
+
+### Find what's actually listening on a port
+
+```powershell
+netstat -ano | findstr :8001
+```
+
+**Purpose:** the last column is the owning process's PID -- cross-
+reference against `Get-Process -Id <pid>` to identify it before
+touching anything. Used to catch a stale foreground `uvicorn` process
+silently squatting on port 8001 while an NSSM-managed copy tried (and
+crash-looped) trying to bind the same port. An empty result means
+nothing is listening there at all -- different problem, don't assume
+it's a port conflict without checking this first.
+
+---
+
+### Verify a deployed file actually has the fix you think it has
+
+```powershell
+Select-String -Path C:\bridge\scripts\provisioning_poller\provisioner.py -Pattern "_rmtree_with_retry"
+```
+
+**Purpose:** the single most useful command tonight for catching the
+`C:\bridge` vs `C:\the_bot_temp` deploy gap early -- a `git pull` +
+`Copy-Item` can silently copy the WRONG version, or skip a file
+entirely, and nothing about the poller's own startup will tell you
+that. Always confirm the actual fix's marker text is present in the
+deployed copy before re-running a test and assuming a fix didn't work.
+
+---
+
+### Check whether cleanup actually removed something
+
+```powershell
+Test-Path C:\MT5-<label>
+Get-Service bridge-<label> -ErrorAction SilentlyContinue
+```
+
+**Purpose:** `Test-Path` returning `True` after a failed job is
+supposed to have cleaned up is exactly how the silent
+`shutil.rmtree(ignore_errors=True)` bug was caught tonight -- the logs
+claimed cleanup happened, but the folder was still there. Don't trust
+a log line alone for anything filesystem-related; check directly.
+`Get-Service ... -ErrorAction SilentlyContinue` returning nothing (not
+an error) confirms no orphaned NSSM service was left behind either.
+
+---
+
+### Check what's actually deployed to `C:\bridge` vs the git checkout
+
+```powershell
+dir C:\bridge\scripts
+dir C:\the_bot_temp\bridge\scripts
+```
+
+**Purpose:** side-by-side comparison to spot anything present in the
+checkout but missing from the deployed copy -- run this any time a
+`ModuleNotFoundError`/`FileNotFoundError` shows up on the VPS after a
+`git pull`, before assuming the code itself is wrong.
+
+---
+
+### Confirm session env vars are actually set in the current window
+
+```powershell
+echo $env:MACHINE_TOKEN
+echo $env:CREDENTIAL_API_URL
+echo $env:PROVISIONING_PUBLIC_HOST
+echo $env:FIREWALL_REMOTE_IP
+```
+
+**Purpose:** these are session-scoped (`$env:`, not
+`[Environment]::SetEnvironmentVariable(...,"User")` -- deliberately,
+see the multi-account token-isolation reasoning elsewhere in this
+project) -- gone the moment you open a fresh terminal window. A blank
+line back from any of these means it's unset in *this* window, even if
+you set it correctly in a different one earlier. Check this before
+assuming a fresh 401/`KeyError` means the code or the token itself is
+wrong.
+
+---
+
+### Check (and clear) a permanent, User-scope environment variable
+
+```powershell
+[Environment]::GetEnvironmentVariable("BRIDGE_TOKEN", "User")
+[Environment]::SetEnvironmentVariable("BRIDGE_TOKEN", $null, "User")
+```
+
+**Purpose:** unlike `$env:` (session-only), these persist in the
+Windows registry across terminal windows and reboots -- which is
+exactly why they're the WRONG place for a per-account secret like
+`BRIDGE_TOKEN`: only one value can exist per variable name at this
+scope, so a second account's token would silently overwrite the
+first's the moment it's set this way. `GetEnvironmentVariable`
+returning blank confirms it's unset; use `$null` (not an empty string)
+to actually delete a previously-set one, not just blank it out.
