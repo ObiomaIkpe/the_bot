@@ -12,6 +12,9 @@ sub-steps the way provisioning reports 8 -- decommission normally
 finishes in a few seconds, so per-substep live progress isn't worth
 the complexity here (see VALID_PROVISIONING_STEPS's docstring in
 app/models/broker_credential.py).
+
+# sync-gap-fix-verification-marker: if this line is visible in
+# C:\bridge\bridge after a plain `git pull`, the fix worked.
 """
 import logging
 from pathlib import Path
