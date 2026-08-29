@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: trading_bot
+      POSTGRES_USER: bot_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8000"
+    env_file: ./.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  shadow_runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m shadow_runner.main
+    env_file: ./.env
+    environment:
+      BRIDGE_URL: http://38.247.137.208:8001
+      SHADOW_RUNNER_USER_ID: d4469ab9-742c-4656-8959-c21602dc71c5
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  admin_dashboard:
+    build:
+      context: .
+      dockerfile: admin_dashboard/Dockerfile
+    ports:
+      - "8004:8501"
+    env_file: ./.env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    command: caddy run --config /etc/caddyfile --adapter caddyfile
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:
