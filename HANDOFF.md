@@ -182,8 +182,12 @@ set of trusted callers).
 
 ## Open items, in priority order
 
-1. **Phase 3 step 3: day-selection-gate as real code.** See "Phase 3
-   progress" above -- this is the actual next coding task.
+1. **Phase 3 step 8: run live, validate.** Steps 1-7 are done -- see
+   "Phase 3 progress" above. Not actionable on demand: needs a full
+   real trading day with the market open to confirm the shadow
+   runner's whole cycle (10am decision, backfill, and a real journaled
+   trade if a signal fires) against genuinely live bars, not the
+   engineered test data used to find/fix the two cold-start bugs.
 2. **Commit the Hetzner `docker-compose.yml`.** `Dockerfile` is now
    committed (2026-08-28, commit `6dd1892` -- reconstructed after the
    original, never-committed copy on the Hetzner box went missing with
