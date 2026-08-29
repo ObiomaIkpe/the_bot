@@ -227,21 +227,33 @@ export function BrokerCredentials() {
                     />
                   </td>
                   <td>
-                    <div className="flex items-center gap-2">
-                      <Badge variant={provisioningBadgeVariant(cred.provisioning_status)}>
-                        {cred.provisioning_status === "in_progress"
-                          ? "provisioning"
-                          : cred.provisioning_status.replace("_", " ")}
-                      </Badge>
-                      {cred.provisioning_status === "in_progress" && cred.provisioning_step && (
-                        <span className="text-[13px] text-text-muted">
-                          {provisioningStepLabel(cred.provisioning_step)}
-                        </span>
-                      )}
-                    </div>
-                    {cred.provisioning_status === "failed" && cred.provisioning_error && (
-                      <p className="text-negative text-[13px] mt-1 mb-0">{cred.provisioning_error}</p>
-                    )}
+                    {(() => {
+                      // Defensive fallback: an older backend deployment
+                      // (pre-Phase-2) won't include provisioning_status
+                      // in its response at all -- never assume a field
+                      // added on the backend is already live everywhere
+                      // this frontend might be pointed at.
+                      const provisioningStatus = cred.provisioning_status ?? "not_requested";
+                      return (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <Badge variant={provisioningBadgeVariant(provisioningStatus)}>
+                              {provisioningStatus === "in_progress"
+                                ? "provisioning"
+                                : provisioningStatus.replace("_", " ")}
+                            </Badge>
+                            {provisioningStatus === "in_progress" && cred.provisioning_step && (
+                              <span className="text-[13px] text-text-muted">
+                                {provisioningStepLabel(cred.provisioning_step)}
+                              </span>
+                            )}
+                          </div>
+                          {provisioningStatus === "failed" && cred.provisioning_error && (
+                            <p className="text-negative text-[13px] mt-1 mb-0">{cred.provisioning_error}</p>
+                          )}
+                        </>
+                      );
+                    })()}
                   </td>
                   <td>
                     <div className="flex gap-2">
