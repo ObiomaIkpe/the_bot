@@ -1,9 +1,12 @@
 # HANDOFF — SMC/ICT Trading Bot: Live Bot Build
 
 **Purpose of this file:** continuity anchor for resuming work in a new
-session. Everything here is current as of mid-Phase-3 (infrastructure
-stage complete, shadow-runner code not yet started). Detailed records
-live in the docs referenced below -- this is the map, not the territory.
+session. Everything here is current as of 2026-08-29 (Phase 3 step 8
+done -- ~5 weeks of clean live shadow-mode running, two real signal
+fires; Phase 4 built/tested/gated-off; self-service MT5 provisioning +
+removal + the bridge sync-gap fix all shipped the same night).
+Detailed records live in the docs referenced below -- this is the map,
+not the territory.
 
 ---
 
@@ -14,7 +17,7 @@ live in the docs referenced below -- this is the map, not the territory.
 | Phase 0 -- Postgres schema + auth foundation | **Complete.** Running locally, 13+ tests, CI on GitHub Actions, both originally-unverified items closed (credential encryption round-trip, shadow-models CHECK constraint). See `PRODUCTION_READINESS.md`. |
 | Phase 1 -- streaming state machine | **Complete.** Reproduces the locked batch FVG model **exactly: 603/603 trades**, every field identical at 1e-9 tolerance, across 10.5 years, bar-by-bar, no lookahead. See `PHASE1_VALIDATION.md` (both parts) and `phase1/streaming/README.md`. |
 | Phase 2 -- read-only MT5 broker adapter | **Complete.** Bridge service live on the Windows VPS, verified against the real demo account on all four endpoints. See `PHASE2_VALIDATION.md`. |
-| Phase 3 -- shadow mode (live data, journal-only) | **In progress (steps 1-7 of 9 complete).** Shadow runner is deployed and running live on Hetzner (`shadow_runner` container, polling the VPS bridge every 60s). Two real bugs found and fixed during the first live cold-start (see `PHASE3_RESTART_RECOVERY.md` addendum 2). Step 8 (run live, validate) is the current focus. See "Phase 3 progress" below. |
+| Phase 3 -- shadow mode (live data, journal-only) | **Step 8 done (2026-08-29 report): ~5 weeks of clean, unattended live running since the two cold-start bugs were fixed** (`PHASE3_RESTART_RECOVERY.md` addendum 2) -- no further bugs, no manual intervention needed. Two real signal fires this week, both journaled correctly and tracked to a real outcome (one win, one loss -- n=2, says nothing about edge, but confirms the full live mechanics: `CurrentDay` construction, the 10am decision, backfill, and trade journaling all work correctly against genuinely live bars, not just engineered test data). Only step 9 (write `PHASE3_VALIDATION.md`) remains -- see "Phase 3 progress" below. |
 | Phase 4 -- real demo orders (designated live model only) | **Built, tested, wired end-to-end, and deliberately switched off -- not "not started."** Bridge side: all 7 order-placement endpoints exist in `bridge/app/main.py`, gated behind `BridgeConfig.orders_enabled` (default false) -- see `PHASE4_BRIDGE_ORDERS.md`. Shadow-runner side: `shadow_runner/order_manager.py` (labeled "Phase 4 step 2c" in its own docstring) is a complete order lifecycle manager -- fills, closes, daily loss limits -- fully wired into `runner.py`'s main loop, with 37 dedicated tests. The actual safety gate is `ModelConfig.status` (`disabled|shadow|active`): only `active` triggers real orders, and there's no self-service path to flip it -- a deliberate, manual DB change by design ("never automatically, never as a side effect of a migration"). One manual flag flip away from placing real (demo) orders for a specific model; whether any model has ever actually been set to `active` in production is DB state, not verifiable from the code. |
 
 Full test suite: **62 passed** from Phase 0/1 (Phase 0 app tests + 7
@@ -156,24 +159,29 @@ Full plan is 9 steps. Status:
    different `command:` (`python -m shadow_runner.main`), same pattern
    as this box's `app-worker-1`. `BRIDGE_URL` and
    `SHADOW_RUNNER_USER_ID` set directly on the service.
-8. 🔶 **Run live, validate -- in progress.** First live deployment
-   happened to cold-start on a weekend and immediately surfaced two real
-   bugs neither design review nor unit tests caught -- both found,
-   fixed, and confirmed via real logs on Hetzner within the same
-   session. Full writeup in `PHASE3_RESTART_RECOVERY.md`'s addendum 2:
-   (1) the bootstrap's own marker event was tricking the "did today
-   already start" check into a false positive on every cold start; (2)
-   cold-starting when the bridge's most-recent bars belong to an
-   already-finished day (Friday's tail end, seen on a Sunday) produced a
-   misleading `insufficient_bars` verdict instead of just waiting for
-   real data. Both fixed; system now correctly idles through market-
-   closed periods with clear log output. **Next real checkpoint:**
-   confirm a full normal trading day once the market reopens --
-   `CurrentDay` construction, the 10am decision, backfill, and (if any
-   signal fires) a real journaled trade, still against Friday's
-   engineered test data replaced by genuinely live EURUSDm bars.
-9. ⬜ **Write `PHASE3_VALIDATION.md`** -- once step 8 has a real trading
-   day's worth of live output to report on.
+8. ✅ **Run live, validate -- done (reported 2026-08-29).** First live
+   deployment happened to cold-start on a weekend and immediately
+   surfaced two real bugs neither design review nor unit tests caught
+   -- both found, fixed, and confirmed via real logs on Hetzner within
+   the same session. Full writeup in `PHASE3_RESTART_RECOVERY.md`'s
+   addendum 2: (1) the bootstrap's own marker event was tricking the
+   "did today already start" check into a false positive on every cold
+   start; (2) cold-starting when the bridge's most-recent bars belong
+   to an already-finished day (Friday's tail end, seen on a Sunday)
+   produced a misleading `insufficient_bars` verdict instead of just
+   waiting for real data. Both fixed. Since then: **~5 weeks of clean,
+   unattended live running, no further bugs, no manual intervention.**
+   Two real signal fires in the most recent week, both journaled
+   correctly and tracked through to a real outcome (one win, one loss).
+   n=2 says nothing about the strategy's edge (explicitly deferred to
+   the real-money gate -- item 7 below) -- what it confirms is the
+   mechanical question step 8 was actually asking: `CurrentDay`
+   construction, the 10am decision, backfill, and trade journaling all
+   work correctly against genuinely live bars, unattended, not just
+   engineered test data or short-lived manual observation.
+9. ⬜ **Write `PHASE3_VALIDATION.md`** -- step 8 now has real live
+   output to report on (5 weeks clean uptime, 2 real signal fires,
+   1W/1L). Actual next step for Phase 3.
 
 Deliberately deferred, not blocking: bridge authentication (currently
 gated only by the Windows Firewall IP restriction to the Hetzner box --
