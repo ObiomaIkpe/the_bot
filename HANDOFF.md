@@ -2,8 +2,9 @@
 
 **Purpose of this file:** continuity anchor for resuming work in a new
 session. Everything here is current as of 2026-08-29 (Phase 3 step 8
-done -- ~5 weeks of clean live shadow-mode running, two real signal
-fires; Phase 4 built/tested/gated-off; self-service MT5 provisioning +
+done -- ~5 weeks of clean live running; Phase 4 now proven live too --
+`fvg` is `active` in production and has autonomously placed two real
+demo orders, one TP and one SL; self-service MT5 provisioning +
 removal + the bridge sync-gap fix all shipped the same night).
 Detailed records live in the docs referenced below -- this is the map,
 not the territory.
@@ -17,8 +18,8 @@ not the territory.
 | Phase 0 -- Postgres schema + auth foundation | **Complete.** Running locally, 13+ tests, CI on GitHub Actions, both originally-unverified items closed (credential encryption round-trip, shadow-models CHECK constraint). See `PRODUCTION_READINESS.md`. |
 | Phase 1 -- streaming state machine | **Complete.** Reproduces the locked batch FVG model **exactly: 603/603 trades**, every field identical at 1e-9 tolerance, across 10.5 years, bar-by-bar, no lookahead. See `PHASE1_VALIDATION.md` (both parts) and `phase1/streaming/README.md`. |
 | Phase 2 -- read-only MT5 broker adapter | **Complete.** Bridge service live on the Windows VPS, verified against the real demo account on all four endpoints. See `PHASE2_VALIDATION.md`. |
-| Phase 3 -- shadow mode (live data, journal-only) | **Step 8 done (2026-08-29 report): ~5 weeks of clean, unattended live running since the two cold-start bugs were fixed** (`PHASE3_RESTART_RECOVERY.md` addendum 2) -- no further bugs, no manual intervention needed. Two real signal fires this week, both journaled correctly and tracked to a real outcome (one win, one loss -- n=2, says nothing about edge, but confirms the full live mechanics: `CurrentDay` construction, the 10am decision, backfill, and trade journaling all work correctly against genuinely live bars, not just engineered test data). Only step 9 (write `PHASE3_VALIDATION.md`) remains -- see "Phase 3 progress" below. |
-| Phase 4 -- real demo orders (designated live model only) | **Built, tested, wired end-to-end, and deliberately switched off -- not "not started."** Bridge side: all 7 order-placement endpoints exist in `bridge/app/main.py`, gated behind `BridgeConfig.orders_enabled` (default false) -- see `PHASE4_BRIDGE_ORDERS.md`. Shadow-runner side: `shadow_runner/order_manager.py` (labeled "Phase 4 step 2c" in its own docstring) is a complete order lifecycle manager -- fills, closes, daily loss limits -- fully wired into `runner.py`'s main loop, with 37 dedicated tests. The actual safety gate is `ModelConfig.status` (`disabled|shadow|active`): only `active` triggers real orders, and there's no self-service path to flip it -- a deliberate, manual DB change by design ("never automatically, never as a side effect of a migration"). One manual flag flip away from placing real (demo) orders for a specific model; whether any model has ever actually been set to `active` in production is DB state, not verifiable from the code. |
+| Phase 3 -- shadow mode (live data, journal-only) | **Step 8 done (2026-08-29 report): ~5 weeks of clean, unattended live running since the two cold-start bugs were fixed** (`PHASE3_RESTART_RECOVERY.md` addendum 2) -- no further bugs, no manual intervention needed. `CurrentDay` construction, the 10am decision, and backfill all confirmed working correctly against genuinely live bars, not just engineered test data. Only step 9 (write `PHASE3_VALIDATION.md`) remains -- see "Phase 3 progress" below. (The two real signal fires this week went straight to real orders, not journal entries -- see Phase 4.) |
+| Phase 4 -- real demo orders (designated live model only) | **Live and proven, not just built.** `fvg`'s `ModelConfig.status` is `active` in production. This week it found two trade candidates entirely on its own and placed two real demo orders through the bridge with zero manual intervention -- one filled and hit take-profit, the other filled and hit stop-loss. Full pipeline validated end-to-end for the first time: autonomous signal detection -> real order placement (`bridge/app/main.py`'s order endpoints, `BridgeConfig.orders_enabled`) -> real fill -> real close via TP or SL (`shadow_runner/order_manager.py`, "Phase 4 step 2c"). n=2 says nothing about edge (explicitly deferred to the real-money gate, item 7 below) -- what it proves is that the mechanics work correctly under real autonomous operation, both outcome paths (TP and SL) included, not just in the 37 unit tests that covered this before. |
 
 Full test suite: **62 passed** from Phase 0/1 (Phase 0 app tests + 7
 streaming component test files), **plus 25 more from Phase 3**
@@ -171,14 +172,17 @@ Full plan is 9 steps. Status:
    produced a misleading `insufficient_bars` verdict instead of just
    waiting for real data. Both fixed. Since then: **~5 weeks of clean,
    unattended live running, no further bugs, no manual intervention.**
-   Two real signal fires in the most recent week, both journaled
-   correctly and tracked through to a real outcome (one win, one loss).
-   n=2 says nothing about the strategy's edge (explicitly deferred to
-   the real-money gate -- item 7 below) -- what it confirms is the
-   mechanical question step 8 was actually asking: `CurrentDay`
-   construction, the 10am decision, backfill, and trade journaling all
-   work correctly against genuinely live bars, unattended, not just
-   engineered test data or short-lived manual observation.
+   Two real signal fires in the most recent week -- `fvg`'s
+   `ModelConfig.status` is `active` in production, so both went
+   straight to real (demo) orders rather than journal entries, one
+   hitting take-profit and one hitting stop-loss (see Phase 4's own
+   entry above for what that actually validates). n=2 says nothing
+   about the strategy's edge (explicitly deferred to the real-money
+   gate -- item 7 below) -- what it confirms here is the mechanical
+   question step 8 was actually asking: `CurrentDay` construction, the
+   10am decision, and backfill all work correctly against genuinely
+   live bars, unattended, not just engineered test data or short-lived
+   manual observation.
 9. ⬜ **Write `PHASE3_VALIDATION.md`** -- step 8 now has real live
    output to report on (5 weeks clean uptime, 2 real signal fires,
    1W/1L). Actual next step for Phase 3.
