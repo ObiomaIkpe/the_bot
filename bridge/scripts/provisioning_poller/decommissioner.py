@@ -15,6 +15,9 @@ app/models/broker_credential.py).
 
 # sync-gap-fix-verification-marker: if this line is visible in
 # C:\bridge\bridge after a plain `git pull`, the fix worked.
+# sync-gap-fix-verification-marker-v2: confirmed live, 2026-08-29 --
+# the poller now runs from C:\bridge\bridge and a real, brand-new
+# commit (this one) flowed through with nothing but `git pull`.
 """
 import logging
 from pathlib import Path
