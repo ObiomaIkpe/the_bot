@@ -1,10 +1,10 @@
 # Ops commands reference
 
 Running log of commands used against the Hetzner production server
-(`/app4/the-bot`) and the Windows VPS (`C:\bridge`), kept for your own
-reference so you don't have to re-derive them next time. Append new
-ones as they come up — newest at the bottom of each section, each with
-what it's for.
+(`/app4/the-bot`), the Windows VPS (`C:\bridge`), and this local dev
+checkout, kept for your own reference so you don't have to re-derive
+them next time. Append new ones as they come up — newest at the bottom
+of each section, each with what it's for.
 
 ## Hetzner (Linux, `/app4/the-bot`)
 
@@ -684,3 +684,99 @@ when a poller run's `IPC timeout`/`Authorization failed` message alone
 isn't enough to diagnose. Needs the folder to actually exist first --
 it gets deleted by cleanup after every failed attempt, so either catch
 it mid-run or let a fresh attempt create it before running this.
+
+---
+
+## Local development (this checkout)
+
+---
+
+### Run the full test suite and compare against the known baseline
+
+```bash
+venv/bin/python -m pytest -q 2>&1 | tail -14
+```
+
+**Purpose:** the standard "did I break anything" check after any code
+change. This project has **10 pre-existing, unrelated failures**
+(`test_migrations.py::test_migrations_match_models`, 3x
+`test_user_settings_constraints.py`, 4x `tests/shadow_runner/*`, 2x
+`test_shadow_runner_recovery.py`) -- the bar is "same 10, zero new,"
+never "all green." To see exactly which ones are currently failing:
+```bash
+venv/bin/python -m pytest -q 2>&1 | grep "^FAILED"
+```
+
+---
+
+### Run a single test file (fast iteration while fixing one thing)
+
+```bash
+venv/bin/python -m pytest tests/path/to/test_file.py -q
+```
+
+**Purpose:** much faster than the full suite while actively working on
+one area -- always follow up with the full suite before calling
+something done, since a change can pass its own tests while breaking
+an unrelated area (this is how the `bridge_url`-removal change's effect
+on an old test, and a full-suite-only logging-isolation flake, both got
+caught).
+
+---
+
+### Compile-check before running tests
+
+```bash
+venv/bin/python -m py_compile path/to/file1.py path/to/file2.py
+```
+
+**Purpose:** catches plain syntax errors in a fraction of a second,
+before waiting on a full pytest run (which spins up a real Postgres
+database per session and takes 50+ seconds) just to discover a typo.
+
+---
+
+### Apply new migrations to the local dev database
+
+```bash
+venv/bin/python -m alembic upgrade head
+```
+
+**Purpose:** verifies a new migration actually runs cleanly against a
+real (local) Postgres before it's ever pushed anywhere -- separate from
+the test suite's own throwaway database (`tests/conftest.py` creates
+and migrates its own `_test`-suffixed DB per session), this is the
+same local dev database used for manual sanity checks.
+
+---
+
+### Check for unpushed commits before/after pushing
+
+```bash
+git fetch origin main --quiet
+git log origin/main..HEAD --oneline
+```
+
+**Purpose:** an empty result means everything's already pushed. Used
+repeatedly to confirm whether a `git push` actually happened yet
+(especially useful when commits might have been pushed via an IDE or
+another session rather than this one) before assuming local-only state.
+
+---
+
+### Prove an HTTP client works over real sockets, not just in-process
+
+```bash
+venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8899 &
+# ... run whatever needs a real running server, e.g. a script using
+# ProvisioningAdminClient or plain curl ...
+pkill -f "uvicorn app.main:app --host 127.0.0.1 --port 8899"
+```
+
+**Purpose:** the main test suite exercises the API via FastAPI's
+`TestClient`, which never actually opens a TCP socket -- this is how
+`admin_client.py`'s real HTTP wiring (headers, timeouts, status-code
+handling) got proven for real before ever touching the VPS. Always
+explicitly kill the background server afterward and confirm it's
+actually down (`curl` against it should fail with connection-refused)
+rather than assuming the shell job control handled it.
