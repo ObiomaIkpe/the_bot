@@ -1,1 +1,16 @@
 config.json
+
+# Deployment-only artifacts. None of these are meant to be tracked --
+# they only started living inside this directory once C:\bridge itself
+# became a git checkout (see HANDOFF.md open item 3 / the bridge/
+# sync-gap fix) instead of a hand-copied deploy target. venv/ is
+# regenerated from requirements.txt; accounts/ and logs/ are generated
+# per-account state; run_poller_task.ps1 holds real secrets (MACHINE_TOKEN
+# etc) and must never be committed, same reasoning as config.json above;
+# *.bak covers stray manual-intervention backups (some have held a
+# plaintext MT5 password in the past).
+venv/
+accounts/
+logs/
+scripts/provisioning_poller/run_poller_task.ps1
+*.bak
