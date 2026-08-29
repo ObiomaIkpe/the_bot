@@ -10,8 +10,9 @@ plan's Verification section.
 """
 import json
 
+from provisioning_poller import provisioner
 from provisioning_poller.config import PollerConfig
-from provisioning_poller.provisioner import _copy_mt5_install, _next_free_port, _write_config_json
+from provisioning_poller.provisioner import _copy_mt5_install, _next_free_port, _rmtree_with_retry, _write_config_json
 
 
 def _make_config(monkeypatch, bridge_root, **overrides):
@@ -106,3 +107,55 @@ def test_copy_mt5_install_skips_temp_logs_and_history(tmp_path):
     assert not (dest / "temp").exists()
     assert not (dest / "logs").exists()
     assert not (dest / "Bases" / "Exness-MT5Trial9" / "history").exists()
+
+
+def test_rmtree_with_retry_succeeds_once_the_lock_clears(tmp_path, monkeypatch):
+    """Regression test for a real failure hit on the second live VPS
+    run: a just-exited MT5 process can hold file handles open briefly
+    even after the process itself is gone, so an immediate rmtree can
+    silently leave files behind. Simulates a lock that clears after 2
+    failed attempts -- the real shutil.rmtree isn't touched, this just
+    proves the retry loop actually retries and then succeeds."""
+    target = tmp_path / "locked-dir"
+    target.mkdir()
+    (target / "file.txt").write_text("x")
+
+    calls = {"count": 0}
+    real_rmtree = provisioner.shutil.rmtree
+
+    def flaky_rmtree(path, ignore_errors=False):
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return  # simulates the target still existing (locked) after this "attempt"
+        real_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(provisioner.shutil, "rmtree", flaky_rmtree)
+    monkeypatch.setattr(provisioner.time, "sleep", lambda seconds: None)  # don't actually wait in tests
+
+    _rmtree_with_retry(target, attempts=5, delay_seconds=0)
+
+    assert calls["count"] == 3
+    assert not target.exists()
+
+
+def test_rmtree_with_retry_warns_if_never_clears(tmp_path, monkeypatch, caplog):
+    """The other half of the same fix: if it's STILL locked after every
+    attempt, this must log a clear warning -- not silently pretend it
+    succeeded the way the old bare ignore_errors=True call did."""
+    target = tmp_path / "permanently-locked-dir"
+    target.mkdir()
+
+    monkeypatch.setattr(provisioner.shutil, "rmtree", lambda path, ignore_errors=False: None)  # never removes it
+    monkeypatch.setattr(provisioner.time, "sleep", lambda seconds: None)
+    # Guard against some other test in the full suite leaving this
+    # module-level logger (a process-wide singleton via
+    # logging.getLogger(name)) disabled or non-propagating -- caplog's
+    # own level setting alone isn't enough to survive that.
+    monkeypatch.setattr(provisioner.log, "disabled", False)
+    monkeypatch.setattr(provisioner.log, "propagate", True)
+
+    with caplog.at_level("WARNING", logger="provisioning_poller.provisioner"):
+        _rmtree_with_retry(target, attempts=3, delay_seconds=0)
+
+    assert target.exists()
+    assert any("Could not fully remove" in record.message for record in caplog.records)

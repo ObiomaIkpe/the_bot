@@ -64,7 +64,7 @@ def provision_account(job: dict, config: PollerConfig) -> str:
         port = _next_free_port(config)
         _write_config_json(config_path, accounts_dir, label, terminal_path, port, job, config)
         _install_and_start_service(service_name, config_path, job, port, config)
-        _open_firewall_port(service_name, label, port, config)
+        _open_firewall_port(label, port, config)
         _wait_for_health(port, service_name, config)
     except Exception:
         log.info("Provisioning failed for %s -- cleaning up before reporting failure", label)
@@ -75,6 +75,26 @@ def provision_account(job: dict, config: PollerConfig) -> str:
 
 def _run_nssm(config: PollerConfig, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run([config.nssm_path, *args], capture_output=True, text=True)
+
+
+def _rmtree_with_retry(path: Path, attempts: int = 5, delay_seconds: float = 1.0) -> None:
+    """Found live, on the second real VPS test run: a just-exited MT5
+    terminal process can hold Windows file handles open for a brief
+    moment even after the process itself is already gone -- a bare
+    shutil.rmtree(ignore_errors=True) run immediately afterward can
+    silently leave the folder (or part of it) behind with ZERO
+    indication anything went wrong, since ignore_errors swallows the
+    failure entirely. Retries with a short delay instead of giving up
+    (or silently ignoring) on the first attempt; logs a clear warning
+    if it still can't be fully removed, rather than pretending it
+    worked."""
+    for attempt in range(1, attempts + 1):
+        shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            return
+        if attempt < attempts:
+            time.sleep(delay_seconds)
+    log.warning("Could not fully remove %s after %d attempts -- some files may still be locked", path, attempts)
 
 
 def _cleanup_prior_attempt(
@@ -114,10 +134,10 @@ def _cleanup_prior_attempt(
             "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
         )
         subprocess.run(["powershell", "-Command", ps_kill], capture_output=True, text=True)
-        shutil.rmtree(mt5_dest, ignore_errors=True)
+        _rmtree_with_retry(mt5_dest)
 
     if accounts_dir.exists():
-        shutil.rmtree(accounts_dir, ignore_errors=True)
+        _rmtree_with_retry(accounts_dir)
 
     # Idempotent -- succeeds (as a no-op) whether or not a rule from a
     # prior attempt actually exists. A failed job shouldn't leave an
@@ -285,7 +305,7 @@ def _install_and_start_service(
         raise ProvisioningError(f"nssm start failed: {start.stdout}{start.stderr}")
 
 
-def _open_firewall_port(service_name: str, label: str, port: int, config: PollerConfig) -> None:
+def _open_firewall_port(label: str, port: int, config: PollerConfig) -> None:
     """New step, not in provision_account.ps1 -- added because of a
     real incident PHASE2_VALIDATION.md already documents once by hand:
     port 8001 needed an explicit Windows Firewall inbound rule scoped
