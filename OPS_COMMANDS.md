@@ -10,6 +10,50 @@ what it's for.
 
 ---
 
+### List or find a user by email
+
+```bash
+docker compose exec -T db psql -U bot_user -d trading_bot -c "select user_id, email, created_at from users;"
+```
+
+**Purpose:** `id` isn't a real column on `users` -- the primary key is
+`user_id` (a UUID), a common enough mix-up to cause its own "column
+does not exist" error. Used to confirm a real account's exact email
+(caught a login failure caused by trying `you@example.com`, a
+placeholder, instead of the real registered address) and to find a
+`user_id` for other queries that need it (e.g. looking up broker
+credentials by owner).
+
+---
+
+### Reset a user's password directly in the database
+
+```bash
+read -s -p "New password for <email>: " NEWPW
+echo
+HASH=$(docker compose exec -T api python3 -c "from passlib.context import CryptContext; import sys; pwd_context = CryptContext(schemes=['bcrypt'], deprecated='auto'); print(pwd_context.hash(sys.stdin.read().strip()))" <<< "$NEWPW")
+if [ -z "$HASH" ]; then
+  echo "Hash computation failed -- aborting, NOT touching the DB."
+else
+  docker compose exec -T db psql -U bot_user -d trading_bot -c "UPDATE users SET password_hash = '$HASH' WHERE email = '<email>';"
+fi
+unset NEWPW HASH
+```
+
+**Purpose:** no self-service password-reset flow exists yet, so this
+is the only way to recover access to an account. `read -s` keeps the
+new plaintext password out of shell history and off the screen; hashing
+happens inside the `api` container specifically so it uses the exact
+same `passlib`/`bcrypt` versions the app itself verifies against,
+never a locally-installed copy that might differ. The empty-hash guard
+matters: a multi-line `python -c` pasted into a shell can silently
+break (indentation swallowed by the terminal) and produce an empty
+`$HASH`, which would otherwise wipe the password to an unusable value
+instead of failing loudly -- always use a single-line `python -c`
+for exactly this reason, never multi-line.
+
+---
+
 ### Check whether a broker credential already exists for a user
 
 ```bash
@@ -382,6 +426,14 @@ your screen -- don't paste the output anywhere). `Paused` (not
 auto-restarting -- `Start-Service` won't fix that, use
 `nssm restart <service-name>` instead, after fixing the underlying cause.
 
+To explicitly set (not just check) whether a service survives a
+reboot:
+```powershell
+Set-Service <service-name> -StartupType Automatic
+```
+`nssm install` already defaults new services to this, so it's mainly
+needed if one was ever created differently, or to confirm intent.
+
 ---
 
 ### Restart / reinstall an NSSM service cleanly
@@ -560,6 +612,19 @@ Get-ChildItem C:\nssm -Recurse -Filter nssm.exe
 installed via choco/winget (which add it to PATH automatically) -- this
 finds the real full path (e.g. `C:\nssm\nssm.exe`) so every other
 `nssm.exe` command in this file actually resolves.
+
+---
+
+### Search running processes when you don't know the exact name yet
+
+```powershell
+Get-Process | Where-Object {$_.ProcessName -like "*python*" -or $_.ProcessName -like "*uvicorn*"}
+```
+
+**Purpose:** a broader net than `Get-Process <exact-name>` for the
+early stage of troubleshooting, before it's clear which process (or
+how many) is actually relevant -- narrow down to a specific PID/path
+with a targeted check once something interesting shows up here.
 
 ---
 
