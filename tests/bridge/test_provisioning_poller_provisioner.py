@@ -9,6 +9,9 @@ only be proven on the real VPS -- see the Phase 1 plan's Verification
 section.
 """
 import json
+import sys
+
+import pytest
 
 from provisioning_poller import provisioner
 from provisioning_poller.config import PollerConfig
@@ -82,31 +85,51 @@ def test_write_config_json_has_no_secrets_and_expected_shape(tmp_path, monkeypat
     assert "12345678" not in raw_text  # account_login itself never written either
 
 
-def test_copy_mt5_install_skips_temp_logs_and_history(tmp_path):
-    """Regression test for a real failure hit on the first live VPS run:
-    copying from an actively-running source terminal raised WinError 32
-    (file in use) on files under temp/ and Bases/<server>/history/ --
-    both get skipped now, and none of them matter for a fresh install
-    anyway (see _ignore_volatile_mt5_dirs's docstring)."""
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="_copy_mt5_install now shells out to robocopy (Windows-only) -- see "
+    "conftest.py: the MT5-adjacent poller steps are only provable on the VPS",
+)
+def test_copy_mt5_install_keeps_volatile_dirs_and_copies_config(tmp_path):
+    """Regression test for TWO real failures, in order:
+
+    1. First live VPS run: copying from an actively-running source
+       terminal raised WinError 32 (file in use) on the cache files it
+       holds open (temp\\EBWebView\\...\\Cookies, Bases\\<server>\\history\\
+       *.hcc). shutil.copytree aborts the whole copy on the first one.
+    2. The fix for (1) skipped the entire temp/, logs/ and history/
+       subtrees -- which then made the fresh terminal's mt5.initialize()
+       fail with (-10001, 'IPC send failed'): no temp/ directory, no
+       local IPC channel for the MetaTrader5 Python package to attach
+       to. See _copy_mt5_install's docstring.
+
+    So the contract now: every directory survives the copy (their stale
+    contents don't have to), real config files are copied, and a locked
+    source file is logged-and-skipped rather than fatal. The
+    locked-file tolerance itself is only exercised for real on the VPS
+    (needs an actual open handle); here we prove the happy path keeps
+    the directories v2 wrongly deleted."""
     source = tmp_path / "MT5-Tony"
     (source / "temp" / "EBWebView" / "Default" / "Network").mkdir(parents=True)
-    (source / "temp" / "EBWebView" / "Default" / "Network" / "Cookies").write_text("locked-in-real-life")
+    (source / "temp" / "EBWebView" / "Default" / "Network" / "Cookies").write_text("browser cache")
     (source / "logs").mkdir()
     (source / "logs" / "20260829.log").write_text("tony's own log, irrelevant to a new account")
     (source / "Bases" / "Exness-MT5Trial9" / "history" / "EURUSDm").mkdir(parents=True)
-    (source / "Bases" / "Exness-MT5Trial9" / "history" / "EURUSDm" / "2026.hcc").write_text("locked-in-real-life")
-    (source / "config").mkdir()
-    (source / "config" / "common.ini").write_text("real config that SHOULD be copied")
+    (source / "Bases" / "Exness-MT5Trial9" / "history" / "EURUSDm" / "2026.hcc").write_text("stale price cache")
+    (source / "Config").mkdir()
+    (source / "Config" / "common.ini").write_text("real config that SHOULD be copied")
     (source / "terminal64.exe").write_text("pretend-binary")
 
     dest = tmp_path / "MT5-newaccount"
     _copy_mt5_install(str(source), dest)
 
     assert (dest / "terminal64.exe").exists()
-    assert (dest / "config" / "common.ini").exists()
-    assert not (dest / "temp").exists()
-    assert not (dest / "logs").exists()
-    assert not (dest / "Bases" / "Exness-MT5Trial9" / "history").exists()
+    assert (dest / "Config" / "common.ini").read_text() == "real config that SHOULD be copied"
+    # The directories v2 stripped -- their presence is exactly what
+    # mt5.initialize() needs; the stale contents don't matter.
+    assert (dest / "temp").is_dir()
+    assert (dest / "logs").is_dir()
+    assert (dest / "Bases" / "Exness-MT5Trial9" / "history").is_dir()
 
 
 def test_rmtree_with_retry_succeeds_once_the_lock_clears(tmp_path, monkeypatch):

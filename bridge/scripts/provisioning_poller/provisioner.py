@@ -173,29 +173,125 @@ def _cleanup_prior_attempt(
     )
 
 
-def _ignore_volatile_mt5_dirs(_dir_path: str, names: list[str]) -> list[str]:
-    """Skips temp/, logs/, and cached history/ subdirectories wherever
-    they appear in the tree. Found live, on the very first real VPS
-    test run: copying from an ACTIVELY RUNNING source terminal
-    (Tony's real C:\\MT5-Tony) hits WinError 32 (file in use) on
-    exactly these -- MT5's embedded browser cache
-    (temp\\EBWebView\\...\\Cookies) and per-symbol history cache files
-    (Bases\\<server>\\history\\<symbol>\\*.hcc) are both actively held
-    open by a live terminal. None of them matter for a fresh install
-    anyway: MT5 re-downloads price history itself on first connect,
-    and temp/logs are per-instance runtime scratch data, not
-    configuration -- skipping them is strictly better than copying
-    them even when the source terminal ISN'T running."""
-    return [n for n in names if n.lower() in ("temp", "logs", "history")]
-
-
 def _copy_mt5_install(source_path: str, mt5_dest: Path) -> None:
-    """Mirrors provision_account.ps1 step 1, minus the volatile
-    directories _ignore_volatile_mt5_dirs skips -- see that function's
-    docstring for why."""
-    shutil.copytree(source_path, mt5_dest, ignore=_ignore_volatile_mt5_dirs)
+    """Copies the whole portable MT5 install to a fresh per-account
+    folder, via robocopy -- deliberately NOT shutil.copytree. Both
+    earlier shapes of this function were wrong in a way worth keeping
+    written down:
+
+    v1 (shutil.copytree(source, dest), no ignore): mirrored
+    provision_account.ps1's `Copy-Item -Recurse` exactly. Failed on the
+    first real VPS run with WinError 32 -- the source can be Tony's own,
+    actively-running C:\\MT5-Tony, whose embedded-browser cache
+    (temp\\EBWebView\\...\\Cookies) and per-symbol price-history cache
+    (Bases\\<server>\\history\\<symbol>\\*.hcc) are held open by the live
+    terminal. copytree aborts the ENTIRE copy on the first locked file.
+
+    v2 (copytree with ignore= skipping every temp/, logs/, history/
+    subtree): dodged WinError 32 but broke the very next step.
+    _verify_login then failed, every single time, with
+    (-10001, 'IPC send failed') -- a fast ~4s failure, nothing ever
+    listening. A terminal launched /portable from a folder that has no
+    temp/ directory does not bring up the local IPC channel the
+    MetaTrader5 Python package attaches to (it doesn't recreate temp/ if
+    it's absent at launch). The single provisioning run that ever
+    succeeded predated v2 and did a full copy; every run after v2
+    shipped died identically at _verify_login. The volatile DIRECTORIES
+    have to exist at copy time; their stale CONTENTS do not -- MT5
+    re-downloads history on first connect and repopulates temp/ itself
+    once the directory is there.
+
+    Turned out not to be the whole story either -- see the "single
+    launch, still fails" note in _verify_login's own docstring, found
+    AFTER this rewrite. Keeping this version regardless: a full,
+    complete copy is still the correct contract for "a fresh portable
+    install," independent of whatever else is causing -10001.
+
+    v3 (this): robocopy /E copies every directory, and logs-and-skips
+    the handful of individually locked cache files instead of aborting.
+    Complete tree + WinError 32 tolerated. robocopy's exit code is a
+    bitmask: < 8 is a clean copy, 8..15 means "some files were skipped"
+    (here: the locked caches -- expected, logged, non-fatal), >= 16 is a
+    real failure. The terminal64.exe check afterward is the actual
+    guarantee the copy is usable, independent of the exit code."""
+    mt5_dest.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [
+            "robocopy", str(source_path), str(mt5_dest),
+            "/E",            # every subdirectory, including empty ones
+            "/R:0", "/W:0",  # never retry a locked file (robocopy's default is 1e6 retries x 30s)
+            "/NFL", "/NDL", "/NP",  # quiet: no per-file / per-dir list, no progress bar (keep the summary)
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode >= 16:
+        raise ProvisioningError(
+            f"robocopy could not copy {source_path} -> {mt5_dest} "
+            f"(exit {result.returncode}): {result.stdout.strip()} {result.stderr.strip()}"
+        )
+    if result.returncode >= 8:
+        # Individual files failed to copy. Expected, and safe, when the
+        # source is a running terminal: the locked *.hcc history cache
+        # and EBWebView cookie DB, both rebuilt by the fresh terminal.
+        # Logged in full so a genuinely missing config file can't hide
+        # behind "oh, that's just the usual locked-cache noise".
+        errors = [ln.strip() for ln in result.stdout.splitlines() if "ERROR" in ln.upper()]
+        log.warning(
+            "robocopy skipped %d locked file(s) copying %s (expected when the source terminal is running): %s",
+            len(errors), source_path, " | ".join(errors) or result.stdout.strip()[-500:],
+        )
     if not (mt5_dest / "terminal64.exe").exists():
-        raise ProvisioningError(f"Copy completed but terminal64.exe is missing at {mt5_dest}")
+        raise ProvisioningError(
+            f"MT5 install copy did not produce terminal64.exe at {mt5_dest} "
+            f"(robocopy exit {result.returncode}) -- the copy is incomplete, "
+            f"not just missing cache files"
+        )
+
+
+def _mt5_terminal_log_tail(mt5_dest: Path, since: float, max_lines: int = 40) -> str:
+    """Best-effort read of the newest lines the just-launched portable
+    terminal wrote to its own journal (mt5_dest\\logs\\<date>.log). MT5
+    writes these UTF-16, tab-separated.
+
+    Added after a live incident where _verify_login kept failing with a
+    bare (-10001, 'IPC send failed') from mt5.initialize() and NOTHING
+    else -- that code alone can't tell "the account won't authorize"
+    apart from "the terminal never opened its IPC pipe" apart from "two
+    terminals are fighting over the same portable dir". The terminal's
+    own journal ("authorization failed", "no connection to <server>",
+    "account disabled", "terminal started"...) is the only artifact that
+    says which.
+
+    `since` (a time.time() captured right before launching this
+    attempt) is load-bearing, not decoration: robocopy preserves the
+    SOURCE file's original mtime, so a copied-over history.log from
+    Tony's own terminal weeks ago still carries that old timestamp even
+    though it was "just copied" moments ago. Without filtering by
+    `since`, glob+sort-by-name or sort-by-mtime can both silently return
+    one of Tony's old journals instead of anything from THIS run --
+    exactly what happened the first time this was added (every failure
+    reported the identical stale 2026-08-01 compiler log). Only a log
+    file actually written or appended to AFTER `since` can possibly be
+    about this attempt."""
+    try:
+        logs_dir = mt5_dest / "logs"
+        candidates = [p for p in logs_dir.glob("*.log") if p.stat().st_mtime >= since]
+        if not candidates:
+            return "(no terminal journal was created or updated during this attempt -- only pre-existing, stale logs are present, or the terminal never started)"
+        newest = max(candidates, key=lambda p: p.stat().st_mtime)
+        raw = newest.read_bytes()
+        for enc in ("utf-16", "utf-8", "latin-1"):
+            try:
+                text = raw.decode(enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        else:
+            return "(could not decode terminal journal log)"
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        return "\n".join(lines[-max_lines:]) or "(terminal journal log is empty)"
+    except OSError as e:
+        return f"(could not read terminal journal log: {e})"
 
 
 def _verify_login(terminal_path: Path, job: dict, config: PollerConfig) -> None:
@@ -218,7 +314,17 @@ def _verify_login(terminal_path: Path, job: dict, config: PollerConfig) -> None:
     demo account, ruling out account-side throttling as the cause.
     config.mt5_verify_timeout_ms was bumped up to compensate for this
     single call now covering the full cold launch, not just the
-    verification of an already-warm one."""
+    verification of an already-warm one.
+
+    UPDATE, found live right after deploying the above: removing the
+    pre-launch did NOT fix -10001 either -- same account, same error,
+    same step, same speed, on a clean redeploy. The double-launch race
+    was real but was not the (or not the only) root cause. Neither
+    Python's bare error code nor this poller's own logs say why MT5
+    itself refuses the IPC handshake, so _mt5_terminal_log_tail's
+    capture of the terminal's OWN journal (below) is now the only
+    remaining source of a real answer -- read that message before
+    forming another hypothesis blind."""
     verify_script = Path(__file__).resolve().parent.parent / "verify_mt5_login.py"
     python_exe = config.venv_python if Path(config.venv_python).exists() else "python"
 
@@ -230,12 +336,17 @@ def _verify_login(terminal_path: Path, job: dict, config: PollerConfig) -> None:
         "--server", job["server"],
         "--timeout-ms", str(config.mt5_verify_timeout_ms),
     ]
+    since = time.time()
     result = subprocess.run(
         cmd, capture_output=True, text=True, timeout=config.mt5_verify_timeout_ms / 1000 + 15,
     )
     log.info("verify_mt5_login output: %s", (result.stdout or "").strip())
     if result.returncode != 0:
-        raise ProvisioningError(f"MT5 login verification failed: {result.stdout}{result.stderr}")
+        journal = _mt5_terminal_log_tail(terminal_path.parent, since)
+        raise ProvisioningError(
+            f"MT5 login verification failed: {result.stdout}{result.stderr}".strip()
+            + f"\n--- terminal journal ({terminal_path.parent}\\logs, newest, since this attempt) ---\n{journal}"
+        )
 
 
 def _next_free_port(config: PollerConfig) -> int:
