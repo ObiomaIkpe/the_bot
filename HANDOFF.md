@@ -194,12 +194,11 @@ set of trusted callers).
 
 ## Open items, in priority order
 
-1. **Phase 3 step 8: run live, validate.** Steps 1-7 are done -- see
-   "Phase 3 progress" above. Not actionable on demand: needs a full
-   real trading day with the market open to confirm the shadow
-   runner's whole cycle (10am decision, backfill, and a real journaled
-   trade if a signal fires) against genuinely live bars, not the
-   engineered test data used to find/fix the two cold-start bugs.
+1. ✅ **Phase 3 step 8: run live, validate.** DONE (2026-08-29 report)
+   -- see "Phase 3 progress" above and Phase 4's own entry: ~5 weeks
+   clean unattended running, two real autonomous demo trades this week
+   (one TP, one SL). Only step 9 (write `PHASE3_VALIDATION.md`)
+   remains for Phase 3.
 2. ✅ **Commit the Hetzner `docker-compose.yml`.** DONE 2026-08-29,
    commit `0a9c571` (same risk class `Dockerfile` already had once --
    `6dd1892` -- the original, never-committed copy on the Hetzner box
@@ -470,14 +469,14 @@ set of trusted callers).
 ## How to resume in a new chat
 
 Paste something like: "Continuing the SMC/ICT live bot build. Phases 0,
-1, and 2 complete. Phase 3 (shadow mode) steps 1-7 of 9 complete -- the
-shadow runner is deployed and running live on Hetzner
-(`shadow_runner` container, polling the VPS bridge every 60s). Step 8
-(run live, validate) is in progress: two real bugs were found and fixed
-during the first live cold-start (bootstrap marker false-positive,
-stale-bar-from-a-finished-day mishandling) -- see
-PHASE3_RESTART_RECOVERY.md's addendum 2 for the full story, both
-confirmed fixed via real Hetzner logs. Next checkpoint: confirm a full
-normal trading day once the market reopens, then write
-PHASE3_VALIDATION.md (step 9)." Then share the current repo state (zip
-or file tree) if code work is needed.
+1, and 2 complete. Phase 3 (shadow mode) is done through step 8 -- the
+shadow runner has been running live and clean on Hetzner for ~5 weeks,
+unattended, since two early cold-start bugs were found and fixed (see
+PHASE3_RESTART_RECOVERY.md's addendum 2). Phase 4 is live too: the
+`fvg` model's `ModelConfig.status` is `active` in production, and it
+has autonomously placed two real demo orders (one take-profit, one
+stop-loss) with zero manual intervention. Only step 9 (write
+PHASE3_VALIDATION.md) remains open on the validation side. See
+HANDOFF.md's 'Open items' for everything else still pending." Then
+share the current repo state (zip or file tree) if code work is
+needed.
