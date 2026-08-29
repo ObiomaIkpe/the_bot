@@ -195,8 +195,8 @@ set of trusted callers).
    Hetzner-specific `docker-compose.yml` still only exists on the box
    itself, not in the repo -- same risk as the Dockerfile had, worth
    fixing before it drifts or disappears the same way.
-3. **`C:\bridge`/checkout sync gap -- fixed for the provisioning poller
-   (2026-08-29), Tony's bridge worker still pending.** Was: `bridge/`
+3. ✅ **`C:\bridge`/checkout sync gap -- fully fixed and verified live,
+   both halves (2026-08-29).** Was: `bridge/`
    lived only in the git checkout (`C:\the_bot_temp`); the VPS's
    actually-running `C:\bridge` was a separate, hand-copied directory,
    so every new/changed file under `bridge/` needed a manual
@@ -232,42 +232,49 @@ set of trusted callers).
    left staged-uncommitted intentionally; never push that removal, the
    real backend file must stay in shared history.
 
-   **Still open, one real attempt already made and rolled back
-   (2026-08-29).** `MT5Bridge-Tony`'s own NSSM service still points at
-   the old `C:\bridge` (unmigrated, working exactly as it did before
-   any of this). A cutover attempt caused a real, brief outage: before
-   changing anything, only `AppDirectory` and `AppEnvironmentExtra`
-   were checked/recorded -- not `Application` -- and `Application` was
-   wrongly assumed to follow the poller's `python.exe -m <module>`
-   pattern. Tony's service actually runs the venv's `uvicorn.exe`
-   console script directly (`Application = ...\venv\Scripts\uvicorn.exe`,
-   `AppParameters = app.main:app --host 0.0.0.0 --port 8001 --workers 1`,
-   no `-m uvicorn` needed since `uvicorn.exe` already is uvicorn).
-   Setting `Application` to `python.exe` produced
-   `python.exe: can't open file 'app.main:app'` (no `-m` flag, so
-   Python tried to open it as a script) -- NSSM auto-paused the
-   crash-looping service. Rolled back cleanly (the copied, not moved,
-   `config.json` meant the original was never at risk) and confirmed
-   `/health` -> `connected: true, trade_allowed: true` again. **Lesson
-   for the retry**: capture all four relevant NSSM fields
-   (`Application`, `AppDirectory`, `AppParameters`, `AppEnvironmentExtra`)
-   before changing anything, not just the ones expected to matter --
-   and the correct target `Application` for Tony specifically is
-   `C:\bridge\bridge\venv\Scripts\uvicorn.exe`, not `python.exe`.
+   **Stage B (`MT5Bridge-Tony`'s own cutover) is now also done,
+   verified live, on the second attempt.** The first attempt caused a
+   real, brief outage: before changing anything, only `AppDirectory`
+   and `AppEnvironmentExtra` were checked/recorded -- not `Application`
+   -- and `Application` was wrongly assumed to follow the poller's
+   `python.exe -m <module>` pattern. Tony's service actually runs the
+   venv's `uvicorn.exe` console script directly (`Application =
+   ...\venv\Scripts\uvicorn.exe`, `AppParameters = app.main:app --host
+   0.0.0.0 --port 8001 --workers 1`, no `-m uvicorn` needed since
+   `uvicorn.exe` already is uvicorn). Setting `Application` to
+   `python.exe` produced `python.exe: can't open file 'app.main:app'`
+   (no `-m` flag, so Python tried to open it as a script) -- NSSM
+   auto-paused the crash-looping service. Rolled back cleanly (the
+   copied, not moved, `config.json` meant the original was never at
+   risk) and confirmed `/health` -> `connected: true, trade_allowed:
+   true` again before retrying. **Lesson, worth generalizing beyond
+   this one incident**: capture all four relevant NSSM fields
+   (`Application`, `AppDirectory`, `AppParameters`,
+   `AppEnvironmentExtra`) before changing any live service's config,
+   not just the ones expected to matter, and never assume one
+   service's configuration pattern applies to another just because
+   both are "a Python worker service set up earlier."
 
-   Full recipe for the actual retry, whenever it happens: copy (not
-   move) `C:\bridge\config.json` into `C:\bridge\bridge\config.json`;
-   `nssm set MT5Bridge-Tony Application C:\bridge\bridge\venv\Scripts\uvicorn.exe`;
-   `nssm set MT5Bridge-Tony AppDirectory C:\bridge\bridge`; `nssm set
-   MT5Bridge-Tony AppEnvironmentExtra BRIDGE_TOKEN=... CREDENTIAL_API_URL=...
-   BRIDGE_CONFIG_PATH=C:\bridge\bridge\config.json` (all three together
-   -- replaces the whole list); restart; confirm `/health`. Deliberately
-   deferred to its own moment, same reasoning as the auto-logon/reboot
-   deferral elsewhere in this file -- this is the one service touching
-   Tony's real, live trading account, and it already proved it can go
-   wrong in a way worth being fully alert for, not rushed. Once done,
-   the old top-level `C:\bridge\app\`/`C:\bridge\scripts\` can be
-   deleted as unused duplicates.
+   The corrected retry succeeded cleanly: `Application ->
+   C:\bridge\bridge\venv\Scripts\uvicorn.exe` (not `python.exe`),
+   `AppDirectory -> C:\bridge\bridge`, `AppEnvironmentExtra` set to all
+   three of `BRIDGE_TOKEN`/`CREDENTIAL_API_URL`/`BRIDGE_CONFIG_PATH=
+   C:\bridge\bridge\config.json` together in one call, all three values
+   verified with `nssm get` *before* restarting this time -- restart
+   succeeded first try, `/health` confirmed `connected: true,
+   trade_allowed: true`. Both `MT5Bridge-Tony` and the provisioning
+   poller now run from the same `C:\bridge\bridge` git checkout; a
+   future change to either `bridge/app/` or
+   `bridge/scripts/provisioning_poller/` only needs `git pull` there,
+   no more `Copy-Item` anywhere in this pipeline.
+
+   **Still open, low urgency**: the old top-level `C:\bridge\app\`/
+   `C:\bridge\scripts\` (now-unused pre-migration duplicates) and the
+   old `C:\bridge\venv` (no longer referenced by anything, now that
+   both services are on the new one) can be deleted once this has run
+   stable for a while -- not deleted immediately, deliberately, to keep
+   an easy manual fallback for a few days after two real service
+   restarts in one night.
 4. **Second broker account (friend's).** Still blocked on credentials,
    not on anything technical -- the bridge architecture already
    supports it. Pick up whenever available: new `config.json`, new
