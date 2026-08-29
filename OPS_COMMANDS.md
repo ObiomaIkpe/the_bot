@@ -209,6 +209,88 @@ squashed `wherelabel=` is a real syntax error, not just untidy).
 
 ---
 
+### Read the api container's own logs
+
+```bash
+docker compose logs api --tail 30
+```
+
+**Purpose:** the single most-used diagnostic command of the whole
+project -- migration output, startup errors, unhandled-exception
+tracebacks (the app has a global exception handler that logs full
+tracebacks for any 500) all land here. Check this before guessing at a
+cause for any unexpected API behavior.
+
+---
+
+### Check whether the running image is stale
+
+```bash
+docker compose images api
+docker inspect --format '{{.Created}}' <image-id-from-above>
+```
+
+**Purpose:** compares the running image's actual build date against
+when the code it's supposed to contain was committed. Caught a real
+incident once: the `api` container was three weeks older than the CORS
+support it needed, because a `git pull` had happened without a
+matching `docker compose build`.
+
+---
+
+### Inspect a running container's actual config (env, cmd, entrypoint)
+
+```bash
+docker inspect <container-name-or-id> --format '{{json .Config}}'
+```
+
+**Purpose:** shows the real `Env`, `Cmd`, `WorkingDir`, and
+`ExposedPorts` a container is actually running with -- not what a
+Dockerfile or compose file *claims*, what's really loaded into that
+specific container. This is how the missing `Dockerfile` got
+reconstructed from scratch once, when the original (never committed)
+copy went missing with no trace.
+
+---
+
+### Back up the database before running new migrations
+
+```bash
+docker compose exec -T db pg_dump -U bot_user trading_bot > backup_before_migrate_$(date +%Y%m%d_%H%M%S).sql
+```
+
+**Purpose:** cheap insurance before `alembic upgrade head` when
+catching up on more than one migration at once -- run this first,
+always, even when confident the migrations are safe.
+
+---
+
+### Set up a disposable test job end-to-end (no real user/account involved)
+
+```bash
+curl -X POST https://api.ihusale.com.ng/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "provisioning-test@example.com", "password": "throwaway-test-password"}'
+
+TOKEN=$(curl -s -X POST https://api.ihusale.com.ng/auth/login \
+  -d "username=provisioning-test@example.com&password=throwaway-test-password" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+curl -X POST https://api.ihusale.com.ng/broker-credentials \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"broker_name": "provisioning-test", "account_login": "<demo login>", "account_password": "<demo password>", "server": "<demo server>", "account_type": "demo"}'
+```
+
+Then queue it (see "Manually queue a provisioning job" above) using
+the returned `credential_id`.
+
+**Purpose:** the real recipe used to set up every disposable test job
+tonight, without ever touching a real user or Tony's real account.
+Registering through the actual API (not a raw SQL insert) matters --
+`account_password` has to go through the app's own Fernet-encryption
+code path, which raw SQL can't do correctly.
+
+---
+
 ## Windows VPS (`C:\bridge`)
 
 ### Deploying a code change from git to the actual running bridge
@@ -464,3 +546,76 @@ scope, so a second account's token would silently overwrite the
 first's the moment it's set this way. `GetEnvironmentVariable`
 returning blank confirms it's unset; use `$null` (not an empty string)
 to actually delete a previously-set one, not just blank it out.
+
+---
+
+### Find where NSSM actually is, if it's not on PATH
+
+```powershell
+Get-ChildItem C:\nssm -Recurse -Filter nssm.exe
+```
+
+**Purpose:** `nssm` typing as a bare command fails
+(`CommandNotFoundException`) if it was downloaded manually rather than
+installed via choco/winget (which add it to PATH automatically) -- this
+finds the real full path (e.g. `C:\nssm\nssm.exe`) so every other
+`nssm.exe` command in this file actually resolves.
+
+---
+
+### Safely stop a specific process by PID
+
+```powershell
+Stop-Process -Id <pid> -Force
+```
+
+**Purpose:** always get the PID from a command that shows the exact
+path first (`Get-Process terminal64 | Select Id, Path` or
+`netstat -ano | findstr :<port>`'s last column) -- never stop a
+process by name alone when multiple instances of the same executable
+can be running (every MT5 account's terminal shares the name
+`terminal64.exe`).
+
+---
+
+### Watch for a short-lived process before it disappears
+
+```powershell
+1..25 | ForEach-Object { Get-Process terminal64 -ErrorAction SilentlyContinue | Select-Object Id, Path; Start-Sleep -Seconds 1 }
+```
+
+**Purpose:** catches a process that starts and exits on its own within
+seconds -- a single `Get-Process` check after the fact can easily miss
+it entirely and wrongly conclude "it never launched." This is exactly
+how a wrong MT5 server name was diagnosed: the terminal DID launch and
+ran for ~13 seconds before exiting on its own, which only this kind of
+repeated polling would catch.
+
+---
+
+### Check Windows' own record of an NSSM service failure
+
+```powershell
+Get-EventLog -LogName Application -Source nssm -Newest 10 | Format-List
+```
+
+**Purpose:** fallback diagnostic for when a service's `AppStdout`/
+`AppStderr` haven't been configured yet (check with
+`nssm get <service> AppStdout` first) -- NSSM logs service-level
+start/stop/crash events to the Windows Application event log
+independently of whatever the wrapped program itself logs.
+
+---
+
+### Manually launch MT5 directly, bypassing the poller entirely
+
+```powershell
+C:\MT5-<label>\terminal64.exe /portable /login:<login> /password:<password> /server:<server>
+```
+
+**Purpose:** the fastest way to see MT5's own real-time behavior with
+your own eyes (a login-error dialog, a EULA prompt, or nothing at all)
+when a poller run's `IPC timeout`/`Authorization failed` message alone
+isn't enough to diagnose. Needs the folder to actually exist first --
+it gets deleted by cleanup after every failed attempt, so either catch
+it mid-run or let a fresh attempt create it before running this.
