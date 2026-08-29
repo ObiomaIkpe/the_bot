@@ -194,7 +194,16 @@ set of trusted callers).
 3. **Decide where `bridge/` lives in version control.** Currently only
    exists on the VPS filesystem, not committed anywhere. Given it's a
    genuinely separate deployable (Windows-only, different hardware),
-   worth deciding: subfolder in the main repo, or its own repo.
+   worth deciding: subfolder in the main repo, or its own repo. **Real
+   cost of leaving this undecided, hit twice on 2026-08-29**: the
+   deployed `C:\bridge` and the git checkout (`C:\the_bot_temp`) are
+   two separate directories on the VPS -- `git pull` only updates the
+   checkout, so every new file under `bridge/` needs a manual
+   `Copy-Item` into `C:\bridge` afterward, or it's silently missing
+   (`ModuleNotFoundError`/`FileNotFoundError` at the worst possible
+   moment, mid-deploy). Either make `C:\bridge` itself the git
+   checkout, or write a small sync script -- this will keep costing
+   real time every deploy until it's fixed.
 4. **Second broker account (friend's).** Still blocked on credentials,
    not on anything technical -- the bridge architecture already
    supports it. Pick up whenever available: new `config.json`, new
@@ -216,12 +225,34 @@ set of trusted callers).
    cutover completed. Still outstanding: delete the pre-cutover backup
    files left in the VPS scratchpad (`config.json.v1....bak` still has
    the plaintext MT5 password).
-6. **Strategy-level research gaps (block real money, NOT the build):**
+6. **Self-service MT5 provisioning -- Phase 0+1 DONE 2026-08-29, Phase
+   2 remaining.** Goal: submitting the "Broker Connection" form alone
+   provisions an account's MT5 terminal + bridge worker automatically,
+   no manual VPS steps (this is what item 4 above currently requires by
+   hand). Phase 0 (DB schema + internal claim/complete/fail API,
+   commit `54fbcae`) and Phase 1 (the VPS-side poller,
+   `bridge/scripts/provisioning_poller/`, commits `0f78fbc`/`fc92b15`/
+   `a6c9688`/`e01c67c`) are both built and, as of tonight, verified
+   **end-to-end on real infrastructure** -- a genuinely disposable
+   Exness demo account was fully auto-provisioned (MT5 copied, logged
+   in, its own NSSM service installed+started, firewall opened,
+   `/health` verified locally and from the Hetzner box) and a
+   deliberate wrong-password job failed cleanly with no orphaned state.
+   The poller itself now runs as a permanent service (`MT5Provisioner`,
+   `StartType: Automatic`), same pattern as `MT5Bridge-Tony`. **Phase 2
+   -- not started**: `POST /broker-credentials` still doesn't set
+   `provisioning_status='pending'` automatically (jobs are still queued
+   by hand via SQL), and no frontend shows any of this yet. A
+   live-progress-reporting design (poller reports which step it's on,
+   not just a final connected/failed state) is sketched but not built --
+   see the `self_service_mt5_provisioning` memory for the full design
+   and the three real bugs found/fixed during tonight's live test.
+7. **Strategy-level research gaps (block real money, NOT the build):**
    no slippage/spread/commission modeling anywhere (material at ~1.1
    avg realized R:R); out-of-sample validation never done. Phase 4
    ends at demo orders; real money is a separate go/no-go gated on
    these.
-7. **Optional hardening backlog:** randomized-slice differential
+8. **Optional hardening backlog:** randomized-slice differential
    testing; per-bar performance profiling; Phase 0 prod items (rate
    limiting on /auth/login, CORS, secrets manager, dev/staging/prod
    separation); passlib deprecation (bcrypt<4.0 pin); pydantic
