@@ -264,7 +264,13 @@ export function BrokerCredentials() {
                             )}
                           </div>
                           {provisioningStatus === "failed" && cred.provisioning_error && (
-                            <p className="text-negative text-[13px] mt-1 mb-0">{cred.provisioning_error}</p>
+                            // Bounded + scrollable, not a raw dump: provisioning_error can carry
+                            // a multi-line MT5 terminal journal (tens of lines) on top of the error
+                            // itself -- an unbounded <p> here blew out the whole table's layout the
+                            // first time a long one showed up.
+                            <pre className="text-negative text-[12px] mt-1 mb-0 max-w-[320px] max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans">
+                              {cred.provisioning_error}
+                            </pre>
                           )}
                         </>
                       );
