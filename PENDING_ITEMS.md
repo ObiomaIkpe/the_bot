@@ -45,14 +45,16 @@ status changes -- don't let the two drift.
       data to report on: ~5 weeks of clean unattended live running, two
       real autonomous demo trades this week (one take-profit, one
       stop-loss).
-- [ ] **Clarify scope for `ob`/`fvg_ob` models.** Does an Order Block
-      batch/reference model already exist somewhere outside this repo
-      (the same starting point `fvg` had via the external, locked
-      `FVG_model.py`), or does this need strategy research from
-      scratch? No OB-related code or research exists anywhere in this
-      repo today -- confirmed by search. This answer changes the scope
-      from "port an existing proven strategy" to "research and backtest
-      a new one" entirely.
+- [ ] **New models beyond `fvg` (`ob`, `fvg_ob`, and any others).**
+      Clarified 2026-08-29: the user will bring the actual model
+      definitions/specs when ready. The job is then the same shape of
+      engineering `fvg` already went through -- reimplement each as a
+      bar-by-bar streaming state machine, validate it reproduces the
+      reference model's trades exactly (golden-master style), then wire
+      it into the same detection -> decision -> real-order pipeline --
+      not open-ended strategy research from scratch. No OB-related code
+      exists anywhere in this repo yet (confirmed by search), so this
+      genuinely starts from zero once the specs arrive.
 - [ ] **Logging/audit review.** What's actually in place today (the
       `events` table, `admin_dashboard/`, where Hetzner/VPS logs land)
       hasn't been audited end-to-end -- do that pass rather than
