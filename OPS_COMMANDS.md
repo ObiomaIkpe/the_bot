@@ -149,6 +149,43 @@ names use).
 
 ---
 
+### Tear down a completed test job so its MT5 account can be reused
+
+On the VPS:
+```powershell
+C:\nssm\nssm.exe stop bridge-<label>
+C:\nssm\nssm.exe remove bridge-<label> confirm
+Get-CimInstance Win32_Process -Filter "Name='terminal64.exe'" | Where-Object { $_.ExecutablePath -eq "C:\MT5-<label>\terminal64.exe" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+Remove-Item -Path C:\MT5-<label> -Recurse -Force
+netsh advfirewall firewall delete rule name="MT5 Bridge <label>"
+```
+On Hetzner:
+```bash
+docker compose exec -T db psql -U bot_user -d trading_bot -c "delete from broker_credentials where credential_id='<credential_id>';"
+```
+
+**Purpose:** a disposable demo account used for one successful test
+run ends up `active` with its own running service -- logging a second
+terminal into the same MT5 account simultaneously (by creating a new
+row reusing the same login) risks the broker kicking one session off,
+an unrelated confusion during a test. Cleaner to fully tear down the
+old test job first and redo the same account fresh, rather than
+needing a brand new disposable account for every single test.
+
+**The `Get-CimInstance`/`Stop-Process` line is not optional** --
+stopping the NSSM *service* only stops the bridge worker process, NOT
+the MT5 terminal itself, which the poller launched separately and
+keeps running independently. Skipping this step is exactly what
+`provisioner.py`'s own `_cleanup_prior_attempt()` always does first,
+for the same reason: without it, `Remove-Item` fails on dozens of
+locked files (browser-cache/profile data inside MT5's embedded
+`EBWebView`, plus `terminal64.exe` itself) with "Access is denied" or
+"being used by another process." Scoped by exact `ExecutablePath` --
+never a bare `taskkill /IM terminal64.exe`, which would also kill
+Tony's real, unrelated `C:\MT5-Tony\terminal64.exe`.
+
+---
+
 ### Raise a provisioning machine's capacity
 
 ```bash
@@ -336,6 +373,25 @@ code path, which raw SQL can't do correctly.
 ---
 
 ## Windows VPS (`C:\bridge`)
+
+### Deploying the whole provisioning_poller/ folder after a Phase 2-style change
+
+```powershell
+cd C:\the_bot_temp
+git pull
+Copy-Item -Path C:\the_bot_temp\bridge\scripts\provisioning_poller\* -Destination C:\bridge\scripts\provisioning_poller\ -Recurse -Force
+C:\nssm\nssm.exe restart MT5Provisioner
+```
+
+**Purpose:** whenever more than one file in `provisioning_poller/`
+changed (e.g. `admin_client.py` + `provisioner.py` + `runner.py`
+together, as in Phase 2), copy the whole folder's contents rather than
+one file at a time -- `-Force` overwrites existing files, `*` (not the
+folder itself) keeps the destination folder identity intact.
+`MT5Provisioner` needs an explicit restart afterward to actually load
+the new code -- copying files alone doesn't reload a running process.
+
+---
 
 ### Deploying a code change from git to the actual running bridge
 
@@ -672,6 +728,22 @@ independently of whatever the wrapped program itself logs.
 
 ---
 
+### Add/change one env var on a service without losing the others
+
+```powershell
+C:\nssm\nssm.exe set <service-name> AppEnvironmentExtra VAR1=val1 VAR2=val2 VAR3=val3
+```
+
+**Purpose:** `nssm set ... AppEnvironmentExtra` REPLACES the entire
+list, it doesn't append -- always pass every existing value again
+plus the new/changed one, or the ones you omit silently disappear
+(would re-break the exact `KeyError`/401 crash-loop already hit twice
+tonight for a different reason). Restart the service afterward
+(`nssm restart <service-name>`) -- setting the value alone doesn't
+reload an already-running process.
+
+---
+
 ### Manually launch MT5 directly, bypassing the poller entirely
 
 ```powershell
@@ -780,3 +852,4 @@ handling) got proven for real before ever touching the VPS. Always
 explicitly kill the background server afterward and confirm it's
 actually down (`curl` against it should fail with connection-refused)
 rather than assuming the shell job control handled it.
+

@@ -225,36 +225,74 @@ set of trusted callers).
    cutover completed. Still outstanding: delete the pre-cutover backup
    files left in the VPS scratchpad (`config.json.v1....bak` still has
    the plaintext MT5 password).
-6. **Self-service MT5 provisioning -- all 3 phases code-complete
-   2026-08-29, needs one real VPS run before trusting it for real
-   users.** Goal: submitting the "Broker Connection" form alone
-   provisions an account's MT5 terminal + bridge worker automatically,
-   no manual VPS steps (this is what item 4 above currently requires by
-   hand). Phase 0 (DB schema + internal claim/complete/fail API,
-   `54fbcae`) and Phase 1 (the VPS-side poller,
+6. **Self-service MT5 provisioning -- all 3 phases code-complete and
+   now verified live end-to-end (2026-08-29), including a real
+   architecture fix.** Goal: submitting the "Broker Connection" form
+   alone provisions an account's MT5 terminal + bridge worker
+   automatically, no manual VPS steps (this is what item 4 above
+   previously required by hand). Phase 0 (DB schema + internal
+   claim/complete/fail API, `54fbcae`), Phase 1 (the VPS-side poller,
    `bridge/scripts/provisioning_poller/`, `0f78fbc`/`fc92b15`/
-   `a6c9688`/`e01c67c`) were verified **end-to-end on real
-   infrastructure** the same night -- a genuinely disposable Exness
-   demo account was fully auto-provisioned (MT5 copied, logged in, its
-   own NSSM service installed+started, firewall opened, `/health`
-   verified locally and from the Hetzner box) and a deliberate
-   wrong-password job failed cleanly with no orphaned state. The poller
-   runs as a permanent service (`MT5Provisioner`, `StartType:
-   Automatic`), same pattern as `MT5Bridge-Tony`. Phase 2 (`6f6c96b`)
-   flips `POST /broker-credentials` to set `provisioning_status=
-   'pending'` automatically (conditional on an active
-   `ProvisioningMachine` existing) and adds live step-by-step progress
-   reporting (new `provisioning_step` column + `POST
-   /internal/provisioning-jobs/{id}/step`, called by the poller before
-   each real step, deliberately non-fatal if the report itself fails)
-   plus a self-service retry endpoint and the frontend UI for all of
-   it -- **but Phase 2 is sandbox-verified only** (13 new backend
-   tests, frontend type-checks clean), never run against the real VPS.
-   Before trusting this for a real user: deploy the Phase 2 poller
-   changes to `C:\bridge` (remember the `C:\bridge`/`C:\the_bot_temp`
-   sync gap, item 3 above), run migration `0013` on Hetzner, and do one
-   real disposable-account signup through the actual frontend to
-   confirm the live progress UI genuinely updates end-to-end. See the
+   `a6c9688`/`e01c67c`), and Phase 2 (`6f6c96b` -- flips
+   `POST /broker-credentials` to auto-set `provisioning_status=
+   'pending'`, adds live step-by-step progress reporting and a
+   self-service retry endpoint, plus the frontend UI for all of it)
+   were all built the same night. Real live testing then hit a
+   genuinely hard bug: a freshly-provisioned account failed every time
+   at `verifying_login` with `mt5.initialize() failed:
+   (-10001, 'IPC send failed')` -- reproduced on multiple disposable
+   demo accounts, ruling out account-side throttling. Root cause, found
+   by direct comparison (`53f3907`, `96592e9` for the misc code
+   improvements found along the way; the actual fix is infrastructure,
+   not code): **the poller ran as an NSSM Windows service, which lives
+   in Session 0 with no desktop -- a GUI app like `terminal64.exe`
+   launched from there has nothing to attach to and fails silently.**
+   Proven directly: the identical `mt5.initialize()` call succeeded
+   when run manually from an interactive PowerShell session and failed
+   every time through the service. Marking the service
+   `SERVICE_INTERACTIVE_PROCESS` did NOT fix it -- Windows Server 2022
+   no longer meaningfully supports interactive services despite `sc
+   config` accepting the flag.
+
+   **Fix deployed and verified live**: the poller now runs as a
+   Scheduled Task (`MT5ProvisioningPollerTask`, registered via
+   `Register-ScheduledTask` rather than `schtasks.exe` to avoid its
+   default 3-day execution time limit) under `vps-cgea\administrator`'s
+   own interactive logon session instead of the old `MT5Provisioner`
+   NSSM service (now stopped + `start= disabled`, not deleted, in case
+   of rollback). Its env vars (`MACHINE_TOKEN` etc, same values the
+   NSSM service used) live in
+   `C:\bridge\scripts\provisioning_poller\run_poller_task.ps1` --
+   **VPS-only, deliberately never committed to git**, same treatment as
+   `frontend/.env`; if this VPS is ever rebuilt, that file has to be
+   recreated by hand from the current `MACHINE_TOKEN`/
+   `CREDENTIAL_API_URL`/`PROVISIONING_PUBLIC_HOST`/`FIREWALL_REMOTE_IP`
+   values. A real fresh demo account (476786959) went from a brand-new
+   `POST /broker-credentials` call all the way to `provisioning_status:
+   active, bridge_configured: true` under this new setup.
+
+   **Still outstanding, deliberately deferred**: this only works while
+   that interactive session stays logged in -- it does NOT yet survive
+   a VPS reboot with nobody at the keyboard. The real fix for that is
+   Windows auto-logon (via Sysinternals `Autologon.exe`, not the raw
+   registry method) so the interactive session comes back automatically
+   at boot, which needs a real reboot to verify -- deliberately not
+   done yet tonight because this VPS also hosts Tony's live, actively-
+   connected bridge (`MT5Bridge-Tony`), and a reboot means a real
+   (brief) outage for his real account. Do this at a deliberately
+   chosen time, not casually.
+
+   The full signup-to-connected flow through the actual frontend UI is
+   now also confirmed: submitted a fresh disposable demo account
+   (`476787945`) directly through the "Broker Connection" form with
+   zero manual/curl intervention, and it went to `ACTIVE` on its own. A
+   real, unbounded `provisioning_error` (the stale MT5 journal dump)
+   also exposed a frontend layout bug along the way -- rendered as a
+   raw `<p>`, one long error blew out the whole table -- fixed by
+   bounding it in a scrollable `<pre>`
+   (`frontend/src/pages/BrokerCredentials.tsx`). Still open, cosmetic
+   only: the orphan `C:\bridge\accounts\05315ccf\config.json` skewing
+   `_next_free_port` to 8003+ (safe to `rm -rf`). See the
    `self_service_mt5_provisioning` memory for the full design and every
    real bug found/fixed along the way.
 7. **Strategy-level research gaps (block real money, NOT the build):**
