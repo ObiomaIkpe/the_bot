@@ -8,13 +8,21 @@ export function provisioningBadgeVariant(status: ProvisioningStatus): BadgeVaria
     case "active":
       return "connected";
     case "in_progress":
+    case "decommissioning":
+    case "removing":
       return "shadow";
     case "pending":
       return "neutral";
     case "failed":
+    case "decommission_failed":
       return "error";
     case "not_requested":
       return "neutral";
+    case "removed":
+      // Doesn't normally render -- list_broker_credentials excludes
+      // 'removed' rows by default -- but mapped anyway in case a
+      // remove-then-refetch race briefly surfaces one.
+      return "disabled";
   }
 }
 
@@ -30,6 +38,7 @@ const STEP_LABELS: Record<string, string> = {
   installing_service: "Installing service...",
   opening_firewall: "Opening firewall...",
   waiting_for_health: "Waiting for connection to come up...",
+  tearing_down: "Removing your account...",
 };
 
 export function provisioningStepLabel(step: string | null): string | null {

@@ -24,7 +24,19 @@ def list_broker_credentials(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    rows = db.query(BrokerCredential).filter(BrokerCredential.user_id == current_user.user_id).all()
+    # "removed" rows are excluded from the default list, not hard-deleted
+    # -- see remove_broker_credential's docstring. A removed account
+    # should disappear from "Your accounts," while the row itself
+    # persists for audit/history (this codebase has no hard-delete
+    # anywhere else either).
+    rows = (
+        db.query(BrokerCredential)
+        .filter(
+            BrokerCredential.user_id == current_user.user_id,
+            BrokerCredential.provisioning_status != "removed",
+        )
+        .all()
+    )
     return [BrokerCredentialOut.from_model(r) for r in rows]
 
 
@@ -139,6 +151,72 @@ def retry_provisioning(
     # across retries by design (see its own docstring on the model), so
     # the poller's _cleanup_prior_attempt recognizes and safely replaces
     # the same folder/service name instead of orphaning it under a new one.
+    db.commit()
+    db.refresh(row)
+    return BrokerCredentialOut.from_model(row)
+
+
+@router.post("/{credential_id}/remove", response_model=BrokerCredentialOut)
+def remove_broker_credential(
+    credential_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Self-service account removal -- the teardown half of the
+    provisioning state machine (see app/models/broker_credential.py's
+    VALID_PROVISIONING_STATUSES docstring). Deliberately an action
+    endpoint, not a DELETE verb or a hard row delete: this codebase has
+    no hard-delete precedent anywhere, and a removed row stays around
+    (provisioning_status='removed', excluded from list_broker_credentials
+    above) for audit/history.
+
+    provisioning_account_label is set once, at first claim, and never
+    cleared by a retry -- it's already this codebase's existing signal
+    for "has this account ever actually touched a VPS":
+      - Label unset (still 'not_requested' or 'pending', nobody has
+        claimed it yet): nothing exists anywhere to tear down. Removal
+        is immediate and synchronous.
+      - Label set ('active', 'failed', or a previous 'decommission_failed'):
+        a real MT5 terminal/service/firewall rule may exist on some
+        machine. Needs a real machine to claim and run the teardown job
+        (app/routers/internal_decommission.py) -- same conditional-
+        trigger safety create_broker_credential already uses for the
+        forward direction, so this never gets stuck in 'decommissioning'
+        forever with nothing able to claim it.
+
+    Not allowed while 'in_progress' or already 'decommissioning'/
+    'removing' -- the row is already claimed by (or queued for) a
+    machine actively working on it.
+    """
+    row = (
+        db.query(BrokerCredential)
+        .filter(BrokerCredential.credential_id == credential_id, BrokerCredential.user_id == current_user.user_id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Broker credential not found")
+    if row.provisioning_status in ("in_progress", "decommissioning", "removing"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This account is currently being worked on and can't be removed yet",
+        )
+
+    row.is_active = False
+
+    if not row.provisioning_account_label:
+        row.provisioning_status = "removed"
+    else:
+        has_active_machine = (
+            db.query(ProvisioningMachine).filter(ProvisioningMachine.is_active.is_(True)).first() is not None
+        )
+        if not has_active_machine:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No provisioning machine is available to remove this account right now",
+            )
+        row.provisioning_status = "decommissioning"
+
     db.commit()
     db.refresh(row)
     return BrokerCredentialOut.from_model(row)

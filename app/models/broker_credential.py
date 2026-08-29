@@ -14,7 +14,31 @@ from app.core.security import decrypt_secret, encrypt_secret
 # progress" are deliberately one status, not two -- provisioning_claimed_at
 # already gives staleness detection for a crashed poller without a
 # second status value.
-VALID_PROVISIONING_STATUSES = ("not_requested", "pending", "in_progress", "active", "failed")
+#
+# "decommissioning" / "removing" / "removed" / "decommission_failed"
+# (added later, for account removal -- see
+# app/routers/internal_decommission.py) are the teardown half of this
+# same state machine, not a separate column: this field already means
+# "what state is this account's infrastructure in," and
+# provisioning_account_label/provisioning_machine_id/
+# provisioning_claimed_at/provisioning_step are all generic enough to
+# drive a claim in either direction, not just the forward one.
+# "decommissioning" (queued, not yet claimed) -> "removing" (claimed,
+# a machine is actively tearing it down) mirrors "pending" -> "in_progress"
+# exactly, and for the same reason: without a distinct claimed-state,
+# claim_decommission_job's WHERE-clause would keep matching the same
+# row forever, since nothing else would ever move it out of the way.
+VALID_PROVISIONING_STATUSES = (
+    "not_requested",
+    "pending",
+    "in_progress",
+    "active",
+    "failed",
+    "decommissioning",
+    "removing",
+    "removed",
+    "decommission_failed",
+)
 
 # Self-service MT5 provisioning, Phase 2. Only meaningful while
 # provisioning_status == "in_progress" -- everything else leaves this
@@ -23,6 +47,13 @@ VALID_PROVISIONING_STATUSES = ("not_requested", "pending", "in_progress", "activ
 # in order; kept as a fixed vocabulary (not freeform text) so the
 # frontend can map each one to real, translatable copy rather than
 # displaying whatever string the poller happened to send.
+#
+# "tearing_down" is the one decommission step (provisioning_status ==
+# "decommissioning") -- deliberately a single macro-step, not split into
+# per-substep progress the way provisioning is: decommission just calls
+# the already-battle-tested _cleanup_prior_attempt() and normally
+# finishes in a few seconds, so fine-grained live progress isn't worth
+# the complexity here the way it was for a multi-minute first-time setup.
 VALID_PROVISIONING_STEPS = (
     "cleaning_up",
     "copying_terminal",
@@ -32,6 +63,7 @@ VALID_PROVISIONING_STEPS = (
     "installing_service",
     "opening_firewall",
     "waiting_for_health",
+    "tearing_down",
 )
 
 
@@ -53,13 +85,17 @@ class BrokerCredential(Base):
             postgresql_where=text("is_active"),
         ),
         CheckConstraint(
-            "provisioning_status IN ('not_requested', 'pending', 'in_progress', 'active', 'failed')",
+            "provisioning_status IN ("
+            "'not_requested', 'pending', 'in_progress', 'active', 'failed', "
+            "'decommissioning', 'removing', 'removed', 'decommission_failed'"
+            ")",
             name="ck_broker_credentials_provisioning_status_valid",
         ),
         CheckConstraint(
             "provisioning_step IS NULL OR provisioning_step IN ("
             "'cleaning_up', 'copying_terminal', 'launching_and_logging_in', 'verifying_login', "
-            "'configuring_worker', 'installing_service', 'opening_firewall', 'waiting_for_health'"
+            "'configuring_worker', 'installing_service', 'opening_firewall', 'waiting_for_health', "
+            "'tearing_down'"
             ")",
             name="ck_broker_credentials_provisioning_step_valid",
         ),

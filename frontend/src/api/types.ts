@@ -81,7 +81,16 @@ export interface PendingOrder {
   time_ny: string;
 }
 
-export type ProvisioningStatus = "not_requested" | "pending" | "in_progress" | "active" | "failed";
+export type ProvisioningStatus =
+  | "not_requested"
+  | "pending"
+  | "in_progress"
+  | "active"
+  | "failed"
+  | "decommissioning"
+  | "removing"
+  | "removed"
+  | "decommission_failed";
 
 export interface BrokerCredentialOut {
   credential_id: string;

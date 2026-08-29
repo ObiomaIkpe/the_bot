@@ -107,6 +107,7 @@ export function BrokerCredentials() {
   const [form, setForm] = useState<BrokerCredentialCreate>(emptyForm);
   const [mintedToken, setMintedToken] = useState<string | null>(null);
   const [reMintTarget, setReMintTarget] = useState<BrokerCredentialOut | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<BrokerCredentialOut | null>(null);
 
   const credentialsQuery = useQuery({
     queryKey: ["broker-credentials"],
@@ -118,8 +119,8 @@ export function BrokerCredentials() {
     // for a user with zero in-flight jobs.
     refetchInterval: (query) => {
       const rows = query.state.data;
-      const anyInFlight = rows?.some(
-        (c) => c.provisioning_status === "pending" || c.provisioning_status === "in_progress",
+      const anyInFlight = rows?.some((c) =>
+        ["pending", "in_progress", "decommissioning", "removing"].includes(c.provisioning_status),
       );
       return anyInFlight ? 5_000 : false;
     },
@@ -152,6 +153,14 @@ export function BrokerCredentials() {
   const retryProvisioning = useMutation({
     mutationFn: (credentialId: string) => apiClient.post(`/broker-credentials/${credentialId}/retry-provisioning`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["broker-credentials"] }),
+  });
+
+  const removeCredential = useMutation({
+    mutationFn: (credentialId: string) => apiClient.post(`/broker-credentials/${credentialId}/remove`),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["broker-credentials"] });
+      setRemoveTarget(null);
+    },
   });
 
   function handleSubmit(e: FormEvent) {
@@ -257,21 +266,23 @@ export function BrokerCredentials() {
                                 ? "provisioning"
                                 : provisioningStatus.replace("_", " ")}
                             </Badge>
-                            {provisioningStatus === "in_progress" && cred.provisioning_step && (
-                              <span className="text-[13px] text-text-muted">
-                                {provisioningStepLabel(cred.provisioning_step)}
-                              </span>
-                            )}
+                            {(provisioningStatus === "in_progress" || provisioningStatus === "removing") &&
+                              cred.provisioning_step && (
+                                <span className="text-[13px] text-text-muted">
+                                  {provisioningStepLabel(cred.provisioning_step)}
+                                </span>
+                              )}
                           </div>
-                          {provisioningStatus === "failed" && cred.provisioning_error && (
-                            // Bounded + scrollable, not a raw dump: provisioning_error can carry
-                            // a multi-line MT5 terminal journal (tens of lines) on top of the error
-                            // itself -- an unbounded <p> here blew out the whole table's layout the
-                            // first time a long one showed up.
-                            <pre className="text-negative text-[12px] mt-1 mb-0 max-w-[320px] max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans">
-                              {cred.provisioning_error}
-                            </pre>
-                          )}
+                          {(provisioningStatus === "failed" || provisioningStatus === "decommission_failed") &&
+                            cred.provisioning_error && (
+                              // Bounded + scrollable, not a raw dump: provisioning_error can carry
+                              // a multi-line MT5 terminal journal (tens of lines) on top of the error
+                              // itself -- an unbounded <p> here blew out the whole table's layout the
+                              // first time a long one showed up.
+                              <pre className="text-negative text-[12px] mt-1 mb-0 max-w-[320px] max-h-24 overflow-y-auto whitespace-pre-wrap break-words font-sans">
+                                {cred.provisioning_error}
+                              </pre>
+                            )}
                         </>
                       );
                     })()}
@@ -288,6 +299,11 @@ export function BrokerCredentials() {
                           onClick={() => retryProvisioning.mutate(cred.credential_id)}
                         >
                           Retry
+                        </Button>
+                      )}
+                      {!["in_progress", "decommissioning", "removing"].includes(cred.provisioning_status) && (
+                        <Button variant="destructive" onClick={() => setRemoveTarget(cred)}>
+                          Remove
                         </Button>
                       )}
                     </div>
@@ -319,6 +335,17 @@ export function BrokerCredentials() {
           busy={mintToken.isPending}
           onCancel={() => setReMintTarget(null)}
           onConfirm={() => mintToken.mutate(reMintTarget.credential_id)}
+        />
+      )}
+
+      {removeTarget && (
+        <ConfirmModal
+          title="Remove this account?"
+          message="This disconnects the account for good. If it was ever connected, this also tears down its MT5 terminal and worker on our server -- not just deactivating it. This can't be undone."
+          confirmLabel="Remove account"
+          busy={removeCredential.isPending}
+          onCancel={() => setRemoveTarget(null)}
+          onConfirm={() => removeCredential.mutate(removeTarget.credential_id)}
         />
       )}
     </div>

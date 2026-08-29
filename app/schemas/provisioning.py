@@ -37,3 +37,26 @@ class ProvisioningFailIn(BaseModel):
 
 class ProvisioningStepIn(BaseModel):
     step: str
+
+
+class DecommissionJobOut(BaseModel):
+    """Returned to a machine's poller by POST
+    /internal/decommission-jobs/claim. Deliberately much smaller than
+    ProvisioningJobOut -- tearing down an account needs only its label
+    (to derive the same C:\\MT5-<label> / accounts/<label> / firewall
+    rule paths _cleanup_prior_attempt already knows how to build), never
+    the MT5 login/password or a bridge token."""
+    credential_id: uuid.UUID
+    account_label: str
+
+
+class DecommissionClaimOut(BaseModel):
+    """Same job/reason shape as ProvisioningClaimOut -- kept as a
+    separate class rather than a shared generic since the two `job`
+    payloads differ (see DecommissionJobOut)."""
+    job: DecommissionJobOut | None
+    reason: str | None = None
+
+
+class DecommissionFailIn(BaseModel):
+    error: str

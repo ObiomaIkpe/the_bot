@@ -376,3 +376,120 @@ def test_retry_provisioning_404_for_another_users_credential(client, db_session)
 
     resp = client.post(f"/broker-credentials/{cred.credential_id}/retry-provisioning", headers=_auth_header(token_a))
     assert resp.status_code == 404
+
+
+def test_remove_never_claimed_credential_is_immediate(client, db_session):
+    """not_requested/pending with no provisioning_account_label -- nothing
+    has ever touched a VPS, so this needs no machine and no job."""
+    token = _register_and_login(client, "bc_x@example.com")
+    credential_id = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    ).json()["credential_id"]
+
+    resp = client.post(f"/broker-credentials/{credential_id}/remove", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provisioning_status"] == "removed"
+    assert body["is_active"] is False
+
+
+def test_removed_credential_excluded_from_list_but_row_persists(client, db_session):
+    token = _register_and_login(client, "bc_y@example.com")
+    credential_id = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    ).json()["credential_id"]
+    client.post(f"/broker-credentials/{credential_id}/remove", headers=_auth_header(token))
+
+    resp = client.get("/broker-credentials", headers=_auth_header(token))
+    assert resp.json() == []
+
+    row = db_session.query(BrokerCredential).filter(BrokerCredential.credential_id == credential_id).first()
+    assert row is not None
+    assert row.provisioning_status == "removed"
+
+
+def test_remove_claimed_credential_requires_active_machine(client, db_session):
+    """provisioning_account_label set (something was actually attempted)
+    but no active ProvisioningMachine exists to run the real teardown --
+    409, not a silent 'decommissioning' with nothing able to claim it."""
+    token = _register_and_login(client, "bc_z@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+
+    cred = BrokerCredential(
+        user_id=user_id, broker_name="b", server="s", account_type="demo", is_active=True,
+        provisioning_status="active", provisioning_account_label="abcd1234",
+    )
+    cred.account_login = "1"
+    cred.account_password = "p"
+    db_session.add(cred)
+    db_session.commit()
+    db_session.refresh(cred)
+
+    resp = client.post(f"/broker-credentials/{cred.credential_id}/remove", headers=_auth_header(token))
+    assert resp.status_code == 409
+
+    db_session.refresh(cred)
+    assert cred.provisioning_status == "active"  # unchanged -- request was rejected, not half-applied
+
+
+def test_remove_claimed_credential_starts_decommissioning_with_active_machine(client, db_session):
+    _make_machine(db_session)
+    token = _register_and_login(client, "bc_aa@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+
+    cred = BrokerCredential(
+        user_id=user_id, broker_name="b", server="s", account_type="demo", is_active=True,
+        provisioning_status="active", provisioning_account_label="abcd1234", bridge_url="http://x:8002",
+    )
+    cred.account_login = "1"
+    cred.account_password = "p"
+    db_session.add(cred)
+    db_session.commit()
+    db_session.refresh(cred)
+
+    resp = client.post(f"/broker-credentials/{cred.credential_id}/remove", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provisioning_status"] == "decommissioning"
+    assert body["is_active"] is False
+
+
+@pytest.mark.parametrize("status", ["in_progress", "decommissioning", "removing"])
+def test_remove_409_while_already_busy(client, db_session, status):
+    token = _register_and_login(client, f"bc_busy_{status}@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+
+    cred = BrokerCredential(
+        user_id=user_id, broker_name="b", server="s", account_type="demo", is_active=True,
+        provisioning_status=status, provisioning_account_label="abcd1234",
+    )
+    cred.account_login = "1"
+    cred.account_password = "p"
+    db_session.add(cred)
+    db_session.commit()
+    db_session.refresh(cred)
+
+    resp = client.post(f"/broker-credentials/{cred.credential_id}/remove", headers=_auth_header(token))
+    assert resp.status_code == 409
+
+
+def test_remove_404_for_another_users_credential(client, db_session):
+    token_a = _register_and_login(client, "bc_bb@example.com")
+    token_b = _register_and_login(client, "bc_cc@example.com")
+    user_id_b = client.get("/auth/me", headers=_auth_header(token_b)).json()["user_id"]
+
+    cred = BrokerCredential(
+        user_id=user_id_b, broker_name="b", server="s", account_type="demo", is_active=True,
+    )
+    cred.account_login = "1"
+    cred.account_password = "p"
+    db_session.add(cred)
+    db_session.commit()
+    db_session.refresh(cred)
+
+    resp = client.post(f"/broker-credentials/{cred.credential_id}/remove", headers=_auth_header(token_a))
+    assert resp.status_code == 404

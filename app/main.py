@@ -14,6 +14,7 @@ from app.routers import (
     broker_credentials,
     events,
     internal_bridge,
+    internal_decommission,
     internal_provisioning,
     model_configs,
     settings as settings_router,
@@ -39,6 +40,7 @@ app.include_router(broker_credentials.router)
 app.include_router(events.router)
 app.include_router(internal_bridge.router)
 app.include_router(internal_provisioning.router)
+app.include_router(internal_decommission.router)
 app.include_router(trades.router)
 app.include_router(model_configs.router)
 app.include_router(settings_router.router)
