@@ -232,19 +232,42 @@ set of trusted callers).
    left staged-uncommitted intentionally; never push that removal, the
    real backend file must stay in shared history.
 
-   **Still open**: `MT5Bridge-Tony`'s own NSSM service still points at
-   the old `C:\bridge` (unmigrated, untouched, working exactly as
-   before). Cutting it over needs: move `C:\bridge\config.json` into
-   `C:\bridge\bridge\config.json`, set its `AppDirectory` to
-   `C:\bridge\bridge`, and explicitly set `BRIDGE_CONFIG_PATH` via
-   `AppEnvironmentExtra` (alongside its existing `BRIDGE_TOKEN`/
-   `CREDENTIAL_API_URL` -- `nssm set` replaces the whole list, not just
-   adds) rather than relying on the old hardcoded default. Deliberately
+   **Still open, one real attempt already made and rolled back
+   (2026-08-29).** `MT5Bridge-Tony`'s own NSSM service still points at
+   the old `C:\bridge` (unmigrated, working exactly as it did before
+   any of this). A cutover attempt caused a real, brief outage: before
+   changing anything, only `AppDirectory` and `AppEnvironmentExtra`
+   were checked/recorded -- not `Application` -- and `Application` was
+   wrongly assumed to follow the poller's `python.exe -m <module>`
+   pattern. Tony's service actually runs the venv's `uvicorn.exe`
+   console script directly (`Application = ...\venv\Scripts\uvicorn.exe`,
+   `AppParameters = app.main:app --host 0.0.0.0 --port 8001 --workers 1`,
+   no `-m uvicorn` needed since `uvicorn.exe` already is uvicorn).
+   Setting `Application` to `python.exe` produced
+   `python.exe: can't open file 'app.main:app'` (no `-m` flag, so
+   Python tried to open it as a script) -- NSSM auto-paused the
+   crash-looping service. Rolled back cleanly (the copied, not moved,
+   `config.json` meant the original was never at risk) and confirmed
+   `/health` -> `connected: true, trade_allowed: true` again. **Lesson
+   for the retry**: capture all four relevant NSSM fields
+   (`Application`, `AppDirectory`, `AppParameters`, `AppEnvironmentExtra`)
+   before changing anything, not just the ones expected to matter --
+   and the correct target `Application` for Tony specifically is
+   `C:\bridge\bridge\venv\Scripts\uvicorn.exe`, not `python.exe`.
+
+   Full recipe for the actual retry, whenever it happens: copy (not
+   move) `C:\bridge\config.json` into `C:\bridge\bridge\config.json`;
+   `nssm set MT5Bridge-Tony Application C:\bridge\bridge\venv\Scripts\uvicorn.exe`;
+   `nssm set MT5Bridge-Tony AppDirectory C:\bridge\bridge`; `nssm set
+   MT5Bridge-Tony AppEnvironmentExtra BRIDGE_TOKEN=... CREDENTIAL_API_URL=...
+   BRIDGE_CONFIG_PATH=C:\bridge\bridge\config.json` (all three together
+   -- replaces the whole list); restart; confirm `/health`. Deliberately
    deferred to its own moment, same reasoning as the auto-logon/reboot
-   deferral elsewhere in this file: this is the one service touching
-   Tony's real, live trading account. Once done, the old top-level
-   `C:\bridge\app\`/`C:\bridge\scripts\` can be deleted as unused
-   duplicates.
+   deferral elsewhere in this file -- this is the one service touching
+   Tony's real, live trading account, and it already proved it can go
+   wrong in a way worth being fully alert for, not rushed. Once done,
+   the old top-level `C:\bridge\app\`/`C:\bridge\scripts\` can be
+   deleted as unused duplicates.
 4. **Second broker account (friend's).** Still blocked on credentials,
    not on anything technical -- the bridge architecture already
    supports it. Pick up whenever available: new `config.json`, new
