@@ -3,10 +3,10 @@ Unit tests for the pure-Python pieces of
 bridge/scripts/provisioning_poller/provisioner.py -- the ones that
 don't touch MT5, NSSM, or the Windows firewall, so they're the only
 parts of the poller testable from this Linux dev machine (see
-tests/bridge/conftest.py). Everything else (_launch_and_login,
-_verify_login, _install_and_start_service, _open_firewall_port,
-_wait_for_health) can only be proven on the real VPS -- see the Phase 1
-plan's Verification section.
+tests/bridge/conftest.py). Everything else (_verify_login,
+_install_and_start_service, _open_firewall_port, _wait_for_health) can
+only be proven on the real VPS -- see the Phase 1 plan's Verification
+section.
 """
 import json
 

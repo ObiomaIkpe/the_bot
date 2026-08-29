@@ -76,8 +76,6 @@ def provision_account(job: dict, config: PollerConfig, admin: ProvisioningAdminC
         terminal_path = mt5_dest / "terminal64.exe"
 
         _report_step(admin, credential_id, "launching_and_logging_in")
-        _launch_and_login(terminal_path, job, config)
-
         _report_step(admin, credential_id, "verifying_login")
         _verify_login(terminal_path, job, config)
 
@@ -200,25 +198,27 @@ def _copy_mt5_install(source_path: str, mt5_dest: Path) -> None:
         raise ProvisioningError(f"Copy completed but terminal64.exe is missing at {mt5_dest}")
 
 
-def _launch_and_login(terminal_path: Path, job: dict, config: PollerConfig) -> None:
-    """Mirrors provision_account.ps1 step 2 exactly -- same /portable
-    launch flags, same 15s default wait for MT5 to actually connect
-    before verification is attempted."""
-    subprocess.Popen([
-        str(terminal_path),
-        "/portable",
-        f"/login:{job['account_login']}",
-        f"/password:{job['account_password']}",
-        f"/server:{job['server']}",
-    ])
-    time.sleep(config.mt5_launch_wait_seconds)
-
-
 def _verify_login(terminal_path: Path, job: dict, config: PollerConfig) -> None:
     """Calls the UNMODIFIED bridge/scripts/verify_mt5_login.py as a
     subprocess -- exactly how provision_account.ps1 step 3 already
     does it. Never imported in-process; see this module's own docstring
-    for why."""
+    for why.
+
+    Deliberately does NOT pre-launch terminal64.exe itself first (an
+    earlier version did, mirroring provision_account.ps1's separate
+    step 2 -- launch by hand, wait, then verify). Found live on real
+    VPS testing: mt5.initialize(path=..., login=..., password=...,
+    server=...) already launches, logs in, AND connects the terminal at
+    `path` itself when it isn't already running -- see
+    verify_mt5_login.py. Pre-launching a second terminal64.exe process
+    against the SAME portable folder raced this subprocess's own launch
+    attempt for that folder's IPC channel: whichever one lost got a
+    FAST 'IPC send failed' (a lock conflict, not a slow response) --
+    reproduced identically on a completely fresh, never-before-used
+    demo account, ruling out account-side throttling as the cause.
+    config.mt5_verify_timeout_ms was bumped up to compensate for this
+    single call now covering the full cold launch, not just the
+    verification of an already-warm one."""
     verify_script = Path(__file__).resolve().parent.parent / "verify_mt5_login.py"
     python_exe = config.venv_python if Path(config.venv_python).exists() else "python"
 

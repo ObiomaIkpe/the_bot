@@ -48,8 +48,12 @@ class PollerConfig:
         # 8001 is Tony's (config.example.json) -- scan starts above it.
         self.provisioning_base_port = int(os.environ.get("PROVISIONING_BASE_PORT", "8002"))
 
-        self.mt5_launch_wait_seconds = int(os.environ.get("MT5_LAUNCH_WAIT_SECONDS", "15"))
-        self.mt5_verify_timeout_ms = int(os.environ.get("MT5_VERIFY_TIMEOUT_MS", "30000"))
+        # Covers the ENTIRE cold launch+login+connect done inside
+        # mt5.initialize() itself (see provisioner.py's _verify_login
+        # docstring for why there's no separate pre-launch anymore) --
+        # bumped from 30000 since this one call now does what used to
+        # be a 15s pre-launch wait plus a 30s verify timeout.
+        self.mt5_verify_timeout_ms = int(os.environ.get("MT5_VERIFY_TIMEOUT_MS", "45000"))
         self.health_check_max_attempts = int(os.environ.get("HEALTH_CHECK_MAX_ATTEMPTS", "10"))
         self.health_check_interval_seconds = int(os.environ.get("HEALTH_CHECK_INTERVAL_SECONDS", "3"))
 
