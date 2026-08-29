@@ -16,6 +16,24 @@ from app.core.security import decrypt_secret, encrypt_secret
 # second status value.
 VALID_PROVISIONING_STATUSES = ("not_requested", "pending", "in_progress", "active", "failed")
 
+# Self-service MT5 provisioning, Phase 2. Only meaningful while
+# provisioning_status == "in_progress" -- everything else leaves this
+# null. Maps 1:1 to the real steps in
+# bridge/scripts/provisioning_poller/provisioner.py's provision_account(),
+# in order; kept as a fixed vocabulary (not freeform text) so the
+# frontend can map each one to real, translatable copy rather than
+# displaying whatever string the poller happened to send.
+VALID_PROVISIONING_STEPS = (
+    "cleaning_up",
+    "copying_terminal",
+    "launching_and_logging_in",
+    "verifying_login",
+    "configuring_worker",
+    "installing_service",
+    "opening_firewall",
+    "waiting_for_health",
+)
+
 
 class BrokerCredential(Base):
     __tablename__ = "broker_credentials"
@@ -37,6 +55,13 @@ class BrokerCredential(Base):
         CheckConstraint(
             "provisioning_status IN ('not_requested', 'pending', 'in_progress', 'active', 'failed')",
             name="ck_broker_credentials_provisioning_status_valid",
+        ),
+        CheckConstraint(
+            "provisioning_step IS NULL OR provisioning_step IN ("
+            "'cleaning_up', 'copying_terminal', 'launching_and_logging_in', 'verifying_login', "
+            "'configuring_worker', 'installing_service', 'opening_firewall', 'waiting_for_health'"
+            ")",
+            name="ck_broker_credentials_provisioning_step_valid",
         ),
     )
 
@@ -114,6 +139,12 @@ class BrokerCredential(Base):
     # are recognizable and safely replaceable, not orphaned under a new
     # name each attempt.
     provisioning_account_label = Column(String, nullable=True)
+    # Which real step the poller is on right now -- see
+    # VALID_PROVISIONING_STEPS above. Null except while
+    # provisioning_status == "in_progress"; not cleared on
+    # complete/fail, so a failed job's last-known step stays visible
+    # for debugging ("it died during verifying_login").
+    provisioning_step = Column(String, nullable=True)
 
     user = relationship("User", back_populates="broker_credentials")
 

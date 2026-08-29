@@ -22,6 +22,7 @@ from pathlib import Path
 
 import requests
 
+from .admin_client import AdminApiError, ProvisioningAdminClient
 from .config import PollerConfig
 
 log = logging.getLogger("provisioning_poller.provisioner")
@@ -33,7 +34,18 @@ class ProvisioningError(Exception):
     bare exception repr."""
 
 
-def provision_account(job: dict, config: PollerConfig) -> str:
+def _report_step(admin: ProvisioningAdminClient, credential_id: str, step: str) -> None:
+    """Purely informational (Phase 2 live-progress UI) -- MUST be
+    non-fatal. A step-report failure (admin API briefly unreachable,
+    etc) is logged and swallowed here, never allowed to abort real
+    provisioning work over a progress ping."""
+    try:
+        admin.report_step(credential_id, step)
+    except AdminApiError as e:
+        log.warning("Step-report '%s' failed (continuing provisioning regardless): %s", step, e)
+
+
+def provision_account(job: dict, config: PollerConfig, admin: ProvisioningAdminClient) -> str:
     """Runs every step for one job, in order. Returns the bridge_url to
     report back on success; raises ProvisioningError (or lets a genuine
     bug's exception propagate) on any failure -- runner.py is
@@ -50,21 +62,36 @@ def provision_account(job: dict, config: PollerConfig) -> str:
     re-raised unchanged -- cleanup must never mask or replace the real
     failure reason reported back to the admin API."""
     label = job["account_label"]
+    credential_id = job["credential_id"]
     mt5_dest = Path(rf"C:\MT5-{label}")
     accounts_dir = Path(config.bridge_root) / "accounts" / label
     config_path = accounts_dir / "config.json"
     service_name = f"bridge-{label}"
 
+    _report_step(admin, credential_id, "cleaning_up")
     _cleanup_prior_attempt(mt5_dest, accounts_dir, service_name, label, config)
     try:
+        _report_step(admin, credential_id, "copying_terminal")
         _copy_mt5_install(config.source_mt5_path, mt5_dest)
         terminal_path = mt5_dest / "terminal64.exe"
+
+        _report_step(admin, credential_id, "launching_and_logging_in")
         _launch_and_login(terminal_path, job, config)
+
+        _report_step(admin, credential_id, "verifying_login")
         _verify_login(terminal_path, job, config)
+
+        _report_step(admin, credential_id, "configuring_worker")
         port = _next_free_port(config)
         _write_config_json(config_path, accounts_dir, label, terminal_path, port, job, config)
+
+        _report_step(admin, credential_id, "installing_service")
         _install_and_start_service(service_name, config_path, job, port, config)
+
+        _report_step(admin, credential_id, "opening_firewall")
         _open_firewall_port(label, port, config)
+
+        _report_step(admin, credential_id, "waiting_for_health")
         _wait_for_health(port, service_name, config)
     except Exception:
         log.info("Provisioning failed for %s -- cleaning up before reporting failure", label)

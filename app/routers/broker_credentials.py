@@ -7,6 +7,7 @@ from app.core.bridge_provisioning import mint_bridge_token
 from app.core.database import get_db
 from app.core.deps import get_current_user
 from app.models.broker_credential import BrokerCredential
+from app.models.provisioning_machine import ProvisioningMachine
 from app.models.user import User
 from app.schemas.broker_credentials import (
     BridgeTokenIssueOut,
@@ -43,11 +44,22 @@ def create_broker_credential(
         BrokerCredential.is_active.is_(True),
     ).update({"is_active": False})
 
+    # Self-service provisioning, Phase 2: only actually queue a job if
+    # there's a machine that could ever claim it -- a "pending" row with
+    # no active machine would sit unclaimable forever, showing the user
+    # a permanent "provisioning..." with no path forward. That's worse
+    # than the honest "not_requested" default, which is what a fresh
+    # row still gets if this check fails.
+    has_active_machine = (
+        db.query(ProvisioningMachine).filter(ProvisioningMachine.is_active.is_(True)).first() is not None
+    )
+
     cred = BrokerCredential(
         user_id=current_user.user_id,
         broker_name=payload.broker_name,
         server=payload.server,
         account_type=payload.account_type,
+        provisioning_status="pending" if has_active_machine else "not_requested",
     )
     cred.account_login = payload.account_login
     cred.account_password = payload.account_password
@@ -88,6 +100,45 @@ def update_broker_credential(
 
     for field, value in changes.items():
         setattr(row, field, value)
+    db.commit()
+    db.refresh(row)
+    return BrokerCredentialOut.from_model(row)
+
+
+@router.post("/{credential_id}/retry-provisioning", response_model=BrokerCredentialOut)
+def retry_provisioning(
+    credential_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Self-service recovery for a job that ended up provisioning_status
+    'failed' -- resets it to 'pending' so a machine's poller can claim
+    it again. Only allowed from 'failed': retrying an already-pending/
+    in-progress/active row would either be a no-op or would race the
+    poller currently working on it.
+    """
+    row = (
+        db.query(BrokerCredential)
+        .filter(BrokerCredential.credential_id == credential_id, BrokerCredential.user_id == current_user.user_id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Broker credential not found")
+    if row.provisioning_status != "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Only a failed provisioning job can be retried"
+        )
+
+    row.provisioning_status = "pending"
+    row.provisioning_error = None
+    row.provisioning_step = None
+    row.provisioning_machine_id = None
+    row.provisioning_claimed_at = None
+    # provisioning_account_label deliberately NOT cleared -- it's stable
+    # across retries by design (see its own docstring on the model), so
+    # the poller's _cleanup_prior_attempt recognizes and safely replaces
+    # the same folder/service name instead of orphaning it under a new one.
     db.commit()
     db.refresh(row)
     return BrokerCredentialOut.from_model(row)

@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from app.core.bridge_provisioning import mint_bridge_token
 from app.core.database import get_db
 from app.core.security import hash_service_token
-from app.models.broker_credential import BrokerCredential
+from app.models.broker_credential import VALID_PROVISIONING_STEPS, BrokerCredential
 from app.models.model_config import ModelConfig
 from app.models.provisioning_machine import ProvisioningMachine
 from app.schemas.provisioning import (
@@ -37,6 +37,7 @@ from app.schemas.provisioning import (
     ProvisioningCompleteIn,
     ProvisioningFailIn,
     ProvisioningJobOut,
+    ProvisioningStepIn,
 )
 
 router = APIRouter(prefix="/internal/provisioning-jobs", tags=["internal"])
@@ -155,6 +156,29 @@ def _claimed_row_or_409(db: Session, machine: ProvisioningMachine, credential_id
             detail="This credential is not currently an in-progress job claimed by this machine",
         )
     return row
+
+
+@router.post("/{credential_id}/step", response_model=None, status_code=status.HTTP_204_NO_CONTENT)
+def report_provisioning_step(
+    credential_id: uuid.UUID,
+    payload: ProvisioningStepIn,
+    machine: ProvisioningMachine = Depends(get_current_machine),
+    db: Session = Depends(get_db),
+):
+    """
+    Called by the poller right before starting each real step in
+    provision_account() (bridge/scripts/provisioning_poller/provisioner.py)
+    -- purely informational, lets the frontend show live progress
+    (Phase 2). Reporting a step failing must never abort real
+    provisioning work; that's enforced on the poller side
+    (admin_client.py's report_step() + provisioner.py's _report_step()
+    swallow/log any failure here), not this endpoint's problem.
+    """
+    if payload.step not in VALID_PROVISIONING_STEPS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unknown step: {payload.step}")
+    row = _claimed_row_or_409(db, machine, credential_id)
+    row.provisioning_step = payload.step
+    db.commit()
 
 
 @router.post("/{credential_id}/complete", response_model=None, status_code=status.HTTP_204_NO_CONTENT)

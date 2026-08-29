@@ -31,10 +31,11 @@ def _make_machine(db_session, label="m1", max_accounts=1, is_active=True):
 
 
 def _make_pending_credential(client, db_session, email, account_login="476123801", account_password="super-secret"):
-    """Bypasses the real create endpoint's provisioning_status default
-    (still 'not_requested' in Phase 0 -- see broker_credentials.py) since
-    nothing sets 'pending' automatically yet. Registering the user still
-    goes through the real endpoint, so provision_new_user_defaults() runs
+    """Bypasses the real create endpoint so this file's tests don't
+    depend on whether a ProvisioningMachine happens to be registered
+    (Phase 2 made that conditional -- see broker_credentials.py) --
+    always lands 'pending' regardless. Registering the user still goes
+    through the real endpoint, so provision_new_user_defaults() runs
     and this user gets real ModelConfig rows (used by the magic_numbers
     assertions below)."""
     token = _register_and_login(client, email)
@@ -184,6 +185,70 @@ def test_fail_for_job_not_in_progress_is_409(client, db_session):
     resp = client.post(
         f"/internal/provisioning-jobs/{cred.credential_id}/fail",
         json={"error": "should not apply"},
+        headers=_machine_header(machine_token),
+    )
+    assert resp.status_code == 409
+
+
+def test_step_report_sets_provisioning_step(client, db_session):
+    _, machine_token = _make_machine(db_session, max_accounts=5)
+    cred, _ = _make_pending_credential(client, db_session, "prov_g@example.com")
+    client.post("/internal/provisioning-jobs/claim", headers=_machine_header(machine_token))
+
+    resp = client.post(
+        f"/internal/provisioning-jobs/{cred.credential_id}/step",
+        json={"step": "verifying_login"},
+        headers=_machine_header(machine_token),
+    )
+    assert resp.status_code == 204
+
+    db_session.refresh(cred)
+    assert cred.provisioning_step == "verifying_login"
+    assert cred.provisioning_status == "in_progress"  # step-reporting never changes status
+
+
+def test_step_report_rejects_unknown_step_value(client, db_session):
+    _, machine_token = _make_machine(db_session, max_accounts=5)
+    cred, _ = _make_pending_credential(client, db_session, "prov_h@example.com")
+    client.post("/internal/provisioning-jobs/claim", headers=_machine_header(machine_token))
+
+    resp = client.post(
+        f"/internal/provisioning-jobs/{cred.credential_id}/step",
+        json={"step": "not-a-real-step"},
+        headers=_machine_header(machine_token),
+    )
+    assert resp.status_code == 400
+
+    db_session.refresh(cred)
+    assert cred.provisioning_step is None  # rejected before ever touching the row
+
+
+def test_step_report_for_job_not_claimed_by_this_machine_is_409(client, db_session):
+    machine_a, token_a = _make_machine(db_session, label="m-c", max_accounts=5)
+    machine_b, token_b = _make_machine(db_session, label="m-d", max_accounts=5)
+    cred, _ = _make_pending_credential(client, db_session, "prov_i@example.com")
+
+    client.post("/internal/provisioning-jobs/claim", headers=_machine_header(token_a))
+
+    resp = client.post(
+        f"/internal/provisioning-jobs/{cred.credential_id}/step",
+        json={"step": "copying_terminal"},
+        headers=_machine_header(token_b),
+    )
+    assert resp.status_code == 409
+
+    db_session.refresh(cred)
+    assert cred.provisioning_step is None
+
+
+def test_step_report_for_job_not_in_progress_is_409(client, db_session):
+    _, machine_token = _make_machine(db_session, max_accounts=5)
+    cred, _ = _make_pending_credential(client, db_session, "prov_j@example.com")
+    # Never claimed -- still 'pending', not 'in_progress'.
+
+    resp = client.post(
+        f"/internal/provisioning-jobs/{cred.credential_id}/step",
+        json={"step": "copying_terminal"},
         headers=_machine_header(machine_token),
     )
     assert resp.status_code == 409

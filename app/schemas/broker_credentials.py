@@ -34,7 +34,12 @@ class BrokerCredentialOut(BaseModel):
     leave the server once written, encrypted or not. account_login (the
     MT5 account number, not a secret on the level of the password) is
     included since it's useful for a user to confirm which account
-    they've connected."""
+    they've connected.
+
+    provisioning_status/provisioning_step/provisioning_error (Phase 2)
+    are the richer, ongoing source of truth for self-service
+    provisioning; bridge_configured is kept alongside them only for
+    backward compatibility with anything already reading it."""
     credential_id: uuid.UUID
     broker_name: str
     account_login: str
@@ -42,6 +47,9 @@ class BrokerCredentialOut(BaseModel):
     account_type: str
     is_active: bool
     bridge_configured: bool
+    provisioning_status: str
+    provisioning_step: str | None
+    provisioning_error: str | None
 
     class Config:
         from_attributes = True
@@ -56,6 +64,9 @@ class BrokerCredentialOut(BaseModel):
             account_type=cred.account_type,
             is_active=cred.is_active,
             bridge_configured=bool(cred.bridge_url),
+            provisioning_status=cred.provisioning_status,
+            provisioning_step=cred.provisioning_step,
+            provisioning_error=cred.provisioning_error,
         )
 
 

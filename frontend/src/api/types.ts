@@ -81,6 +81,8 @@ export interface PendingOrder {
   time_ny: string;
 }
 
+export type ProvisioningStatus = "not_requested" | "pending" | "in_progress" | "active" | "failed";
+
 export interface BrokerCredentialOut {
   credential_id: string;
   broker_name: string;
@@ -89,6 +91,9 @@ export interface BrokerCredentialOut {
   account_type: "demo" | "live";
   is_active: boolean;
   bridge_configured: boolean;
+  provisioning_status: ProvisioningStatus;
+  provisioning_step: string | null;
+  provisioning_error: string | null;
 }
 
 export interface BrokerCredentialCreate {

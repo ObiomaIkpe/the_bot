@@ -33,3 +33,7 @@ class ProvisioningCompleteIn(BaseModel):
 
 class ProvisioningFailIn(BaseModel):
     error: str
+
+
+class ProvisioningStepIn(BaseModel):
+    step: str

@@ -1,7 +1,11 @@
+import secrets
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.core.security import hash_service_token
 from app.models.broker_credential import BrokerCredential
+from app.models.provisioning_machine import ProvisioningMachine
 
 
 def _register_and_login(client, email):
@@ -12,6 +16,16 @@ def _register_and_login(client, email):
 
 def _auth_header(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+def _make_machine(db_session, label="m1", max_accounts=1, is_active=True):
+    token = secrets.token_urlsafe(32)
+    machine = ProvisioningMachine(
+        label=label, max_accounts=max_accounts, is_active=is_active, machine_token_hash=hash_service_token(token)
+    )
+    db_session.add(machine)
+    db_session.commit()
+    return machine
 
 
 def test_create_broker_credential_never_returns_password(client, db_session):
@@ -246,3 +260,119 @@ def test_db_rejects_two_active_credentials_for_same_user(client, db_session):
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
+
+
+def test_create_broker_credential_sets_pending_when_active_machine_exists(client, db_session):
+    _make_machine(db_session)
+    token = _register_and_login(client, "bc_p@example.com")
+
+    resp = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["provisioning_status"] == "pending"
+
+
+def test_create_broker_credential_stays_not_requested_with_no_active_machine(client, db_session):
+    # No machine registered at all -- this is also today's real
+    # production state until at least one is (see
+    # app/scripts/register_provisioning_machine.py).
+    token = _register_and_login(client, "bc_q@example.com")
+
+    resp = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    )
+    assert resp.status_code == 201
+    assert resp.json()["provisioning_status"] == "not_requested"
+
+
+def test_create_broker_credential_stays_not_requested_when_only_machine_is_inactive(client, db_session):
+    _make_machine(db_session, is_active=False)
+    token = _register_and_login(client, "bc_r@example.com")
+
+    resp = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    )
+    assert resp.json()["provisioning_status"] == "not_requested"
+
+
+def test_list_broker_credentials_includes_provisioning_fields(client, db_session):
+    token = _register_and_login(client, "bc_s@example.com")
+    client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    )
+
+    body = client.get("/broker-credentials", headers=_auth_header(token)).json()
+    assert body[0]["provisioning_status"] == "not_requested"
+    assert body[0]["provisioning_step"] is None
+    assert body[0]["provisioning_error"] is None
+
+
+def test_retry_provisioning_resets_failed_job_to_pending(client, db_session):
+    token = _register_and_login(client, "bc_t@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+
+    cred = BrokerCredential(
+        user_id=user_id, broker_name="b", server="s", account_type="demo", is_active=True,
+        provisioning_status="failed", provisioning_error="MT5 login verification failed: bad password",
+        provisioning_step="verifying_login", provisioning_account_label="abcd1234",
+    )
+    cred.account_login = "1"
+    cred.account_password = "p"
+    db_session.add(cred)
+    db_session.commit()
+    db_session.refresh(cred)
+
+    resp = client.post(f"/broker-credentials/{cred.credential_id}/retry-provisioning", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["provisioning_status"] == "pending"
+    assert body["provisioning_error"] is None
+    assert body["provisioning_step"] is None
+
+    db_session.refresh(cred)
+    assert cred.provisioning_machine_id is None
+    assert cred.provisioning_claimed_at is None
+    # Deliberately preserved -- see the endpoint's own comment: the
+    # poller's cleanup logic depends on this staying stable across retries.
+    assert cred.provisioning_account_label == "abcd1234"
+
+
+def test_retry_provisioning_409_when_not_failed(client, db_session):
+    token = _register_and_login(client, "bc_u@example.com")
+    credential_id = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    ).json()["credential_id"]
+    # Fresh row lands 'not_requested' (no machine registered) -- not 'failed'.
+
+    resp = client.post(f"/broker-credentials/{credential_id}/retry-provisioning", headers=_auth_header(token))
+    assert resp.status_code == 409
+
+
+def test_retry_provisioning_404_for_another_users_credential(client, db_session):
+    token_a = _register_and_login(client, "bc_v@example.com")
+    token_b = _register_and_login(client, "bc_w@example.com")
+    user_id_b = client.get("/auth/me", headers=_auth_header(token_b)).json()["user_id"]
+
+    cred = BrokerCredential(
+        user_id=user_id_b, broker_name="b", server="s", account_type="demo",
+        is_active=True, provisioning_status="failed",
+    )
+    cred.account_login = "1"
+    cred.account_password = "p"
+    db_session.add(cred)
+    db_session.commit()
+    db_session.refresh(cred)
+
+    resp = client.post(f"/broker-credentials/{cred.credential_id}/retry-provisioning", headers=_auth_header(token_a))
+    assert resp.status_code == 404

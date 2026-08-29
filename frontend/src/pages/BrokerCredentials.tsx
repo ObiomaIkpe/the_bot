@@ -2,10 +2,12 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "../api/client";
 import type { BrokerCredentialCreate, BrokerCredentialOut } from "../api/types";
+import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { Table } from "../components/Table";
+import { provisioningBadgeVariant, provisioningStepLabel } from "../lib/provisioningStatus";
 
 const emptyForm: BrokerCredentialCreate = {
   broker_name: "",
@@ -94,6 +96,18 @@ export function BrokerCredentials() {
   const credentialsQuery = useQuery({
     queryKey: ["broker-credentials"],
     queryFn: () => apiClient.get<BrokerCredentialOut[]>("/broker-credentials"),
+    // Poll quickly while anything is actively being set up (this is a
+    // first-time-setup moment the user is watching live), stop entirely
+    // once nothing is in flight -- unlike Overview/Live's steady-state
+    // refresh, a plain numeric interval here would poll forever even
+    // for a user with zero in-flight jobs.
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      const anyInFlight = rows?.some(
+        (c) => c.provisioning_status === "pending" || c.provisioning_status === "in_progress",
+      );
+      return anyInFlight ? 5_000 : false;
+    },
   });
 
   const createCredential = useMutation({
@@ -117,6 +131,11 @@ export function BrokerCredentials() {
   const toggleActive = useMutation({
     mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
       apiClient.patch(`/broker-credentials/${id}`, { is_active }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["broker-credentials"] }),
+  });
+
+  const retryProvisioning = useMutation({
+    mutationFn: (credentialId: string) => apiClient.post(`/broker-credentials/${credentialId}/retry-provisioning`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["broker-credentials"] }),
   });
 
@@ -151,9 +170,9 @@ export function BrokerCredentials() {
         <Card style={{ maxWidth: 480 }} className="mb-8">
           <h2 className="mt-0">Connect your MT5 account to get started</h2>
           <p className="text-text-muted">
-            Saving credentials does not automatically start trading — a bridge worker still needs to
-            be provisioned for this account (a one-time operator setup step) before it shows up as
-            connected on the Live page.
+            Saving your credentials starts automatic setup — we'll copy and configure an MT5 worker
+            for this account. This usually takes a few minutes; you'll see live progress below, and
+            the account will show up on the Live page once it's connected.
           </p>
           <ConnectForm
             form={form}
@@ -188,7 +207,7 @@ export function BrokerCredentials() {
                 <th>Server</th>
                 <th>Type</th>
                 <th>Active</th>
-                <th>Bridge connected</th>
+                <th>Status</th>
                 <th></th>
               </tr>
             </thead>
@@ -207,11 +226,38 @@ export function BrokerCredentials() {
                       onChange={(e) => toggleActive.mutate({ id: cred.credential_id, is_active: e.target.checked })}
                     />
                   </td>
-                  <td>{cred.bridge_configured ? "yes" : "not yet"}</td>
                   <td>
-                    <Button variant="secondary" disabled={mintToken.isPending} onClick={() => handleMintClick(cred)}>
-                      {cred.bridge_configured ? "Re-mint bridge token" : "Mint bridge token"}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={provisioningBadgeVariant(cred.provisioning_status)}>
+                        {cred.provisioning_status === "in_progress"
+                          ? "provisioning"
+                          : cred.provisioning_status.replace("_", " ")}
+                      </Badge>
+                      {cred.provisioning_status === "in_progress" && cred.provisioning_step && (
+                        <span className="text-[13px] text-text-muted">
+                          {provisioningStepLabel(cred.provisioning_step)}
+                        </span>
+                      )}
+                    </div>
+                    {cred.provisioning_status === "failed" && cred.provisioning_error && (
+                      <p className="text-negative text-[13px] mt-1 mb-0">{cred.provisioning_error}</p>
+                    )}
+                  </td>
+                  <td>
+                    <div className="flex gap-2">
+                      <Button variant="secondary" disabled={mintToken.isPending} onClick={() => handleMintClick(cred)}>
+                        {cred.bridge_configured ? "Re-mint bridge token" : "Mint bridge token"}
+                      </Button>
+                      {cred.provisioning_status === "failed" && (
+                        <Button
+                          variant="secondary"
+                          disabled={retryProvisioning.isPending}
+                          onClick={() => retryProvisioning.mutate(cred.credential_id)}
+                        >
+                          Retry
+                        </Button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -35,7 +35,7 @@ class PollerRunner:
 
         log.info("Claimed job: credential_id=%s account_label=%s", job["credential_id"], job["account_label"])
         try:
-            bridge_url = provision_account(job, self.config)
+            bridge_url = provision_account(job, self.config, self.admin)
         except Exception as e:
             log.exception("Provisioning failed for %s", job["account_label"])
             self._report_failure(job, str(e))

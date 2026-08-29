@@ -54,6 +54,21 @@ class ProvisioningAdminClient:
                 f"POST /internal/provisioning-jobs/{credential_id}/complete failed: {detail}"
             ) from e
 
+    def report_step(self, credential_id: str, step: str) -> None:
+        try:
+            resp = requests.post(
+                f"{self.base_url}/internal/provisioning-jobs/{credential_id}/step",
+                json={"step": step},
+                headers=self._headers,
+                timeout=self.timeout_seconds,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            detail = e.response.text if getattr(e, "response", None) is not None else str(e)
+            raise AdminApiError(
+                f"POST /internal/provisioning-jobs/{credential_id}/step failed: {detail}"
+            ) from e
+
     def fail_job(self, credential_id: str, error: str) -> None:
         try:
             resp = requests.post(
