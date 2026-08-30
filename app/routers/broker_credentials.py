@@ -1,8 +1,9 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.audit import client_ip, write_audit_log
 from app.core.bridge_provisioning import mint_bridge_token
 from app.core.database import get_db
 from app.core.deps import get_current_user
@@ -43,6 +44,7 @@ def list_broker_credentials(
 @router.post("", response_model=BrokerCredentialOut, status_code=status.HTTP_201_CREATED)
 def create_broker_credential(
     payload: BrokerCredentialCreate,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -76,6 +78,17 @@ def create_broker_credential(
     cred.account_login = payload.account_login
     cred.account_password = payload.account_password
     db.add(cred)
+    # Flush (not commit) to populate cred.credential_id -- its
+    # default=uuid.uuid4 is Python-side but only assigned to the ORM
+    # instance on flush, and the audit row below needs it as resource_id.
+    db.flush()
+    write_audit_log(
+        db, "broker_credential_created", "user",
+        actor_id=current_user.user_id, actor_label=current_user.email,
+        resource_type="broker_credential", resource_id=cred.credential_id,
+        details={"broker_name": cred.broker_name, "account_type": cred.account_type, "server": cred.server},
+        ip_address=client_ip(request),
+    )
     db.commit()
     db.refresh(cred)
     return BrokerCredentialOut.from_model(cred)
@@ -85,6 +98,7 @@ def create_broker_credential(
 def update_broker_credential(
     credential_id: uuid.UUID,
     payload: BrokerCredentialUpdate,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -112,6 +126,17 @@ def update_broker_credential(
 
     for field, value in changes.items():
         setattr(row, field, value)
+    # `changes` is safe to log verbatim as-is: BrokerCredentialUpdate
+    # today only exposes `is_active`. If that schema ever grows a field
+    # carrying anything sensitive, this call site must be revisited to
+    # scrub `details` before logging it.
+    write_audit_log(
+        db, "broker_credential_updated", "user",
+        actor_id=current_user.user_id, actor_label=current_user.email,
+        resource_type="broker_credential", resource_id=row.credential_id,
+        details={"changes": changes},
+        ip_address=client_ip(request),
+    )
     db.commit()
     db.refresh(row)
     return BrokerCredentialOut.from_model(row)
@@ -159,6 +184,7 @@ def retry_provisioning(
 @router.post("/{credential_id}/remove", response_model=BrokerCredentialOut)
 def remove_broker_credential(
     credential_id: uuid.UUID,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -206,6 +232,7 @@ def remove_broker_credential(
 
     if not row.provisioning_account_label:
         row.provisioning_status = "removed"
+        event_type = "broker_credential_removed"
     else:
         has_active_machine = (
             db.query(ProvisioningMachine).filter(ProvisioningMachine.is_active.is_(True)).first() is not None
@@ -216,7 +243,17 @@ def remove_broker_credential(
                 detail="No provisioning machine is available to remove this account right now",
             )
         row.provisioning_status = "decommissioning"
+        event_type = "broker_credential_decommission_requested"
 
+    # Two distinct event types, not one -- mirrors the state machine's
+    # own real distinction (immediate removal vs. a queued teardown a
+    # machine must still run) rather than collapsing it.
+    write_audit_log(
+        db, event_type, "user",
+        actor_id=current_user.user_id, actor_label=current_user.email,
+        resource_type="broker_credential", resource_id=row.credential_id,
+        ip_address=client_ip(request),
+    )
     db.commit()
     db.refresh(row)
     return BrokerCredentialOut.from_model(row)
@@ -225,6 +262,7 @@ def remove_broker_credential(
 @router.post("/{credential_id}/bridge-token", response_model=BridgeTokenIssueOut)
 def issue_bridge_token(
     credential_id: uuid.UUID,
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -256,7 +294,17 @@ def issue_bridge_token(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Broker credential not found")
 
+    # Captured BEFORE mint_bridge_token() overwrites the hash -- this is
+    # the only way to tell "first issue" from "rotation" after the fact.
+    was_rotation = row.bridge_fetch_token_hash is not None
     token = mint_bridge_token(row)
+    write_audit_log(
+        db, "bridge_token_issued", "user",
+        actor_id=current_user.user_id, actor_label=current_user.email,
+        resource_type="broker_credential", resource_id=row.credential_id,
+        details={"rotated": was_rotation},
+        ip_address=client_ip(request),
+    )
     db.commit()
 
     return BridgeTokenIssueOut(bridge_token=token)

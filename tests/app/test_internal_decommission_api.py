@@ -1,6 +1,7 @@
 import secrets
 
 from app.core.security import hash_service_token
+from app.models.audit_log import AuditLog
 from app.models.broker_credential import BrokerCredential
 from app.models.provisioning_machine import ProvisioningMachine
 
@@ -200,3 +201,46 @@ def test_fail_for_job_not_removing_is_409(client, db_session):
         headers=_machine_header(machine_token),
     )
     assert resp.status_code == 409
+
+
+def test_claim_writes_audit_log(client, db_session):
+    machine, machine_token = _make_machine(db_session, label="audit-dm1")
+    cred, _ = _make_decommissioning_credential(client, db_session, "audit_decom_a@example.com")
+
+    client.post("/internal/decommission-jobs/claim", headers=_machine_header(machine_token))
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "decommission_job_claimed").first()
+    assert row is not None
+    assert row.actor_type == "machine"
+    assert row.actor_id == machine.machine_id
+    assert row.resource_id == cred.credential_id
+
+
+def test_complete_writes_audit_log(client, db_session):
+    machine, machine_token = _make_machine(db_session, label="audit-dm2")
+    cred, _ = _make_decommissioning_credential(client, db_session, "audit_decom_b@example.com")
+    client.post("/internal/decommission-jobs/claim", headers=_machine_header(machine_token))
+
+    client.post(f"/internal/decommission-jobs/{cred.credential_id}/complete", headers=_machine_header(machine_token))
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "decommission_job_completed").first()
+    assert row is not None
+    # actor identity must survive even though the row's own
+    # provisioning_machine_id gets cleared by this same request.
+    assert row.actor_id == machine.machine_id
+
+
+def test_fail_writes_audit_log_with_error(client, db_session):
+    machine, machine_token = _make_machine(db_session, label="audit-dm3")
+    cred, _ = _make_decommissioning_credential(client, db_session, "audit_decom_c@example.com")
+    client.post("/internal/decommission-jobs/claim", headers=_machine_header(machine_token))
+
+    client.post(
+        f"/internal/decommission-jobs/{cred.credential_id}/fail",
+        json={"error": "nssm remove failed: service still running"},
+        headers=_machine_header(machine_token),
+    )
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "decommission_job_failed").first()
+    assert row is not None
+    assert row.details["error"] == "nssm remove failed: service still running"

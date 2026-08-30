@@ -21,9 +21,10 @@ row immediately without ever creating a job here.
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.audit import client_ip, write_audit_log
 from app.core.database import get_db
 from app.models.broker_credential import VALID_PROVISIONING_STEPS, BrokerCredential
 from app.models.provisioning_machine import ProvisioningMachine
@@ -40,6 +41,7 @@ router = APIRouter(prefix="/internal/decommission-jobs", tags=["internal"])
 
 @router.post("/claim", response_model=DecommissionClaimOut)
 def claim_decommission_job(
+    request: Request,
     machine: ProvisioningMachine = Depends(get_current_machine),
     db: Session = Depends(get_db),
 ):
@@ -68,6 +70,12 @@ def claim_decommission_job(
     row.provisioning_status = "removing"
     row.provisioning_machine_id = machine.machine_id
     row.provisioning_claimed_at = datetime.now(timezone.utc)
+    write_audit_log(
+        db, "decommission_job_claimed", "machine",
+        actor_id=machine.machine_id, actor_label=machine.label,
+        resource_type="broker_credential", resource_id=row.credential_id,
+        ip_address=client_ip(request),
+    )
     db.commit()
     db.refresh(row)
 
@@ -117,6 +125,7 @@ def report_decommission_step(
 @router.post("/{credential_id}/complete", response_model=None, status_code=status.HTTP_204_NO_CONTENT)
 def complete_decommission_job(
     credential_id: uuid.UUID,
+    request: Request,
     machine: ProvisioningMachine = Depends(get_current_machine),
     db: Session = Depends(get_db),
 ):
@@ -132,6 +141,15 @@ def complete_decommission_job(
     row.provisioning_error = None
     row.bridge_url = None
     row.bridge_fetch_token_hash = None
+    # actor identity comes from `machine` (the authenticated caller),
+    # not row.provisioning_machine_id -- that field is being cleared on
+    # this very row above, so it can't be the source here.
+    write_audit_log(
+        db, "decommission_job_completed", "machine",
+        actor_id=machine.machine_id, actor_label=machine.label,
+        resource_type="broker_credential", resource_id=row.credential_id,
+        ip_address=client_ip(request),
+    )
     db.commit()
 
 
@@ -139,10 +157,18 @@ def complete_decommission_job(
 def fail_decommission_job(
     credential_id: uuid.UUID,
     payload: DecommissionFailIn,
+    request: Request,
     machine: ProvisioningMachine = Depends(get_current_machine),
     db: Session = Depends(get_db),
 ):
     row = _claimed_decommission_row_or_409(db, machine, credential_id)
     row.provisioning_status = "decommission_failed"
     row.provisioning_error = payload.error
+    write_audit_log(
+        db, "decommission_job_failed", "machine",
+        actor_id=machine.machine_id, actor_label=machine.label,
+        resource_type="broker_credential", resource_id=row.credential_id,
+        details={"error": payload.error},
+        ip_address=client_ip(request),
+    )
     db.commit()

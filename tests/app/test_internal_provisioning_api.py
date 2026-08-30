@@ -1,6 +1,7 @@
 import secrets
 
 from app.core.security import hash_service_token
+from app.models.audit_log import AuditLog
 from app.models.broker_credential import BrokerCredential
 from app.models.provisioning_machine import ProvisioningMachine
 
@@ -252,3 +253,49 @@ def test_step_report_for_job_not_in_progress_is_409(client, db_session):
         headers=_machine_header(machine_token),
     )
     assert resp.status_code == 409
+
+
+def test_claim_writes_audit_log(client, db_session):
+    machine, machine_token = _make_machine(db_session, label="audit-m1", max_accounts=5)
+    cred, _ = _make_pending_credential(client, db_session, "audit_prov_a@example.com")
+
+    client.post("/internal/provisioning-jobs/claim", headers=_machine_header(machine_token))
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "provisioning_job_claimed").first()
+    assert row is not None
+    assert row.actor_type == "machine"
+    assert row.actor_id == machine.machine_id
+    assert row.actor_label == "audit-m1"
+    assert row.resource_id == cred.credential_id
+
+
+def test_complete_writes_audit_log(client, db_session):
+    machine, machine_token = _make_machine(db_session, label="audit-m2", max_accounts=5)
+    cred, _ = _make_pending_credential(client, db_session, "audit_prov_b@example.com")
+    client.post("/internal/provisioning-jobs/claim", headers=_machine_header(machine_token))
+
+    client.post(
+        f"/internal/provisioning-jobs/{cred.credential_id}/complete",
+        json={"bridge_url": "http://38.247.137.208:8003"},
+        headers=_machine_header(machine_token),
+    )
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "provisioning_job_completed").first()
+    assert row is not None
+    assert row.actor_id == machine.machine_id
+
+
+def test_fail_writes_audit_log_with_error(client, db_session):
+    machine, machine_token = _make_machine(db_session, label="audit-m3", max_accounts=5)
+    cred, _ = _make_pending_credential(client, db_session, "audit_prov_c@example.com")
+    client.post("/internal/provisioning-jobs/claim", headers=_machine_header(machine_token))
+
+    client.post(
+        f"/internal/provisioning-jobs/{cred.credential_id}/fail",
+        json={"error": "MT5 login rejected: invalid password"},
+        headers=_machine_header(machine_token),
+    )
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "provisioning_job_failed").first()
+    assert row is not None
+    assert row.details["error"] == "MT5 login rejected: invalid password"

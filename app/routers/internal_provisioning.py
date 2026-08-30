@@ -23,9 +23,10 @@ poller (Phase 1, not built yet).
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from app.core.audit import client_ip, write_audit_log
 from app.core.bridge_provisioning import mint_bridge_token
 from app.core.database import get_db
 from app.core.security import hash_service_token
@@ -63,6 +64,7 @@ def get_current_machine(
 
 @router.post("/claim", response_model=ProvisioningClaimOut)
 def claim_provisioning_job(
+    request: Request,
     machine: ProvisioningMachine = Depends(get_current_machine),
     db: Session = Depends(get_db),
 ):
@@ -125,6 +127,12 @@ def claim_provisioning_job(
         .all()
     ]
 
+    write_audit_log(
+        db, "provisioning_job_claimed", "machine",
+        actor_id=machine.machine_id, actor_label=machine.label,
+        resource_type="broker_credential", resource_id=row.credential_id,
+        ip_address=client_ip(request),
+    )
     db.commit()
     db.refresh(row)
 
@@ -185,6 +193,7 @@ def report_provisioning_step(
 def complete_provisioning_job(
     credential_id: uuid.UUID,
     payload: ProvisioningCompleteIn,
+    request: Request,
     machine: ProvisioningMachine = Depends(get_current_machine),
     db: Session = Depends(get_db),
 ):
@@ -192,6 +201,12 @@ def complete_provisioning_job(
     row.provisioning_status = "active"
     row.bridge_url = payload.bridge_url
     row.provisioning_error = None
+    write_audit_log(
+        db, "provisioning_job_completed", "machine",
+        actor_id=machine.machine_id, actor_label=machine.label,
+        resource_type="broker_credential", resource_id=row.credential_id,
+        ip_address=client_ip(request),
+    )
     db.commit()
 
 
@@ -199,10 +214,18 @@ def complete_provisioning_job(
 def fail_provisioning_job(
     credential_id: uuid.UUID,
     payload: ProvisioningFailIn,
+    request: Request,
     machine: ProvisioningMachine = Depends(get_current_machine),
     db: Session = Depends(get_db),
 ):
     row = _claimed_row_or_409(db, machine, credential_id)
     row.provisioning_status = "failed"
     row.provisioning_error = payload.error
+    write_audit_log(
+        db, "provisioning_job_failed", "machine",
+        actor_id=machine.machine_id, actor_label=machine.label,
+        resource_type="broker_credential", resource_id=row.credential_id,
+        details={"error": payload.error},
+        ip_address=client_ip(request),
+    )
     db.commit()

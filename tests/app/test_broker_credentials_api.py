@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from app.core.security import hash_service_token
+from app.models.audit_log import AuditLog
 from app.models.broker_credential import BrokerCredential
 from app.models.provisioning_machine import ProvisioningMachine
 
@@ -493,3 +494,95 @@ def test_remove_404_for_another_users_credential(client, db_session):
 
     resp = client.post(f"/broker-credentials/{cred.credential_id}/remove", headers=_auth_header(token_a))
     assert resp.status_code == 404
+
+
+def test_create_broker_credential_writes_audit_log(client, db_session):
+    token = _register_and_login(client, "audit_bc_a@example.com")
+    credential_id = client.post(
+        "/broker-credentials",
+        json={"broker_name": "forex.com", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    ).json()["credential_id"]
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "broker_credential_created").first()
+    assert row is not None
+    assert row.actor_type == "user"
+    assert row.actor_label == "audit_bc_a@example.com"
+    assert str(row.resource_id) == credential_id
+    assert row.details["broker_name"] == "forex.com"
+    assert "account_password" not in row.details
+
+
+def test_update_broker_credential_writes_audit_log_with_changes(client, db_session):
+    token = _register_and_login(client, "audit_bc_b@example.com")
+    credential_id = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    ).json()["credential_id"]
+
+    client.patch(f"/broker-credentials/{credential_id}", json={"is_active": False}, headers=_auth_header(token))
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "broker_credential_updated").first()
+    assert row is not None
+    assert row.details["changes"] == {"is_active": False}
+
+
+def test_remove_never_claimed_credential_writes_removed_audit_log(client, db_session):
+    token = _register_and_login(client, "audit_bc_c@example.com")
+    credential_id = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    ).json()["credential_id"]
+
+    client.post(f"/broker-credentials/{credential_id}/remove", headers=_auth_header(token))
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "broker_credential_removed").first()
+    assert row is not None
+    assert str(row.resource_id) == credential_id
+
+
+def test_remove_claimed_credential_writes_decommission_requested_audit_log(client, db_session):
+    _make_machine(db_session)
+    token = _register_and_login(client, "audit_bc_d@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+
+    cred = BrokerCredential(
+        user_id=user_id, broker_name="b", server="s", account_type="demo", is_active=True,
+        provisioning_status="active", provisioning_account_label="abcd1234",
+    )
+    cred.account_login = "1"
+    cred.account_password = "p"
+    db_session.add(cred)
+    db_session.commit()
+    db_session.refresh(cred)
+
+    client.post(f"/broker-credentials/{cred.credential_id}/remove", headers=_auth_header(token))
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "broker_credential_decommission_requested").first()
+    assert row is not None
+    assert str(row.resource_id) == str(cred.credential_id)
+
+
+def test_issue_bridge_token_writes_audit_log_not_rotated_then_rotated(client, db_session):
+    token = _register_and_login(client, "audit_bc_e@example.com")
+    credential_id = client.post(
+        "/broker-credentials",
+        json={"broker_name": "b", "account_login": "1", "account_password": "p", "server": "s", "account_type": "demo"},
+        headers=_auth_header(token),
+    ).json()["credential_id"]
+
+    client.post(f"/broker-credentials/{credential_id}/bridge-token", headers=_auth_header(token))
+    first_row = (
+        db_session.query(AuditLog)
+        .filter(AuditLog.event_type == "bridge_token_issued")
+        .order_by(AuditLog.timestamp)
+        .first()
+    )
+    assert first_row.details == {"rotated": False}
+
+    client.post(f"/broker-credentials/{credential_id}/bridge-token", headers=_auth_header(token))
+    rows = db_session.query(AuditLog).filter(AuditLog.event_type == "bridge_token_issued").all()
+    assert len(rows) == 2
+    assert any(r.details == {"rotated": True} for r in rows)

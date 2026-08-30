@@ -1,3 +1,6 @@
+from app.models.audit_log import AuditLog
+
+
 def test_register_creates_user(client):
     resp = client.post(
         "/auth/register",
@@ -210,3 +213,87 @@ def test_change_password_succeeds_and_old_password_stops_working(client):
         data={"username": "pwchange_c@example.com", "password": "a-new-password"},
     )
     assert new_login.status_code == 200
+
+
+def test_register_writes_audit_log(client, db_session):
+    resp = client.post(
+        "/auth/register",
+        json={"email": "audit_reg@example.com", "password": "a-real-password"},
+    )
+    user_id = resp.json()["user_id"]
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "user_registered").first()
+    assert row is not None
+    assert row.actor_type == "user"
+    assert str(row.actor_id) == user_id
+    assert row.actor_label == "audit_reg@example.com"
+
+
+def test_login_success_writes_audit_log(client, db_session):
+    client.post("/auth/register", json={"email": "audit_login@example.com", "password": "a-real-password"})
+    client.post(
+        "/auth/login", data={"username": "audit_login@example.com", "password": "a-real-password"},
+    )
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "login_succeeded").first()
+    assert row is not None
+    assert row.actor_type == "user"
+    assert row.actor_label == "audit_login@example.com"
+
+
+def test_login_wrong_password_writes_audit_log_with_reason(client, db_session):
+    client.post("/auth/register", json={"email": "audit_badpw@example.com", "password": "a-real-password"})
+    client.post(
+        "/auth/login", data={"username": "audit_badpw@example.com", "password": "not-the-password"},
+    )
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "login_failed").first()
+    assert row is not None
+    assert row.actor_type == "unknown"
+    assert row.actor_label == "audit_badpw@example.com"
+    assert row.details["reason"] == "bad_password"
+    assert row.resource_type == "user"  # a real user matched by email, even though unverified
+
+
+def test_login_unknown_email_writes_audit_log_with_no_resource(client, db_session):
+    client.post("/auth/login", data={"username": "nobody_audit@example.com", "password": "whatever"})
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "login_failed").first()
+    assert row is not None
+    assert row.details["reason"] == "unknown_email"
+    assert row.resource_id is None
+
+
+def test_login_rejected_inactive_writes_audit_log(client, db_session):
+    from app.models.user import User
+
+    client.post("/auth/register", json={"email": "audit_inactive@example.com", "password": "a-real-password"})
+    user = db_session.query(User).filter(User.email == "audit_inactive@example.com").first()
+    user.is_active = False
+    db_session.commit()
+
+    client.post(
+        "/auth/login", data={"username": "audit_inactive@example.com", "password": "a-real-password"},
+    )
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "login_rejected_inactive").first()
+    assert row is not None
+    assert row.actor_type == "user"
+    assert str(row.actor_id) == str(user.user_id)
+
+
+def test_change_password_writes_audit_log(client, db_session):
+    client.post("/auth/register", json={"email": "audit_pwchange@example.com", "password": "a-real-password"})
+    token = client.post(
+        "/auth/login", data={"username": "audit_pwchange@example.com", "password": "a-real-password"},
+    ).json()["access_token"]
+
+    client.post(
+        "/auth/change-password",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"current_password": "a-real-password", "new_password": "a-new-password"},
+    )
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "password_changed").first()
+    assert row is not None
+    assert row.actor_label == "audit_pwchange@example.com"

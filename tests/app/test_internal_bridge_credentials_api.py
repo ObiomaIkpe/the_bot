@@ -1,3 +1,6 @@
+from app.models.audit_log import AuditLog
+
+
 def _register_and_login(client, email):
     client.post("/auth/register", json={"email": email, "password": "a-real-password"})
     resp = client.post("/auth/login", data={"username": email, "password": "a-real-password"})
@@ -71,3 +74,41 @@ def test_rotating_token_invalidates_the_old_one(client, db_session):
 
     new_resp = client.get("/internal/bridge-credentials", headers={"X-Bridge-Token": second_token})
     assert new_resp.status_code == 200
+
+
+def test_fetch_success_writes_audit_log(client, db_session):
+    credential_id, bridge_token, _ = _create_credential_and_mint_token(client, "audit_ib_a@example.com")
+
+    client.get("/internal/bridge-credentials", headers={"X-Bridge-Token": bridge_token})
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "bridge_credentials_fetched").first()
+    assert row is not None
+    assert row.actor_type == "credential"
+    assert str(row.actor_id) == credential_id
+    assert str(row.resource_id) == credential_id
+
+
+def test_fetch_with_invalid_token_writes_denied_audit_log(client, db_session):
+    client.get("/internal/bridge-credentials", headers={"X-Bridge-Token": "not-a-real-token"})
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "bridge_credentials_fetch_denied").first()
+    assert row is not None
+    assert row.actor_type == "unknown"
+    assert row.actor_id is None
+    assert row.details["reason"] == "not_found"
+    assert row.details["token_hash"]  # a one-way hash, never the raw token
+
+
+def test_fetch_for_inactive_credential_writes_denied_audit_log_with_actor(client, db_session):
+    credential_id, bridge_token, user_token = _create_credential_and_mint_token(client, "audit_ib_b@example.com")
+    client.patch(
+        f"/broker-credentials/{credential_id}", json={"is_active": False}, headers=_auth_header(user_token),
+    )
+
+    client.get("/internal/bridge-credentials", headers={"X-Bridge-Token": bridge_token})
+
+    row = db_session.query(AuditLog).filter(AuditLog.event_type == "bridge_credentials_fetch_denied").first()
+    assert row is not None
+    assert row.actor_type == "credential"
+    assert str(row.actor_id) == credential_id
+    assert row.details["reason"] == "inactive"
