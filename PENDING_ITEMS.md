@@ -55,11 +55,30 @@ status changes -- don't let the two drift.
       not open-ended strategy research from scratch. No OB-related code
       exists anywhere in this repo yet (confirmed by search), so this
       genuinely starts from zero once the specs arrive.
-- [ ] **Logging/audit review.** What's actually in place today (the
-      `events` table, `admin_dashboard/`, where Hetzner/VPS logs land)
-      hasn't been audited end-to-end -- do that pass rather than
-      assuming current coverage is sufficient now that real orders are
-      flowing.
+- [x] **Logging/audit review, part 1: instrument the security gap.**
+      DONE 2026-08-30. Audited what was actually in place (the `events`
+      table has excellent, disciplined trading-pipeline coverage --
+      everything auth/credential/provisioning-adjacent had none). Added
+      a new `audit_log` table + `app/core/audit.py`'s `write_audit_log()`
+      (mirrors `write_event()`'s discipline), instrumented across
+      `auth.py`, `broker_credentials.py`, `internal_bridge.py` (the
+      plaintext-credential-fetch endpoint -- success and denial),
+      `internal_provisioning.py`, `internal_decommission.py`. 288
+      passed, 10 pre-existing unrelated failures, 0 regressions.
+      Two follow-ups still open from the same review, tracked below.
+- [ ] **Logging/audit review, part 2: log rotation / infra hygiene.**
+      No log rotation configured anywhere -- Docker's json-file driver
+      on the VPS and NSSM stdout/stderr files on Hetzner both grow
+      unbounded. Needs Docker `logging:` driver options + either NSSM
+      file rotation or routing everything through the app's structured
+      logger.
+- [ ] **Logging/audit review, part 3: bigger structural fixes.** No FK
+      between `trades` and `events` (the admin dashboard reconstructs
+      the link heuristically); only the API server can emit structured
+      JSON logs, and only if `LOG_FORMAT=json` is set -- shadow_runner,
+      the bridge, and the poller are always plain text; no role/actor
+      identity concept yet, so audit records can say WHAT happened but
+      not yet who authorized it beyond a raw user/machine id.
 - [ ] **Monitoring/alerting.** Nothing currently pages a human if the
       bot stops running, misses a trading day, or an order fails to
       fill -- everything today is checked by someone looking manually.
