@@ -427,9 +427,14 @@ still pass. Manual end-to-end curl check against a real running server
 and the real dev DB: a fresh user gets 403 from every `/admin/*` route,
 `promote_to_admin.py` flips `is_admin`, the same user then gets 200
 from all five with real data, and `/auth/me` reflects `is_admin` back
-correctly. `admin_dashboard/` itself is kept until the user has
-manually confirmed the React admin pages in the browser -- see the
-plan's "port first, delete after" decision.
+correctly. User manually confirmed the "Admin" nav section and pages in
+the browser afterward.
+
+`admin_dashboard/` itself (and its `docker-compose.yml` service block)
+removed 2026-08-30, per the plan's "port first, delete after" decision.
+**Open follow-up**: the actual Streamlit container may still be running
+on the VPS -- see `HANDOFF.md` open item 10 for the remaining
+`docker compose`/`Caddyfile` teardown there.
 
 ## Process
 

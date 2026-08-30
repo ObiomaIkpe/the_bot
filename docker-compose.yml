@@ -37,17 +37,6 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
-  admin_dashboard:
-    build:
-      context: .
-      dockerfile: admin_dashboard/Dockerfile
-    ports:
-      - "8004:8501"
-    env_file: ./.env
-    depends_on:
-      db:
-        condition: service_healthy
-    restart: unless-stopped
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped

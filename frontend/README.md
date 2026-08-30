@@ -1,9 +1,11 @@
 # Trading bot admin frontend
 
-React + TypeScript (Vite) admin UI for the trading bot, replacing the
-old read-only Streamlit tool (`admin_dashboard/`) with a real,
-multi-user, write-capable frontend. See `ADMIN_FRONTEND_PLAN.md` at the
-repo root for the original plan (M1-M5) this was built against, and
+React + TypeScript (Vite) admin UI for the trading bot. Replaced the
+old read-only Streamlit tool (`admin_dashboard/`, removed 2026-08-30)
+with a real, multi-user, write-capable frontend, plus (M6) a
+role-gated `/admin/*` section covering the same cross-user views that
+tool used to. See `ADMIN_FRONTEND_PLAN.md` at the repo root for the
+original plan (M1-M6) this was built against, and
 `~/.claude/plans/misty-seeking-crescent.md` for the screens/design-system
 restructuring this README currently describes.
 

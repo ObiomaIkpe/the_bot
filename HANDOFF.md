@@ -422,6 +422,36 @@ set of trusted callers).
    on a client connection reset (Proactor event loop quirk), doesn't
    crash the server, fix available later by switching to the Selector
    loop; bridge authentication (see "Phase 3 progress" above).
+9. ✅ **Logging/audit review, part 1: security-event audit trail.** DONE
+   2026-08-30. New `audit_log` table + `app/core/audit.py`'s
+   `write_audit_log()` (mirrors `write_event()`'s discipline), covering
+   what previously had zero durable trail: auth (register/login/
+   password-change), broker credential create/update/remove/token-
+   rotation, provisioning/decommission job transitions, and --
+   highest-priority gap -- `internal_bridge.py`'s plaintext-credential
+   fetch (success and denial). Viewable via a new `admin_dashboard`
+   Streamlit tab, later ported into the React admin section below.
+   Parts 2 (log rotation, still unbounded on both the VPS and Hetzner)
+   and 3 (bigger structural fixes) remain open -- see `PENDING_ITEMS.md`.
+10. ✅ **Replaced `admin_dashboard/` (Streamlit) with a real React admin
+    section.** DONE 2026-08-30 -- see `ADMIN_FRONTEND_PLAN.md`'s M6
+    addendum for the full design. New `User.is_admin` flag + a
+    `get_current_admin`-gated `/admin/*` API (events, trades + a
+    per-trade event-chain drill-down, safety checks, the audit log
+    above, model configs -- all scoped across every user, each now
+    showing `user_email`, which the Streamlit tool never did), plus a
+    matching "Admin" section in the React frontend. No self-service way
+    to become an admin -- `app/scripts/promote_to_admin.py`, run by
+    hand. Verified end-to-end against a real running server + the local
+    dev DB, and manually confirmed in the browser by the user.
+    **Open follow-up, not yet done**: `admin_dashboard/`'s
+    `docker-compose.yml` service block was removed from the repo, but
+    the actual Streamlit container may still be running on the VPS --
+    needs `docker compose down admin_dashboard` (or equivalent) there
+    on the next deploy, plus deploying this session's backend/frontend
+    changes for the new admin section to exist in production at all.
+    The VPS's `Caddyfile` (not in this repo) may also route port 8004
+    to it -- check and remove that block there too if so.
 
 ## Security notes
 
