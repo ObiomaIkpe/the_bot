@@ -10,6 +10,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.logging import configure_logging
 from app.routers import (
+    admin,
     auth,
     broker_credentials,
     events,
@@ -35,6 +36,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(admin.router)
 app.include_router(auth.router)
 app.include_router(broker_credentials.router)
 app.include_router(events.router)

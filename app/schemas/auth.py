@@ -17,6 +17,7 @@ class UserOut(BaseModel):
     user_id: uuid.UUID
     email: EmailStr
     is_active: bool
+    is_admin: bool
 
     class Config:
         from_attributes = True

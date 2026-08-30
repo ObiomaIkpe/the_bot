@@ -25,3 +25,16 @@ def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exception
     return user
+
+
+def get_current_admin(current_user: User = Depends(get_current_user)) -> User:
+    """Same JWT mechanism as get_current_user, with an extra
+    authorization check layered on -- NOT a separate trust boundary the
+    way app/routers/internal_provisioning.py's get_current_machine is
+    (that's a different auth mechanism entirely, a machine token, kept
+    in its own file for that reason). 403, not 401: the caller IS a
+    real, authenticated user, just not one allowed to see every user's
+    data via app/routers/admin.py."""
+    if not current_user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin privileges required")
+    return current_user
