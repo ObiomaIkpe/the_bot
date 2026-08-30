@@ -5,7 +5,7 @@ session.add() -- there is genuinely nothing to write.
 """
 from datetime import datetime, timedelta
 
-from db import Event, ModelConfig, Trade
+from db import AuditLog, Event, ModelConfig, Trade
 
 # Mirrors app/models/event.py's own REAL_ACTION_EVENT_TYPES -- imported
 # rather than redefined so this can't silently drift from the real list.
@@ -111,6 +111,23 @@ def get_event_chain_for_trade(session, trade: Trade) -> dict:
 
 def get_model_configs(session):
     return session.query(ModelConfig).order_by(ModelConfig.model_name).all()
+
+
+def get_recent_audit_log(session, actor_type=None, event_types=None, since=None, limit=500):
+    """Most recent audit_log rows first -- security/identity events
+    (auth, broker credential lifecycle, provisioning/decommission job
+    transitions, the plaintext-credential fetch), NOT the trading
+    pipeline's own events (see get_recent_events for that). `actor_type`
+    is a single value or None (all). `event_types` is a list or None
+    (all)."""
+    q = session.query(AuditLog)
+    if actor_type:
+        q = q.filter(AuditLog.actor_type == actor_type)
+    if event_types:
+        q = q.filter(AuditLog.event_type.in_(event_types))
+    if since:
+        q = q.filter(AuditLog.timestamp >= since)
+    return q.order_by(AuditLog.timestamp.desc()).limit(limit).all()
 
 
 def is_real_action_event(event_type: str) -> bool:

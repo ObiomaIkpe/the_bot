@@ -15,11 +15,17 @@ from db import get_session
 from queries import (
     get_event_chain_for_trade,
     get_model_configs,
+    get_recent_audit_log,
     get_recent_events,
     get_safety_failures,
     get_trades,
     is_real_action_event,
 )
+
+# Same "import, don't redefine" discipline as REAL_ACTION_EVENT_TYPES
+# above -- this dashboard must never carry its own stale copy of the
+# valid event-type vocabulary.
+from app.models.audit_log import VALID_ACTOR_TYPES, VALID_AUDIT_EVENT_TYPES
 
 st.set_page_config(page_title="Trading Bot Admin", layout="wide")
 
@@ -41,8 +47,8 @@ with st.sidebar:
 
 session = get_session()
 
-tab_feed, tab_trades, tab_safety, tab_models = st.tabs(
-    ["Live Event Feed", "Trades", "Safety Checks", "Models"]
+tab_feed, tab_trades, tab_safety, tab_audit, tab_models = st.tabs(
+    ["Live Event Feed", "Trades", "Safety Checks", "Audit log", "Models"]
 )
 
 # ---------- Live Event Feed ----------
@@ -82,7 +88,7 @@ with tab_feed:
             f"({len(events)} events shown)",
             unsafe_allow_html=True,
         )
-        st.dataframe(df.style.apply(_highlight, axis=1), use_container_width=True, height=600)
+        st.dataframe(df.style.apply(_highlight, axis=1), height=600)
 
 # ---------- Trades ----------
 with tab_trades:
@@ -128,7 +134,7 @@ with tab_trades:
             }
             for t in trades
         ]
-        st.dataframe(pd.DataFrame(trade_rows), use_container_width=True, height=350)
+        st.dataframe(pd.DataFrame(trade_rows), height=350)
 
         st.divider()
         st.subheader("Trade drill-down")
@@ -187,7 +193,7 @@ with tab_trades:
             chain_rows.append(
                 {"timestamp": e.timestamp, "event_type": e.event_type, "match": tag, "details": e.details}
             )
-        st.dataframe(pd.DataFrame(chain_rows), use_container_width=True, height=400)
+        st.dataframe(pd.DataFrame(chain_rows), height=400)
 
 # ---------- Safety Checks ----------
 with tab_safety:
@@ -213,11 +219,62 @@ with tab_safety:
             for e in failures
         ]
         df_fail = pd.DataFrame(fail_rows)
-        st.dataframe(df_fail, use_container_width=True, height=300)
+        st.dataframe(df_fail, height=300)
 
         st.markdown("**Failure counts by check_name** (repeated failures are the ones worth investigating first)")
         counts = df_fail.groupby("check_name").size().sort_values(ascending=False)
         st.bar_chart(counts)
+
+# ---------- Audit log ----------
+with tab_audit:
+    st.subheader("Security / identity audit log")
+    st.caption(
+        "Auth, broker credential lifecycle, and provisioning/decommission "
+        "job transitions -- NOT the trading pipeline's own events (see "
+        "Live Event Feed for those). Covers every user, not just the one "
+        "picked by the sidebar's model filter, since these events aren't "
+        "scoped to a trading model at all."
+    )
+    a1, a2, a3 = st.columns([1, 2, 1])
+    with a1:
+        actor_type_filter = st.selectbox("Actor type", ["all"] + list(VALID_ACTOR_TYPES))
+        actor_type_filter = None if actor_type_filter == "all" else actor_type_filter
+    with a2:
+        event_type_filter = st.multiselect("Event type", list(VALID_AUDIT_EVENT_TYPES))
+    with a3:
+        audit_hours_back = st.slider("Hours back", 1, 24 * 30, 24 * 7, key="audit_hours")
+
+    audit_rows = get_recent_audit_log(
+        session,
+        actor_type=actor_type_filter,
+        event_types=event_type_filter or None,
+        since=datetime.utcnow() - timedelta(hours=audit_hours_back),
+        limit=1000,
+    )
+    if not audit_rows:
+        st.info("No audit log rows in this window.")
+    else:
+        st.caption(f"{len(audit_rows)} rows shown")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "timestamp": r.timestamp,
+                        "event_type": r.event_type,
+                        "actor_type": r.actor_type,
+                        "actor_label": r.actor_label,
+                        "resource_type": r.resource_type,
+                        "resource_id": r.resource_id,
+                        "ip_address": r.ip_address,
+                        "details": r.details,
+                    }
+                    for r in audit_rows
+                ]
+            ),
+            column_config={"details": st.column_config.JsonColumn("details")},
+            hide_index=True,
+            height=600,
+        )
 
 # ---------- Models ----------
 with tab_models:
@@ -236,7 +293,7 @@ with tab_models:
             }
             for c in configs
         ]
-        st.dataframe(pd.DataFrame(cfg_rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(cfg_rows))
         st.caption(
             "status: disabled = nothing runs · shadow = journals only, no real orders · "
             "active = the only state that places real orders."

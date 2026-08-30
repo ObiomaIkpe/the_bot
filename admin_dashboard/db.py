@@ -38,7 +38,7 @@ if MAIN_REPO_PATH not in sys.path:
     sys.path.insert(0, MAIN_REPO_PATH)
 
 # Imported only after sys.path is patched above.
-from app.models import Event, ModelConfig, Trade  # noqa: E402
+from app.models import AuditLog, Event, ModelConfig, Trade  # noqa: E402
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 if not DATABASE_URL:
