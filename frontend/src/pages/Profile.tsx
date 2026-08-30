@@ -1,16 +1,13 @@
 import { useState, type FormEvent } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { apiClient, ApiError } from "../api/client";
-import type { CurrentUser } from "../api/types";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Card } from "../components/Card";
 
 export function Profile() {
-  const meQuery = useQuery({
-    queryKey: ["me"],
-    queryFn: () => apiClient.get<CurrentUser>("/auth/me"),
-  });
+  const meQuery = useCurrentUser();
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");

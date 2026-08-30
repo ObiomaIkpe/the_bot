@@ -388,6 +388,49 @@ Verified: 220 passed, same 10 pre-existing unrelated failures. Manual
 curl check: connecting a second account correctly deactivates the
 first.
 
+## Milestone M6: replace admin_dashboard/ (Streamlit) with a real
+## admin section here (2026-08-30)
+
+`admin_dashboard/` was a separate, read-only Streamlit app querying
+Postgres directly, unscoped across all users -- deliberately outside
+this frontend's own per-user architecture. The user wanted one UI, not
+two. Full plan/rationale at `~/.claude/plans/misty-seeking-crescent.md`.
+
+- Added a real `User.is_admin` flag (migration `0016`), gated
+  server-side via a new `get_current_admin` dependency
+  (`app/core/deps.py`) and a new `app/routers/admin.py` -- the one
+  place in the whole API that reads across ALL users on purpose. Five
+  endpoints: `/admin/events`, `/admin/safety-checks`, `/admin/trades`
+  (+ `/admin/trades/{id}/event-chain`, porting the Streamlit tool's
+  fill/close-matching logic server-side), `/admin/audit-log`,
+  `/admin/model-configs`. Every admin response adds a `user_email`
+  field the Streamlit tool never had -- a genuine improvement, not just
+  a port, since the original had no per-user shape to show at all.
+- No self-service way to become an admin -- `app/scripts/promote_to_admin.py`,
+  run by hand, same "no HTTP endpoint" precedent as minting a
+  provisioning machine token.
+- React side: a shared `useCurrentUser()` hook (`frontend/src/auth/`),
+  a new `AdminRoute` guard (server enforcement is still the real
+  boundary; this just keeps a non-admin from seeing the UI at all), a
+  conditional "Admin" nav section, and 5 new pages under
+  `frontend/src/pages/admin/` mirroring `TradeHistory.tsx`'s existing
+  conventions exactly (filters via `URLSearchParams`, `Table`/
+  `EmptyState`, a `recharts` bar chart for the safety-check-failure
+  counts, same as `PnlChart.tsx`'s one existing chart).
+- Deliberately read-only, matching the Streamlit original -- no write
+  actions live here; per-user live actions already exist elsewhere in
+  this frontend.
+
+Verified: 297 passed (9 new), same 10 pre-existing unrelated failures.
+Frontend: `tsc -b && vite build` clean, all 16 existing frontend tests
+still pass. Manual end-to-end curl check against a real running server
+and the real dev DB: a fresh user gets 403 from every `/admin/*` route,
+`promote_to_admin.py` flips `is_admin`, the same user then gets 200
+from all five with real data, and `/auth/me` reflects `is_admin` back
+correctly. `admin_dashboard/` itself is kept until the user has
+manually confirmed the React admin pages in the browser -- see the
+plan's "port first, delete after" decision.
+
 ## Process
 
 - **Each milestone (M1 → M2 → M3 → M4 → M5) is implemented and verified

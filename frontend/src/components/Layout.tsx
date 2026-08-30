@@ -1,5 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
+import { useCurrentUser } from "../auth/useCurrentUser";
 import { Button } from "./Button";
 import { ThemeToggle } from "./ThemeToggle";
 
@@ -13,8 +14,27 @@ const NAV_ITEMS = [
   { to: "/profile", label: "Profile" },
 ];
 
+// Only rendered for is_admin users -- see AdminRoute.tsx for the
+// matching server-enforced route guard (this list is just visibility,
+// not the actual security boundary).
+const ADMIN_NAV_ITEMS = [
+  { to: "/admin/events", label: "Live event feed" },
+  { to: "/admin/trades", label: "Trades" },
+  { to: "/admin/safety-checks", label: "Safety checks" },
+  { to: "/admin/audit-log", label: "Audit log" },
+  { to: "/admin/model-configs", label: "Model configs" },
+];
+
+const navLinkClassName = ({ isActive }: { isActive: boolean }) =>
+  `px-5 py-2.5 text-sm no-underline border-l-[3px] ${
+    isActive
+      ? "text-text border-accent bg-bg-elevated-2 font-semibold"
+      : "text-text-muted border-transparent hover:text-text hover:bg-bg-elevated-2"
+  }`;
+
 export function Layout() {
   const { logout } = useAuth();
+  const { data: currentUser } = useCurrentUser();
 
   return (
     <div className="flex min-h-screen">
@@ -22,20 +42,22 @@ export function Layout() {
         <div className="px-5 pb-4 mb-3 border-b border-line font-bold text-[15px]">Trading Bot Admin</div>
         <nav className="flex flex-col gap-0.5 flex-1">
           {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                `px-5 py-2.5 text-sm no-underline border-l-[3px] ${
-                  isActive
-                    ? "text-text border-accent bg-bg-elevated-2 font-semibold"
-                    : "text-text-muted border-transparent hover:text-text hover:bg-bg-elevated-2"
-                }`
-              }
-            >
+            <NavLink key={item.to} to={item.to} className={navLinkClassName}>
               {item.label}
             </NavLink>
           ))}
+          {currentUser?.is_admin && (
+            <>
+              <div className="px-5 pt-3 mt-3 border-t border-line text-[11px] uppercase tracking-wide text-text-muted">
+                Admin
+              </div>
+              {ADMIN_NAV_ITEMS.map((item) => (
+                <NavLink key={item.to} to={item.to} className={navLinkClassName}>
+                  {item.label}
+                </NavLink>
+              ))}
+            </>
+          )}
         </nav>
         <div className="px-5 pt-3 mt-3 border-t border-line flex flex-col gap-1">
           <ThemeToggle />

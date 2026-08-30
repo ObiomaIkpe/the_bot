@@ -138,4 +138,36 @@ export interface CurrentUser {
   user_id: string;
   email: string;
   is_active: boolean;
+  is_admin: boolean;
+}
+
+// ---------- Admin (app/routers/admin.py) ----------
+// Each Admin*Out is its single-user equivalent above plus user_email --
+// admin_dashboard/ (the Streamlit tool these replace) never showed
+// which user a row belonged to at all, so this is a genuine addition,
+// not just a straight port.
+
+export type AdminEventOut = EventOut & { user_email: string };
+export type AdminTradeOut = TradeOut & { user_email: string };
+export type AdminModelConfigOut = ModelConfigOut & { user_email: string };
+
+export interface AdminEventChainOut {
+  day_events: AdminEventOut[];
+  matched_fill_event_id: string | null;
+  matched_close_event_id: string | null;
+}
+
+export type AuditLogActorType = "user" | "machine" | "credential" | "unknown";
+
+export interface AuditLogOut {
+  audit_id: string;
+  timestamp: string;
+  actor_type: AuditLogActorType;
+  actor_id: string | null;
+  actor_label: string | null;
+  event_type: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  details: Record<string, unknown>;
+  ip_address: string | null;
 }
