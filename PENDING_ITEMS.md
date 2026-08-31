@@ -85,16 +85,44 @@ status changes -- don't let the two drift.
       `AppRotateOnline`/`AppRotateBytes` params, applied to whichever
       services run under NSSM there, require an actual service restart
       to take effect.
-- [ ] **Logging/audit review, part 3: bigger structural fixes.** No FK
-      between `trades` and `events` (the admin dashboard reconstructs
-      the link heuristically); only the API server can emit structured
-      JSON logs, and only if `LOG_FORMAT=json` is set -- shadow_runner,
-      the bridge, and the poller are always plain text; no role/actor
-      identity concept yet, so audit records can say WHAT happened but
-      not yet who authorized it beyond a raw user/machine id.
-- [ ] **Monitoring/alerting.** Nothing currently pages a human if the
-      bot stops running, misses a trading day, or an order fails to
-      fill -- everything today is checked by someone looking manually.
+- [x] **Logging/audit review, part 3a: `trades`<->`events` FK.** DONE
+      2026-08-31. `events.trade_id` (migration 0017), set directly by
+      `shadow_runner/runner.py`'s `_write_trade()` -- no more
+      re-deriving the fill/close match heuristically every time
+      something needs it. `app/routers/admin.py`'s event-chain endpoint
+      prefers the FK, falls back to the old heuristic only for
+      historical (pre-migration) events; `app/scripts/backfill_event_trade_ids.py`
+      backfills those on request (run-by-hand, not yet run anywhere).
+- [x] **Logging/audit review, part 3b: shadow_runner structured JSON
+      logging.** DONE 2026-08-31. `shadow_runner/main.py` now calls
+      `app.core.logging.configure_logging()` instead of its own ad hoc
+      `basicConfig()` -- gets `LOG_FORMAT=json` support, previously
+      api-only. The provisioning poller could get the same treatment
+      cheaply (separate Windows box, but not Tony's live bridge) if
+      wanted -- not done yet, just not asked for. `bridge/app/main.py`
+      (Tony's live bridge) stays deliberately deferred, same discipline
+      as the NSSM item (2b) below.
+- [ ] **Logging/audit review, part 3c: role/actor identity.** Still
+      deferred as underspecified -- audit records can say WHAT happened
+      but not who authorized it beyond a raw user/machine id; no
+      concrete need driving a design yet.
+- [~] **Monitoring/alerting.** Foundation built 2026-08-31
+      (`app/core/telegram.py`, `app/core/healthchecks.py`), dormant
+      until real credentials exist -- **user needs to**: create a
+      Telegram bot via @BotFather, add it to an existing group, get the
+      bot token + group chat id; create two healthchecks.io checks (one
+      per service: api, shadow_runner), get their ping URLs. Once
+      those exist, set `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` in `.env`
+      and each service's `HEALTHCHECKS_PING_URL` in `docker-compose.yml`
+      (commented placeholders already there). Covered so far, first
+      pass only (user chose to build incrementally):
+        - [x] `safety_check_failed` events -> Telegram alert
+        - [x] process/service down -> healthchecks.io dead-man's-switch
+              (api: 60s heartbeat via lifespan background task;
+              shadow_runner: pinged once per run_forever() loop
+              iteration)
+      Not yet built: order-fill-failure alert, missed-trading-day alert
+      -- next in line whenever picked back up.
 - [ ] **Secret rotation** -- `JWT_SECRET_KEY`, `CREDENTIALS_ENCRYPTION_KEY`,
       the Postgres password. Long-standing, never done.
 
