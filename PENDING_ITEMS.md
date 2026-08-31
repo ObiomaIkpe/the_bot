@@ -85,7 +85,11 @@ status changes -- don't let the two drift.
       being folded into a routine change. NSSM's `AppRotateFiles`/
       `AppRotateOnline`/`AppRotateBytes` params, applied to whichever
       services run under NSSM there, require an actual service restart
-      to take effect.
+      to take effect. **Discussed again 2026-08-31**: requires (a) an
+      explicit go-ahead, not just referencing this list, and (b) the
+      user being reachable during the restart in case of a rollback --
+      user chose to skip for now rather than commit to that. Revisit
+      whenever ready to schedule it deliberately.
 - [x] **Logging/audit review, part 3a: `trades`<->`events` FK.** DONE
       2026-08-31. `events.trade_id` (migration 0017), set directly by
       `shadow_runner/runner.py`'s `_write_trade()` -- no more
@@ -105,8 +109,14 @@ status changes -- don't let the two drift.
       as the NSSM item (2b) below.
 - [ ] **Logging/audit review, part 3c: role/actor identity.** Still
       deferred as underspecified -- audit records can say WHAT happened
-      but not who authorized it beyond a raw user/machine id; no
-      concrete need driving a design yet.
+      but not who authorized it beyond a raw user/machine id.
+      **Discussed again 2026-08-31**: asked the user what concrete gap
+      this would need to close (the audit log already has
+      `actor_type`/`actor_id`/`actor_label` -- what's missing beyond
+      that isn't obvious without a real scenario). User chose to skip
+      -- no concrete need identified. Revisit only if a real scenario
+      surfaces (e.g. an admin acting on behalf of a user, or multiple
+      credentials per user needing to be told apart in the audit trail).
 - [~] **Monitoring/alerting.** Foundation built 2026-08-31
       (`app/core/telegram.py`, `app/core/healthchecks.py`), dormant
       until real credentials exist -- **user needs to**: create a
@@ -115,15 +125,25 @@ status changes -- don't let the two drift.
       per service: api, shadow_runner), get their ping URLs. Once
       those exist, set `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` in `.env`
       and each service's `HEALTHCHECKS_PING_URL` in `docker-compose.yml`
-      (commented placeholders already there). Covered so far, first
-      pass only (user chose to build incrementally):
+      (commented placeholders already there). Covered so far, built
+      incrementally:
         - [x] `safety_check_failed` events -> Telegram alert
         - [x] process/service down -> healthchecks.io dead-man's-switch
               (api: 60s heartbeat via lifespan background task;
               shadow_runner: pinged once per run_forever() loop
               iteration)
-      Not yet built: order-fill-failure alert, missed-trading-day alert
-      -- next in line whenever picked back up.
+        - [x] `order_placement_failed` events -> Telegram alert
+              (2026-08-31)
+      Not yet built, deliberately skipped 2026-08-31: **missed-trading-
+      day alert**. Design tradeoff discussed: this project only tracks
+      FOMC dates as known non-trading days, not general market
+      holidays, so a naive "zero events by end of day" check would
+      false-page on every real market holiday (rare for EURUSD --
+      basically just Dec 25/Jan 1 -- but still a false alarm each
+      time). Two options on the table when picked back up: (a)
+      hardcode the handful of real FX closures so the check is
+      accurate, or (b) ship the naive version and accept the occasional
+      false page. User chose to skip both for now rather than pick.
 - [ ] **Secret rotation** -- `JWT_SECRET_KEY`, `CREDENTIALS_ENCRYPTION_KEY`,
       the Postgres password. Long-standing, never done.
 
