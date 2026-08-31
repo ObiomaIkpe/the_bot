@@ -41,6 +41,20 @@ status changes -- don't let the two drift.
 
 ## Real work, unblocked and ready
 
+- [x] **Dynamic model registry.** DONE 2026-08-31. User corrected a
+      wrong assumption (fvg/ob/fvg_ob are NOT the only models -- the
+      roster keeps growing, names unknown yet), which exposed a real
+      gap: `events.model`/`trades.model` had hardcoded DB CHECK
+      constraints limiting them to exactly those 3 names, and 3
+      separate frontend files hardcoded the same list. New `models`
+      table (migration 0018) + FK constraints instead; adding a model
+      is now one admin-UI form (`/admin/models`), not a migration --
+      backfills every existing user's `model_configs` row immediately,
+      no script run needed. 346 passed (7 new), 10 pre-existing
+      unrelated failures, 0 regressions. **Not yet deployed to the
+      live VPS** -- this one DOES include a migration + a `db`
+      restart-adjacent change (FK constraints), unlike the other two
+      pending deploys, so schedule it deliberately. Tracked in memory.
 - [x] **Trader-facing trade story ("why was this trade placed").**
       DONE 2026-08-31. Real traders are about to get access; outcome
       numbers alone weren't enough, and the only page that explained a
