@@ -41,6 +41,18 @@ status changes -- don't let the two drift.
 
 ## Real work, unblocked and ready
 
+- [x] **Trader-facing trade story ("why was this trade placed").**
+      DONE 2026-08-31. Real traders are about to get access; outcome
+      numbers alone weren't enough, and the only page that explained a
+      trade's reasoning (`AdminTradeDetail.tsx`) was admin-only. New
+      `GET /trades/{trade_id}/event-chain` (`app/core/trade_story.py`,
+      `app/core/event_narration.py`) walks the raid -> MSS -> FVG ->
+      candidate -> fill -> close chain and narrates it in plain
+      English; new `/trades/:tradeId` page. 100% read-only, no schema
+      migration, no shadow_runner write-path change. 339 passed (23
+      new), 10 pre-existing unrelated failures, 0 regressions. **Not
+      yet deployed to the live VPS** -- same pending-deploy pattern as
+      the admin section, tracked in memory.
 - [x] **Write `PHASE3_VALIDATION.md`** (Phase 3 step 9). DONE
       2026-08-31 -- reports the real data: ~5 weeks of clean unattended
       live running, two real autonomous demo trades (one TP, one SL),
