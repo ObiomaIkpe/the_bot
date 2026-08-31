@@ -368,16 +368,26 @@ class ShadowRunner:
             db.close()
 
         # Monitoring/alerting (logging/audit review part 3): fires only
-        # AFTER the commit above succeeds -- an alert about a safety
-        # check that failed to even get journaled would be worse than no
-        # alert (nothing to look at when someone checks). send_telegram_alert()
+        # AFTER the commit above succeeds -- an alert about something
+        # that failed to even get journaled would be worse than no alert
+        # (nothing to look at when someone checks). send_telegram_alert()
         # itself no-ops safely if unconfigured, and never raises, so this
-        # is safe to leave unconditional here.
+        # is safe to leave unconditional here. order_skipped_paused is
+        # deliberately NOT alerted on -- that's an intentional, expected
+        # skip (the model is paused), not a failure.
         for e in events:
-            if e.get("event_type") == "safety_check_failed":
+            event_type = e.get("event_type")
+            if event_type == "safety_check_failed":
                 send_telegram_alert(
                     f"⚠️ safety_check_failed: {e.get('check_name')} "
                     f"(user={self.config.user_id}, model={self.config.model})\n"
+                    f"{e.get('error')}"
+                )
+            elif event_type == "order_placement_failed":
+                send_telegram_alert(
+                    f"🔴 order_placement_failed "
+                    f"(user={self.config.user_id}, model={self.config.model}, "
+                    f"candidate={e.get('candidate_key')})\n"
                     f"{e.get('error')}"
                 )
 

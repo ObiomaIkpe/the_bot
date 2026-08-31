@@ -1,10 +1,11 @@
 """
-Tests for ShadowRunner._write_events_now()'s safety_check_failed ->
-Telegram alert hook (logging/audit review part 3, monitoring/alerting).
-send_telegram_alert() itself is monkeypatched -- these tests only
-verify the hook fires for the right event type, with the commit
-already having happened, not that Telegram actually receives anything
-(see tests/app/test_telegram.py for that).
+Tests for ShadowRunner._write_events_now()'s safety_check_failed /
+order_placement_failed -> Telegram alert hooks (logging/audit review
+part 3, monitoring/alerting). send_telegram_alert() itself is
+monkeypatched -- these tests only verify the hook fires for the right
+event types, with the commit already having happened, not that
+Telegram actually receives anything (see tests/app/test_telegram.py
+for that).
 """
 import shadow_runner.runner as runner_module
 from shadow_runner.runner import ShadowRunner
@@ -37,6 +38,22 @@ def test_safety_check_failed_event_triggers_alert(monkeypatch):
     assert "limit exceeded" in alerts[0]
 
 
+def test_order_placement_failed_event_triggers_alert(monkeypatch):
+    alerts = []
+    monkeypatch.setattr(runner_module, "send_telegram_alert", lambda text: alerts.append(text))
+
+    runner = _make_runner([])
+    runner._write_events_now([
+        {
+            "event_type": "order_placement_failed", "timestamp": "t",
+            "candidate_key": "('long', 1.1)", "error": "bridge returned 503",
+        },
+    ])
+
+    assert len(alerts) == 1
+    assert "bridge returned 503" in alerts[0]
+
+
 def test_other_event_types_do_not_trigger_alert(monkeypatch):
     alerts = []
     monkeypatch.setattr(runner_module, "send_telegram_alert", lambda text: alerts.append(text))
@@ -45,6 +62,9 @@ def test_other_event_types_do_not_trigger_alert(monkeypatch):
     runner._write_events_now([
         {"event_type": "raid_detected", "timestamp": "t"},
         {"event_type": "order_filled", "timestamp": "t", "direction": "long", "entry": 1.1, "fill_bar_index": 0},
+        # order_skipped_paused is an intentional, expected skip (model
+        # paused) -- not a failure, deliberately not alerted on.
+        {"event_type": "order_skipped_paused", "timestamp": "t"},
     ])
 
     assert alerts == []
