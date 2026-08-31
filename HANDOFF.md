@@ -183,9 +183,10 @@ Full plan is 9 steps. Status:
    10am decision, and backfill all work correctly against genuinely
    live bars, unattended, not just engineered test data or short-lived
    manual observation.
-9. ⬜ **Write `PHASE3_VALIDATION.md`** -- step 8 now has real live
-   output to report on (5 weeks clean uptime, 2 real signal fires,
-   1W/1L). Actual next step for Phase 3.
+9. ✅ **Write `PHASE3_VALIDATION.md`.** DONE 2026-08-31. Reports step
+   8's real live output (5 weeks clean uptime, 2 real signal fires,
+   1W/1L) plus the two cold-start bugs found/fixed on first deployment.
+   Phase 3 is now complete, all 9 steps.
 
 Deliberately deferred, not blocking: bridge authentication (currently
 gated only by the Windows Firewall IP restriction to the Hetzner box --
@@ -194,11 +195,10 @@ set of trusted callers).
 
 ## Open items, in priority order
 
-1. ✅ **Phase 3 step 8: run live, validate.** DONE (2026-08-29 report)
-   -- see "Phase 3 progress" above and Phase 4's own entry: ~5 weeks
-   clean unattended running, two real autonomous demo trades this week
-   (one TP, one SL). Only step 9 (write `PHASE3_VALIDATION.md`)
-   remains for Phase 3.
+1. ✅ **Phase 3, all 9 steps, complete.** Step 8 (run live, validate)
+   done (2026-08-29 report) -- ~5 weeks clean unattended running, two
+   real autonomous demo trades (one TP, one SL). Step 9
+   (`PHASE3_VALIDATION.md`) DONE 2026-08-31.
 2. ✅ **Commit the Hetzner `docker-compose.yml`.** DONE 2026-08-29,
    commit `0a9c571` (same risk class `Dockerfile` already had once --
    `6dd1892` -- the original, never-committed copy on the Hetzner box

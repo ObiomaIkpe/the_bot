@@ -41,10 +41,11 @@ status changes -- don't let the two drift.
 
 ## Real work, unblocked and ready
 
-- [ ] **Write `PHASE3_VALIDATION.md`** (Phase 3 step 9) -- now has real
-      data to report on: ~5 weeks of clean unattended live running, two
-      real autonomous demo trades this week (one take-profit, one
-      stop-loss).
+- [x] **Write `PHASE3_VALIDATION.md`** (Phase 3 step 9). DONE
+      2026-08-31 -- reports the real data: ~5 weeks of clean unattended
+      live running, two real autonomous demo trades (one TP, one SL),
+      plus the two cold-start bugs found/fixed on first deployment.
+      Phase 3 is now complete, all 9 steps.
 - [ ] **New models beyond `fvg` (`ob`, `fvg_ob`, and any others).**
       Clarified 2026-08-29: the user will bring the actual model
       definitions/specs when ready. The job is then the same shape of
