@@ -48,6 +48,8 @@ from zoneinfo import ZoneInfo
 
 from phase1.streaming.day_orchestrator import DayOrchestrator
 from phase1.streaming.day_selection_gate import DaySelectionGate
+from app.core.healthchecks import HeartbeatPinger
+from app.core.telegram import send_telegram_alert
 from shadow_runner.bridge_client import BridgeClient, BridgeError
 from shadow_runner.config import ShadowRunnerConfig
 from shadow_runner.day_state import CurrentDay
@@ -94,6 +96,12 @@ class ShadowRunner:
         # via load_from_db(), restarts too. See position_tracker.py's
         # module docstring for why this can't be day-scoped.
         self.position_tracker: PositionTracker | None = None
+        # Logging/audit review, part 3 (monitoring/alerting): proves the
+        # main loop itself is alive and cycling, not just that the process
+        # exists -- see app.core.healthchecks' module docstring for why
+        # this pings an external service rather than something on the
+        # same VPS. Dormant (no-ops) until HEALTHCHECKS_PING_URL is set.
+        self.heartbeat = HeartbeatPinger()
 
     def _load_model_config(self) -> None:
         db = self.session_factory()
@@ -228,6 +236,14 @@ class ShadowRunner:
                 log.warning("Bridge unavailable this poll, will retry: %s", e)
             except Exception:
                 log.exception("Unexpected error in poll_once -- continuing to next poll")
+            # Pinged every iteration regardless of poll_once()'s outcome --
+            # a caught BridgeError still means this loop is alive and
+            # cycling, which is the thing being proven here. An
+            # uncaught/unexpected crash of run_forever() itself (the
+            # actual "process is down" case) is the only way this ever
+            # stops -- see HeartbeatPinger for why that's caught
+            # externally, by healthchecks.io, not detected locally.
+            self.heartbeat.maybe_ping()
             time_module.sleep(self.config.poll_interval_seconds)
 
     # ---------- per-bar processing ----------
@@ -350,6 +366,20 @@ class ShadowRunner:
             db.commit()
         finally:
             db.close()
+
+        # Monitoring/alerting (logging/audit review part 3): fires only
+        # AFTER the commit above succeeds -- an alert about a safety
+        # check that failed to even get journaled would be worse than no
+        # alert (nothing to look at when someone checks). send_telegram_alert()
+        # itself no-ops safely if unconfigured, and never raises, so this
+        # is safe to leave unconditional here.
+        for e in events:
+            if e.get("event_type") == "safety_check_failed":
+                send_telegram_alert(
+                    f"⚠️ safety_check_failed: {e.get('check_name')} "
+                    f"(user={self.config.user_id}, model={self.config.model})\n"
+                    f"{e.get('error')}"
+                )
 
     # ---------- Phase 3 step 6: restart recovery ----------
 

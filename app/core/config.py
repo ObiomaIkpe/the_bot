@@ -20,6 +20,18 @@ class Settings(BaseSettings):
 
     log_format: str = "text"  # "text" (human-readable) or "json" (structured)
 
+    # Monitoring/alerting (logging/audit review part 3). All optional and
+    # dormant by default -- app.core.telegram/app.core.healthchecks no-op
+    # (with one warning log, not per-call) if left unset, so this is safe
+    # to deploy before real credentials exist. See PENDING_ITEMS.md.
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    # Deliberately one generic name, not telegram_bot_token-style: each
+    # service gets its OWN healthchecks.io check (one for api, one for
+    # shadow_runner), set via docker-compose.yml's per-service
+    # `environment:` block, not this shared default.
+    healthchecks_ping_url: str | None = None
+
     # Comma-separated list of origins the frontend is served from, e.g.
     # "http://localhost:5173,https://admin.example.com". Defaults to the
     # Vite dev server's default port so local frontend dev works with zero

@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.healthchecks import ping_healthchecks
 from app.core.logging import configure_logging
 from app.routers import (
     admin,
@@ -26,7 +29,32 @@ from app.routers import (
 configure_logging()
 logger = logging.getLogger("app")
 
-app = FastAPI(title="SMC/ICT Live Bot -- Phase 0 (Foundation)")
+# Monitoring/alerting (logging/audit review part 3, "process/service down"
+# trigger): pings healthchecks.io on an interval for as long as this
+# process is alive and its event loop is responsive -- see
+# app.core.healthchecks' module docstring for why an external
+# dead-man's-switch, not a same-VPS watcher. Dormant (no real network
+# calls) until HEALTHCHECKS_PING_URL is set -- see ping_healthchecks().
+_HEARTBEAT_INTERVAL_SECONDS = 60
+
+
+async def _heartbeat_loop() -> None:
+    while True:
+        await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+        # ping_healthchecks() is a blocking `requests` call -- run it off
+        # the event loop thread so a slow/hung healthchecks.io request
+        # can never stall request handling.
+        await asyncio.to_thread(ping_healthchecks)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+    yield
+    heartbeat_task.cancel()
+
+
+app = FastAPI(title="SMC/ICT Live Bot -- Phase 0 (Foundation)", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

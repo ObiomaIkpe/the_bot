@@ -39,6 +39,14 @@ services:
     ports:
       - "8003:8000"
     env_file: ./.env
+    # Monitoring/alerting (logging/audit review part 3): api and
+    # shadow_runner each need their OWN healthchecks.io check, so
+    # HEALTHCHECKS_PING_URL is set per-service here rather than shared
+    # via .env. Uncomment once a real check exists for this service --
+    # dormant (no real network calls) until then. TELEGRAM_BOT_TOKEN/
+    # TELEGRAM_CHAT_ID are shared across services, set once in .env.
+    # environment:
+    #   HEALTHCHECKS_PING_URL: https://hc-ping.com/<api's-check-uuid>
     depends_on:
       db:
         condition: service_healthy
@@ -53,6 +61,9 @@ services:
     environment:
       BRIDGE_URL: http://38.247.137.208:8001
       SHADOW_RUNNER_USER_ID: d4469ab9-742c-4656-8959-c21602dc71c5
+      # Same monitoring note as api's block above -- uncomment once a
+      # real check exists for THIS service (a different URL than api's).
+      # HEALTHCHECKS_PING_URL: https://hc-ping.com/<shadow_runner's-check-uuid>
     depends_on:
       db:
         condition: service_healthy
