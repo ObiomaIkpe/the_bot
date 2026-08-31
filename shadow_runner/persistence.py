@@ -279,6 +279,24 @@ def write_event(db: Session, event: dict, user_id: str, model: str) -> Event:
     return row
 
 
+def link_events_to_trade(db: Session, event_ids: list, trade_id) -> None:
+    """
+    Logging/audit review, part 3: sets events.trade_id on already-committed
+    rows, once a trade's own row exists and the caller (runner.py's
+    _write_trade()) has already identified which specific fill/close events
+    belong to it -- this never re-derives that match itself, just persists
+    one the caller already computed. event_ids may be empty (e.g. the
+    order_filled event was never found -- see _write_trade()'s own
+    fallback/log.error for that case) or contain 1-2 ids (fill, close);
+    a scratch-closed trade only ever has a fill.
+    """
+    if not event_ids:
+        return
+    db.query(Event).filter(Event.event_id.in_(event_ids)).update(
+        {"trade_id": trade_id}, synchronize_session=False,
+    )
+
+
 def compute_realized_r(trade: dict) -> float:
     """
     R-multiple = (actual price movement) / (planned risk distance).

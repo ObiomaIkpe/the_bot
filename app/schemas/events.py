@@ -11,6 +11,7 @@ class EventOut(BaseModel):
     timestamp: datetime.datetime
     details: dict
     is_shadow: bool
+    trade_id: uuid.UUID | None = None
 
     class Config:
         from_attributes = True

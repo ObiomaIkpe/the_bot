@@ -59,6 +59,7 @@ from shadow_runner.persistence import (
     get_last_event_timestamp_for_date,
     get_model_config,
     get_recent_swing_history,
+    link_events_to_trade,
     write_event,
     write_trade,
 )
@@ -338,7 +339,14 @@ class ShadowRunner:
         db = self.session_factory()
         try:
             for e in events:
-                write_event(db, e, self.config.user_id, self.config.model)
+                row = write_event(db, e, self.config.user_id, self.config.model)
+                # Logging/audit review, part 3: stash the real DB event_id
+                # back onto the source dict (write_event() itself works off
+                # a copy, so this never mutates its own input) -- lets
+                # _write_trade() later link a trade to the exact events
+                # that made it, once the trade row exists, without
+                # re-deriving the match from scratch.
+                e["_event_id"] = row.event_id
             db.commit()
         finally:
             db.close()
@@ -558,6 +566,11 @@ class ShadowRunner:
 
         if trade["outcome"] == "scratch":
             exit_bar = cd.bars[-1]
+            # A scratch trade never has a trade_closed event to match --
+            # see this function's docstring/callers. Bound explicitly so
+            # the trade<->event linking below can rely on this always
+            # existing, scratch or not.
+            close_event = None
         else:
             close_event = next(
                 (
@@ -632,6 +645,20 @@ class ShadowRunner:
                 cd.date, trade["direction"], self.config.model, trade["outcome"],
                 trade["entry"], trade["exit_price"], is_shadow, real_outcome is not None,
             )
+
+            # Logging/audit review, part 3: persist the trade<->event link
+            # this function already computed above (fill_event/close_event)
+            # -- see persistence.link_events_to_trade()'s docstring. Guarded
+            # on non-empty so row.trade_id is only ever touched when there's
+            # actually something to link (row is a plain None in a couple of
+            # existing tests that stub out write_trade() entirely).
+            linked_event_ids = [
+                ev["_event_id"] for ev in (fill_event, close_event)
+                if ev is not None and ev.get("_event_id") is not None
+            ]
+            if linked_event_ids:
+                link_events_to_trade(db, linked_event_ids, row.trade_id)
+                db.commit()
 
             # Phase 4 overnight-position handling: if a real order filled
             # but hadn't ALREADY closed by the time this trade row was

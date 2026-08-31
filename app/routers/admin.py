@@ -105,18 +105,18 @@ def get_trade_event_chain(
 ):
     """
     Ports admin_dashboard/queries.py's get_event_chain_for_trade()
-    server-side. There is no trade_id column on `events` -- this
-    deliberately mirrors the exact matching logic
-    shadow_runner/runner.py's own _write_trade() uses to find a trade's
-    fill/close events, so this never diverges from what the system
-    itself considers a match:
+    server-side. `day_events` (the full day's event feed, for context) is
+    always found by (user, model) + NY calendar date -- that part hasn't
+    changed. Which specific events are the trade's fill/close, though, now
+    prefers the real events.trade_id FK (logging/audit review part 3):
+    shadow_runner/runner.py's _write_trade() sets it directly, so this is
+    an exact match, not a re-derived one.
 
-      - all events for the same (user, model) on the same NY calendar
-        date as the trade's entry
-      - within those, the specific order_filled / trade_closed rows are
-        the ones matching this trade's direction and entry/exit price
-        (several candidates can exist the same day, so date alone isn't
-        enough)
+    Falls back to the old heuristic (direction/price matching within the
+    day) only for historical events written before that FK existed and
+    never backfilled -- see app/scripts/backfill_event_trade_ids.py. Once
+    that's been run everywhere, this fallback is dead code but harmless to
+    leave in place.
 
     No ownership check beyond existing -- an admin can look up any
     trade's chain regardless of which user it belongs to.
@@ -142,27 +142,32 @@ def get_trade_event_chain(
         .all()
     )
 
-    matched_fill = next(
-        (
-            e for e in day_events
-            if e.event_type == "order_filled"
-            and e.details.get("direction") == trade.direction
-            and e.details.get("entry") is not None
-            and abs(e.details["entry"] - trade.entry_price) < 1e-9
-        ),
-        None,
-    )
-    matched_close = next(
-        (
-            e for e in reversed(day_events)
-            if e.event_type == "trade_closed"
-            and e.details.get("outcome") == trade.outcome
-            and e.details.get("exit_price") is not None
-            and trade.exit_price is not None
-            and abs(e.details["exit_price"] - trade.exit_price) < 1e-9
-        ),
-        None,
-    )
+    matched_fill = next((e for e in day_events if e.trade_id == trade.trade_id and e.event_type == "order_filled"), None)
+    matched_close = next((e for e in day_events if e.trade_id == trade.trade_id and e.event_type == "trade_closed"), None)
+
+    if matched_fill is None:
+        matched_fill = next(
+            (
+                e for e in day_events
+                if e.event_type == "order_filled"
+                and e.details.get("direction") == trade.direction
+                and e.details.get("entry") is not None
+                and abs(e.details["entry"] - trade.entry_price) < 1e-9
+            ),
+            None,
+        )
+    if matched_close is None:
+        matched_close = next(
+            (
+                e for e in reversed(day_events)
+                if e.event_type == "trade_closed"
+                and e.details.get("outcome") == trade.outcome
+                and e.details.get("exit_price") is not None
+                and trade.exit_price is not None
+                and abs(e.details["exit_price"] - trade.exit_price) < 1e-9
+            ),
+            None,
+        )
 
     return AdminEventChainOut(
         day_events=[AdminEventOut.from_model(e, user) for e in day_events],

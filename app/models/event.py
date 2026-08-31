@@ -181,6 +181,21 @@ class Event(Base):
     # it False yet.
     is_shadow = Column(Boolean, nullable=False, server_default="true")
 
+    # Logging/audit review, part 3: previously there was no way to go
+    # from a trade to "the events that made it" (or back) except by
+    # re-deriving the match heuristically -- same (user, model) + NY
+    # calendar date, then direction/price matching for the specific
+    # fill/close rows (see shadow_runner/runner.py's _write_trade(),
+    # which already computes exactly this match in memory every time a
+    # trade is written). This column just persists that same match
+    # instead of re-deriving it every time something needs it (the
+    # admin event-chain endpoint, previously). Nullable: most events
+    # (swing detection, day-skip reasons, safety checks, etc.) aren't
+    # tied to any one trade at all. Set once, after the fact, by
+    # _write_trade() -- never at event-write time, since the trade
+    # doesn't exist yet when its fill event first fires.
+    trade_id = Column(UUID(as_uuid=True), ForeignKey("trades.trade_id"), nullable=True, index=True)
+
     user = relationship("User", back_populates="events")
 
     __table_args__ = (

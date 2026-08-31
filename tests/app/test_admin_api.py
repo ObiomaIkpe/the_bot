@@ -140,6 +140,49 @@ def test_admin_trade_event_chain_matches_fill_and_close(client, db_session):
     assert matched_close["event_type"] == "trade_closed"
 
 
+def test_admin_trade_event_chain_prefers_real_trade_id_over_heuristic(client, db_session):
+    """Two order_filled events, same direction/price, same day -- the
+    old heuristic alone can't tell them apart (it'd always pick the
+    first). The events.trade_id FK (logging/audit review part 3) is
+    what actually disambiguates them; this proves the endpoint uses it
+    rather than falling through to the ambiguous heuristic."""
+    token = _register_and_login(client, "admin_chain_fk@example.com")
+    user = db_session.query(User).filter(User.email == "admin_chain_fk@example.com").first()
+    _promote(db_session, "admin_chain_fk@example.com")
+
+    entry_time = datetime.datetime(2026, 8, 1, 10, 0, 0)
+    trade = Trade(
+        user_id=user.user_id, model="fvg", is_shadow=True, direction="long",
+        entry_price=1.1, stop_price=1.0, target_price=1.3, exit_price=1.3, outcome="win",
+        entry_time_utc=entry_time, entry_time_ny=entry_time, risk_pct_used=0.01, equity_before=1000.0,
+    )
+    db_session.add(trade)
+    db_session.commit()
+    db_session.refresh(trade)
+
+    # Decoy: an identical-looking fill from an unrelated attempt earlier
+    # the same day (e.g. a cancelled/replaced order) -- NOT linked to
+    # this trade.
+    decoy_fill = Event(
+        user_id=user.user_id, model="fvg", event_type="order_filled",
+        timestamp=entry_time - datetime.timedelta(hours=1),
+        details={"direction": "long", "entry": 1.1},
+    )
+    real_fill = Event(
+        user_id=user.user_id, model="fvg", event_type="order_filled",
+        timestamp=entry_time, details={"direction": "long", "entry": 1.1},
+        trade_id=trade.trade_id,
+    )
+    db_session.add_all([decoy_fill, real_fill])
+    db_session.commit()
+    db_session.refresh(real_fill)
+
+    resp = client.get(f"/admin/trades/{trade.trade_id}/event-chain", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["matched_fill_event_id"] == str(real_fill.event_id)
+
+
 def test_admin_trade_event_chain_404_for_unknown_trade(client, db_session):
     token = _register_and_login(client, "admin_chain_404@example.com")
     _promote(db_session, "admin_chain_404@example.com")
