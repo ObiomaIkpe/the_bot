@@ -66,12 +66,25 @@ status changes -- don't let the two drift.
       `internal_provisioning.py`, `internal_decommission.py`. 288
       passed, 10 pre-existing unrelated failures, 0 regressions.
       Two follow-ups still open from the same review, tracked below.
-- [ ] **Logging/audit review, part 2: log rotation / infra hygiene.**
-      No log rotation configured anywhere -- Docker's json-file driver
-      on the VPS and NSSM stdout/stderr files on Hetzner both grow
-      unbounded. Needs Docker `logging:` driver options + either NSSM
-      file rotation or routing everything through the app's structured
-      logger.
+- [x] **Logging/audit review, part 2a: Docker Compose + provisioning
+      poller log rotation.** DONE -- `docker-compose.yml` now caps
+      every service (`db`/`api`/`shadow_runner`/`caddy`) at 10MB x 5
+      files via a shared `x-logging` anchor; the provisioning poller
+      now writes its own 10MB x 5 rotating file at
+      `<bridge_root>/logs/poller.log` instead of relying on whatever
+      (if anything) captured its stderr. 299 passed, 10 pre-existing
+      unrelated failures, 0 regressions. Requires `docker compose up -d`
+      per VPS service to actually take effect (not hot-reloadable) --
+      not yet applied on the live VPS, just committed/pushed here.
+- [ ] **Logging/audit review, part 2b: NSSM log rotation on Hetzner.**
+      Deliberately deferred as its own separately-scheduled step, not
+      bundled with 2a -- an earlier NSSM misconfiguration on this exact
+      box (`MT5Bridge-Tony`) caused a real live-trading outage this
+      project, so this needs a fresh, deliberate go-ahead rather than
+      being folded into a routine change. NSSM's `AppRotateFiles`/
+      `AppRotateOnline`/`AppRotateBytes` params, applied to whichever
+      services run under NSSM there, require an actual service restart
+      to take effect.
 - [ ] **Logging/audit review, part 3: bigger structural fixes.** No FK
       between `trades` and `events` (the admin dashboard reconstructs
       the link heuristically); only the API server can emit structured
