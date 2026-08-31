@@ -1,3 +1,21 @@
+# Logging/audit review, part 2: nothing here previously configured a
+# max size/file count for Docker's default json-file log driver, so
+# every service's stdout/stderr grew unbounded on the VPS's disk
+# indefinitely. One shared policy (10MB x 5 files = 50MB cap per
+# service), applied to every service below via this anchor -- tune in
+# one place, not four. Applying this to an already-running service
+# requires `docker compose up -d` to recreate its container (Docker's
+# logging driver is set at container-creation time, not hot-reloadable)
+# -- a few seconds of restart per service, not a config-only change.
+# `db`'s restart has the largest blast radius (api/shadow_runner both
+# depend on it) -- schedule that one deliberately, same as any other
+# live-trading-adjacent restart this project does.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16-alpine
@@ -13,6 +31,7 @@ services:
       timeout: 5s
       retries: 10
     restart: unless-stopped
+    logging: *default-logging
   api:
     build:
       context: .
@@ -24,6 +43,7 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
   shadow_runner:
     build:
       context: .
@@ -37,6 +57,7 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
+    logging: *default-logging
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
@@ -48,6 +69,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     command: caddy run --config /etc/caddyfile --adapter caddyfile
+    logging: *default-logging
 
 volumes:
   postgres_data:
