@@ -13,7 +13,10 @@ class Trade(Base):
     trade_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
 
-    model = Column(String, nullable=False)  # 'fvg' / 'ob' / 'fvg_ob'
+    # FK to models.model_name (migration 0018) -- previously a hardcoded
+    # CHECK constraint (ck_trades_model_valid, 'fvg'/'ob'/'fvg_ob' only);
+    # see app/models/model.py's module docstring for why.
+    model = Column(String, ForeignKey("models.model_name"), nullable=False)
     is_shadow = Column(Boolean, nullable=False)  # True = journaled only, no real order
 
     direction = Column(String, nullable=False)  # 'long' / 'short'
@@ -90,7 +93,6 @@ class Trade(Base):
     user = relationship("User", back_populates="trades")
 
     __table_args__ = (
-        CheckConstraint("model IN ('fvg', 'ob', 'fvg_ob')", name="ck_trades_model_valid"),
         CheckConstraint("direction IN ('long', 'short')", name="ck_trades_direction_valid"),
         CheckConstraint(
             "outcome IS NULL OR outcome IN ('win', 'loss', 'scratch')",

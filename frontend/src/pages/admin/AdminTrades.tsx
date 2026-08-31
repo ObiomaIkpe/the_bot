@@ -5,14 +5,15 @@ import { apiClient } from "../../api/client";
 import type { AdminTradeOut } from "../../api/types";
 import { EmptyState } from "../../components/EmptyState";
 import { Table } from "../../components/Table";
+import { useModels } from "../../lib/useModels";
 
-const MODELS = ["fvg", "ob", "fvg_ob"];
 const OUTCOMES = ["win", "loss", "scratch"];
 
 /** Admin-only, all-users equivalent of TradeHistory.tsx -- replaces
  * admin_dashboard/'s "Trades" tab. No user filter (admin sees
  * everyone); each row links to the event-chain drill-down. */
 export function AdminTrades() {
+  const modelsQuery = useModels();
   const [modelFilter, setModelFilter] = useState("");
   const [outcomeFilter, setOutcomeFilter] = useState("");
   const [shadowFilter, setShadowFilter] = useState<"" | "true" | "false">("");
@@ -42,9 +43,9 @@ export function AdminTrades() {
           <span className="text-[13px] text-text-muted">Model</span>
           <select value={modelFilter} onChange={(e) => setModelFilter(e.target.value)}>
             <option value="">all</option>
-            {MODELS.map((m) => (
-              <option key={m} value={m}>
-                {m}
+            {(modelsQuery.data ?? []).map((m) => (
+              <option key={m.model_name} value={m.model_name}>
+                {m.display_name}
               </option>
             ))}
           </select>

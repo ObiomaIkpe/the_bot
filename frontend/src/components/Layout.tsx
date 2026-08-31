@@ -23,6 +23,7 @@ const ADMIN_NAV_ITEMS = [
   { to: "/admin/safety-checks", label: "Safety checks" },
   { to: "/admin/audit-log", label: "Audit log" },
   { to: "/admin/model-configs", label: "Model configs" },
+  { to: "/admin/models", label: "Models" },
 ];
 
 const navLinkClassName = ({ isActive }: { isActive: boolean }) =>

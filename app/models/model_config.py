@@ -41,25 +41,18 @@ from app.core.database import Base
 # bridge's orders_enabled kill switch: default OFF, explicit opt-in.
 VALID_MODEL_STATUSES = ("disabled", "shadow", "active")
 
-# Mirrors the CHECK constraints already on trades.model and
-# events.model (app/models/trade.py, app/models/event.py) -- the fixed
-# set of models this system currently has a real streaming pipeline
-# for. Every user gets one ModelConfig row per name here, automatically
-# (see app/core/provisioning.py) -- never customer-created, but always
-# present, scoped per user.
-#
-# To add a new model, in this order:
-#   1. Build its real streaming pipeline (this list existing alone
-#      changes nothing -- new rows still land status="disabled" until
-#      there's something real behind them).
-#   2. Migrate the CHECK constraints on trades.model and events.model
-#      to include the new name -- otherwise its first real trade/event
-#      write fails at the DB level the moment it tries to run.
-#   3. Add its name here.
-#   4. Re-run app/scripts/backfill_user_defaults.py so existing users
-#      get the new model too (new registrations get it automatically
-#      the moment step 3 lands) -- it's idempotent, so this only ever
-#      adds what's missing, never touches anyone's existing rows.
+# Every user gets one ModelConfig row per models.model_name,
+# automatically (see app/core/provisioning.py) -- never customer-
+# created, but always present, scoped per user. Adding a new model is
+# now just an admin-UI action (POST /admin/models -- see
+# app/models/model.py) that inserts a `models` row and immediately
+# backfills a ModelConfig row for every existing user; new
+# registrations pick it up automatically the same way they always have.
+# This used to be a hardcoded ALL_MODEL_NAMES tuple here plus two
+# separate hardcoded CHECK constraints on trades.model/events.model,
+# requiring a migration + 4 manual steps per model -- see migration
+# 0018 for the cutover to a real `models` table and FK constraints
+# instead, if that history matters for something.
 #
 # bridge/scripts/provision_account.ps1 fetches these rows' magic_number
 # values via GET /model-configs when setting up a new account's bridge
@@ -67,7 +60,6 @@ VALID_MODEL_STATUSES = ("disabled", "shadow", "active")
 # that script's own header comment for why, and its "Known limitation"
 # note on why only one of an account's several magic numbers ends up in
 # the bridge worker's config.json.
-ALL_MODEL_NAMES = ("fvg", "ob", "fvg_ob")
 
 
 class ModelConfig(Base):
@@ -76,7 +68,7 @@ class ModelConfig(Base):
     config_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
 
-    model_name = Column(String, nullable=False)  # 'fvg', 'ob', 'drt', ...
+    model_name = Column(String, ForeignKey("models.model_name"), nullable=False)
     status = Column(String, nullable=False, server_default="disabled")
     risk_pct = Column(Float, nullable=False)
 

@@ -5,8 +5,8 @@ import { apiClient } from "../api/client";
 import type { TradeOut } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { Table } from "../components/Table";
+import { useModels } from "../lib/useModels";
 
-const MODELS = ["fvg", "ob", "fvg_ob"];
 const OUTCOMES = ["win", "loss", "scratch"];
 
 type SortKey = "entry_time_ny" | "model" | "outcome" | "real_profit";
@@ -19,6 +19,7 @@ type SortDir = "asc" | "desc";
  * no pagination beyond a hard limit -- client-side sort on the already
  * -fetched page is enough given the trade volume this account sees. */
 export function TradeHistory() {
+  const modelsQuery = useModels();
   const [modelFilter, setModelFilter] = useState("");
   const [outcomeFilter, setOutcomeFilter] = useState("");
   const [shadowFilter, setShadowFilter] = useState<"" | "true" | "false">("");
@@ -75,9 +76,9 @@ export function TradeHistory() {
           <span className="text-[13px] text-text-muted">Model</span>
           <select value={modelFilter} onChange={(e) => setModelFilter(e.target.value)}>
             <option value="">all</option>
-            {MODELS.map((m) => (
-              <option key={m} value={m}>
-                {m}
+            {(modelsQuery.data ?? []).map((m) => (
+              <option key={m.model_name} value={m.model_name}>
+                {m.display_name}
               </option>
             ))}
           </select>

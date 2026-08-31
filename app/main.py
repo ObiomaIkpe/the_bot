@@ -21,6 +21,7 @@ from app.routers import (
     internal_decommission,
     internal_provisioning,
     model_configs,
+    models,
     settings as settings_router,
     trades,
     trading,
@@ -73,6 +74,7 @@ app.include_router(internal_provisioning.router)
 app.include_router(internal_decommission.router)
 app.include_router(trades.router)
 app.include_router(model_configs.router)
+app.include_router(models.router)
 app.include_router(settings_router.router)
 app.include_router(trading.router)
 

@@ -42,6 +42,12 @@ export interface TradeEventChainOut {
   fully_resolved: boolean;
 }
 
+export interface ModelOut {
+  model_name: string;
+  display_name: string;
+  created_at: string;
+}
+
 export type ModelStatus = "disabled" | "shadow" | "active";
 
 export interface ModelConfigOut {
@@ -160,6 +166,7 @@ export interface CurrentUser {
 export type AdminEventOut = EventOut & { user_email: string };
 export type AdminTradeOut = TradeOut & { user_email: string };
 export type AdminModelConfigOut = ModelConfigOut & { user_email: string };
+export type AdminModelCreateOut = ModelOut & { backfilled_users: number };
 
 export interface AdminEventChainOut {
   day_events: AdminEventOut[];

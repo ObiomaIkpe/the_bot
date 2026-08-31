@@ -5,8 +5,7 @@ import type { AdminEventOut } from "../../api/types";
 import { Badge } from "../../components/Badge";
 import { EmptyState } from "../../components/EmptyState";
 import { Table } from "../../components/Table";
-
-const MODELS = ["fvg", "ob", "fvg_ob"];
+import { useModels } from "../../lib/useModels";
 
 // Mirrors app/models/event.py's REAL_ACTION_EVENT_TYPES -- kept in sync
 // by hand, same convention api/types.ts's own top comment already
@@ -29,6 +28,7 @@ const REAL_ACTION_EVENT_TYPES = new Set([
 /** Admin-only, all-users equivalent of TradeHistory.tsx's event
  * counterpart -- replaces admin_dashboard/'s "Live Event Feed" tab. */
 export function AdminEventFeed() {
+  const modelsQuery = useModels();
   const [modelFilter, setModelFilter] = useState("");
   const [hoursBack, setHoursBack] = useState(12);
 
@@ -57,9 +57,9 @@ export function AdminEventFeed() {
           <span className="text-[13px] text-text-muted">Model</span>
           <select value={modelFilter} onChange={(e) => setModelFilter(e.target.value)}>
             <option value="">all</option>
-            {MODELS.map((m) => (
-              <option key={m} value={m}>
-                {m}
+            {(modelsQuery.data ?? []).map((m) => (
+              <option key={m.model_name} value={m.model_name}>
+                {m.display_name}
               </option>
             ))}
           </select>

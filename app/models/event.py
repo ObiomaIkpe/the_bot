@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, ForeignKey, String, func
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -165,7 +165,10 @@ class Event(Base):
 
     event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
-    model = Column(String, nullable=False)  # 'fvg' / 'ob' / 'fvg_ob'
+    # FK to models.model_name (migration 0018) -- previously a hardcoded
+    # CHECK constraint (ck_events_model_valid, 'fvg'/'ob'/'fvg_ob' only);
+    # see app/models/model.py's module docstring for why.
+    model = Column(String, ForeignKey("models.model_name"), nullable=False)
 
     event_type = Column(String, nullable=False, index=True)
     timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
@@ -198,10 +201,9 @@ class Event(Base):
 
     user = relationship("User", back_populates="events")
 
-    __table_args__ = (
-        CheckConstraint("model IN ('fvg', 'ob', 'fvg_ob')", name="ck_events_model_valid"),
-        # Not a hard DB-level enum on event_type -- new event types are
-        # likely as later phases add detail (e.g. partial fills in Phase
-        # 4), and a CHECK constraint would need a migration every time.
-        # VALID_EVENT_TYPES above is the source of truth at the app layer.
-    )
+    # No __table_args__ left here: model's validity is now enforced by
+    # its FK above, not a CHECK constraint. event_type was never a hard
+    # DB-level enum either -- new event types are likely as later
+    # phases add detail, and a CHECK constraint would need a migration
+    # every time; VALID_EVENT_TYPES above is the source of truth at the
+    # app layer for that one.

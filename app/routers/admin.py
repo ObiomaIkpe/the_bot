@@ -12,12 +12,15 @@ import datetime
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_admin
+from app.core.provisioning import provision_model_for_all_users
 from app.models.audit_log import AuditLog
 from app.models.event import Event
+from app.models.model import Model
 from app.models.model_config import ModelConfig
 from app.models.trade import Trade
 from app.models.user import User
@@ -28,6 +31,7 @@ from app.schemas.admin import (
     AdminModelConfigOut,
     AdminTradeOut,
 )
+from app.schemas.model import AdminModelCreateOut, ModelCreate
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -217,3 +221,38 @@ def list_all_model_configs(
         .all()
     )
     return [AdminModelConfigOut.from_model(config, user) for config, user in rows]
+
+
+@router.post("/models", response_model=AdminModelCreateOut, status_code=status.HTTP_201_CREATED)
+def create_model(
+    payload: ModelCreate,
+    _admin: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    """Registers a new model (the `models` table, app/models/model.py)
+    and immediately backfills a ModelConfig row for every existing user
+    -- see provision_model_for_all_users()'s docstring for why that's
+    done here rather than requiring a separate script run. This is the
+    ONE place a model gets created; every other model-aware dropdown
+    across the app (GET /models, admin and trader-facing alike) just
+    reads what's here."""
+    model = Model(model_name=payload.model_name, display_name=payload.display_name)
+    db.add(model)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Model '{payload.model_name}' already exists",
+        )
+    db.refresh(model)
+
+    backfilled = provision_model_for_all_users(db, payload.model_name)
+
+    return AdminModelCreateOut(
+        model_name=model.model_name,
+        display_name=model.display_name,
+        created_at=model.created_at,
+        backfilled_users=backfilled,
+    )

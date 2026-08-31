@@ -19,7 +19,9 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.model_config import ALL_MODEL_NAMES, ModelConfig
+from app.models.model import Model
+from app.models.model_config import ModelConfig
+from app.models.user import User
 from app.models.user_settings import UserSettings
 
 _MAGIC_NUMBER_ALLOCATION_ATTEMPTS = 3
@@ -37,11 +39,17 @@ _DEFAULT_INSTRUMENT = "EURUSDm"
 
 
 def _missing_model_names(db: Session, user_id: uuid.UUID) -> list[str]:
+    """Every registered model (models table, app/models/model.py) this
+    user doesn't already have a ModelConfig row for. Was a hardcoded
+    ALL_MODEL_NAMES tuple; now reads the real registry, so a model
+    added via POST /admin/models is picked up automatically here too --
+    no code change needed per model."""
+    all_models = {name for (name,) in db.query(Model.model_name).all()}
     existing = {
         model_name
         for (model_name,) in db.query(ModelConfig.model_name).filter(ModelConfig.user_id == user_id).all()
     }
-    return [name for name in ALL_MODEL_NAMES if name not in existing]
+    return [name for name in all_models if name not in existing]
 
 
 def _allocate_magic_numbers(db: Session, count: int) -> list[int]:
@@ -49,15 +57,19 @@ def _allocate_magic_numbers(db: Session, count: int) -> list[int]:
     return [current_max + i + 1 for i in range(count)]
 
 
-def _provision_missing_models(db: Session, user_id: uuid.UUID) -> None:
-    missing = _missing_model_names(db, user_id)
-    if not missing:
+def _insert_model_configs_with_retry(db: Session, pairs: list[tuple[uuid.UUID, str]]) -> None:
+    """pairs: (user_id, model_name) rows to insert, each getting a
+    freshly allocated, globally-unique magic_number. Shared by
+    _provision_missing_models() (one user, every model they're missing)
+    and provision_model_for_all_users() (one new model, every existing
+    user) -- same magic-number race-retry discipline either way."""
+    if not pairs:
         return
 
     for _attempt in range(_MAGIC_NUMBER_ALLOCATION_ATTEMPTS):
         try:
-            magic_numbers = _allocate_magic_numbers(db, len(missing))
-            for model_name, magic_number in zip(missing, magic_numbers):
+            magic_numbers = _allocate_magic_numbers(db, len(pairs))
+            for (user_id, model_name), magic_number in zip(pairs, magic_numbers):
                 db.add(
                     ModelConfig(
                         user_id=user_id,
@@ -70,16 +82,46 @@ def _provision_missing_models(db: Session, user_id: uuid.UUID) -> None:
             db.commit()
             return
         except IntegrityError:
-            # Another registration raced us for the same magic number(s)
-            # -- recompute the max (now including their committed rows)
+            # Another insert raced us for the same magic number(s) --
+            # recompute the max (now including their committed rows)
             # and retry. The DB's own unique constraint is what makes
             # this safe to just retry rather than something to avoid.
             db.rollback()
 
     raise RuntimeError(
-        f"Could not allocate unique magic numbers for user {user_id} after "
+        f"Could not allocate unique magic numbers for {len(pairs)} row(s) after "
         f"{_MAGIC_NUMBER_ALLOCATION_ATTEMPTS} attempts"
     )
+
+
+def _provision_missing_models(db: Session, user_id: uuid.UUID) -> None:
+    missing = _missing_model_names(db, user_id)
+    _insert_model_configs_with_retry(db, [(user_id, name) for name in missing])
+
+
+def provision_model_for_all_users(db: Session, model_name: str) -> int:
+    """Called right after a new model is registered (POST /admin/models)
+    -- backfills a ModelConfig row for every EXISTING user who doesn't
+    have one yet for this model_name, so it's available account-wide
+    immediately, with no separate script run needed. New registrations
+    don't need this: provision_new_user_defaults() already covers them
+    via the normal path, since this model now exists in the registry.
+    Returns how many users got a new row (for the endpoint's response).
+    """
+    missing_user_ids = [
+        user_id
+        for (user_id,) in (
+            db.query(User.user_id)
+            .outerjoin(
+                ModelConfig,
+                (ModelConfig.user_id == User.user_id) & (ModelConfig.model_name == model_name),
+            )
+            .filter(ModelConfig.config_id.is_(None))
+            .all()
+        )
+    ]
+    _insert_model_configs_with_retry(db, [(user_id, model_name) for user_id in missing_user_ids])
+    return len(missing_user_ids)
 
 
 def _provision_missing_settings(db: Session, user_id: uuid.UUID) -> None:

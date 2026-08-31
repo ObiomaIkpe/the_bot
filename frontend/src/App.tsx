@@ -8,6 +8,7 @@ import { AccountSettings } from "./pages/AccountSettings";
 import { AdminAuditLog } from "./pages/admin/AdminAuditLog";
 import { AdminEventFeed } from "./pages/admin/AdminEventFeed";
 import { AdminModelConfigs } from "./pages/admin/AdminModelConfigs";
+import { AdminModels } from "./pages/admin/AdminModels";
 import { AdminSafetyChecks } from "./pages/admin/AdminSafetyChecks";
 import { AdminTradeDetail } from "./pages/admin/AdminTradeDetail";
 import { AdminTrades } from "./pages/admin/AdminTrades";
@@ -59,6 +60,7 @@ function App() {
             <Route path="/admin/safety-checks" element={<AdminSafetyChecks />} />
             <Route path="/admin/audit-log" element={<AdminAuditLog />} />
             <Route path="/admin/model-configs" element={<AdminModelConfigs />} />
+            <Route path="/admin/models" element={<AdminModels />} />
           </Route>
         </Route>
         <Route
