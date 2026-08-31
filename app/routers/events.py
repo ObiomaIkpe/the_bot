@@ -25,4 +25,5 @@ def list_events(
         q = q.filter(Event.model == model)
     if since:
         q = q.filter(Event.timestamp >= since)
-    return q.order_by(Event.timestamp.desc()).limit(limit).all()
+    rows = q.order_by(Event.timestamp.desc()).limit(limit).all()
+    return [EventOut.from_model(e) for e in rows]

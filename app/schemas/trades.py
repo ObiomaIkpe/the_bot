@@ -3,6 +3,8 @@ import uuid
 
 from pydantic import BaseModel
 
+from app.schemas.events import EventOut
+
 
 class TradeOut(BaseModel):
     trade_id: uuid.UUID
@@ -29,3 +31,14 @@ class TradeOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TradeEventChainOut(BaseModel):
+    """The trader-facing "why was this trade placed" story --
+    app.core.trade_story.build_trade_chain()'s result, narrated. Unlike
+    admin's AdminEventChainOut (whole day's events + a best-effort
+    match), `chain` here is scoped to exactly this trade's own
+    raid -> mss -> fvg -> candidate -> fill -> close, in order --
+    no other same-day candidates mixed in."""
+    chain: list[EventOut]
+    fully_resolved: bool

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { apiClient } from "../api/client";
 import type { TradeOut } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
@@ -144,7 +145,9 @@ export function TradeHistory() {
           <tbody>
             {sorted.map((t) => (
               <tr key={t.trade_id}>
-                <td>{new Date(t.entry_time_ny).toLocaleString()}</td>
+                <td>
+                  <Link to={`/trades/${t.trade_id}`}>{new Date(t.entry_time_ny).toLocaleString()}</Link>
+                </td>
                 <td>{t.model}</td>
                 <td>{t.is_shadow ? "yes" : "no"}</td>
                 <td>{t.direction}</td>

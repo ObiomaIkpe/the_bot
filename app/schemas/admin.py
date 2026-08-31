@@ -3,6 +3,7 @@ import uuid
 
 from pydantic import BaseModel
 
+from app.core.event_narration import narrate_event
 from app.models.audit_log import AuditLog
 from app.models.event import Event
 from app.models.model_config import ModelConfig
@@ -27,6 +28,10 @@ class AdminEventOut(BaseModel):
     timestamp: datetime.datetime
     details: dict
     is_shadow: bool
+    # See app.core.event_narration / app.schemas.events.EventOut --
+    # same plain-English rendering, computed here too so the admin
+    # event feed isn't a step behind the trader-facing one.
+    narrative: str = ""
 
     @classmethod
     def from_model(cls, event: Event, user: User) -> "AdminEventOut":
@@ -38,6 +43,7 @@ class AdminEventOut(BaseModel):
             timestamp=event.timestamp,
             details=event.details,
             is_shadow=event.is_shadow,
+            narrative=narrate_event(event.event_type, event.details),
         )
 
 

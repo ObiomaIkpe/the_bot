@@ -37,9 +37,15 @@ class Trade(Base):
     equity_before = Column(Float, nullable=False)
     equity_after = Column(Float, nullable=True)  # null until closed
 
-    # Which swing was raided, which candle confirmed the MSS, which
-    # candles formed the FVG, OB-confirmed or not -- kept as JSONB so this
-    # can grow without a schema migration every time a new field is added.
+    # In practice only ever holds {trend, risk_pips} (see
+    # shadow_runner/runner.py's _write_trade()) -- this was originally
+    # meant to also carry which swing was raided, which candle
+    # confirmed the MSS, which candles formed the FVG, but that never
+    # got built here. That richer "why" now lives in
+    # app.core.trade_story.build_trade_chain() instead, computed at
+    # read time from the `events` table rather than duplicated into
+    # this column -- see GET /trades/{trade_id}/event-chain. Kept as
+    # JSONB so this can still grow without a migration if ever needed.
     setup_context = Column(JSONB, nullable=False, default=dict)
 
     # Phase 4 step 3 (part 2): the REAL broker-side outcome, for trades

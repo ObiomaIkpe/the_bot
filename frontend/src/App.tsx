@@ -18,6 +18,7 @@ import { ModelDetail } from "./pages/ModelDetail";
 import { Models } from "./pages/Models";
 import { Overview } from "./pages/Overview";
 import { Profile } from "./pages/Profile";
+import { TradeDetail } from "./pages/TradeDetail";
 import { TradeHistory } from "./pages/TradeHistory";
 
 function App() {
@@ -38,6 +39,7 @@ function App() {
           <Route path="/models/:modelName" element={<ModelDetail />} />
           <Route path="/live" element={<Live />} />
           <Route path="/trades" element={<TradeHistory />} />
+          <Route path="/trades/:tradeId" element={<TradeDetail />} />
           <Route path="/broker-credentials" element={<BrokerCredentials />} />
           <Route path="/account-settings" element={<AccountSettings />} />
           <Route path="/profile" element={<Profile />} />

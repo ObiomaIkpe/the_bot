@@ -9,6 +9,11 @@ export interface EventOut {
   timestamp: string;
   details: Record<string, unknown>;
   is_shadow: boolean;
+  // Both added this session (backend: migration 0017 / event_narration.py)
+  // but missed here until now -- keeping this mirror accurate per this
+  // file's own convention.
+  trade_id: string | null;
+  narrative: string;
 }
 
 export interface TradeOut {
@@ -30,6 +35,11 @@ export interface TradeOut {
   real_close_price: number | null;
   real_close_reason: string | null;
   real_profit: number | null;
+}
+
+export interface TradeEventChainOut {
+  chain: EventOut[];
+  fully_resolved: boolean;
 }
 
 export type ModelStatus = "disabled" | "shadow" | "active";

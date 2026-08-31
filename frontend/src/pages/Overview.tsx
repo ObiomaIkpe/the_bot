@@ -169,7 +169,7 @@ export function Overview() {
               <Badge variant={e.event_type === "safety_check_failed" ? "error" : e.is_shadow ? "neutral" : "active"}>
                 {e.model}
               </Badge>
-              <span>{e.event_type}</span>
+              <span>{e.narrative}</span>
             </li>
           ))}
         </ul>

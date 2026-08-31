@@ -122,7 +122,9 @@ export function ModelDetail() {
           <tbody>
             {tradesQuery.data.map((t) => (
               <tr key={t.trade_id}>
-                <td>{new Date(t.entry_time_ny).toLocaleString()}</td>
+                <td>
+                  <Link to={`/trades/${t.trade_id}`}>{new Date(t.entry_time_ny).toLocaleString()}</Link>
+                </td>
                 <td>{t.direction}</td>
                 <td className="font-mono">{t.entry_price}</td>
                 <td className="font-mono">{t.exit_price ?? "-"}</td>
