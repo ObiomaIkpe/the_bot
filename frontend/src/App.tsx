@@ -19,6 +19,7 @@ import { ModelDetail } from "./pages/ModelDetail";
 import { Models } from "./pages/Models";
 import { Overview } from "./pages/Overview";
 import { Profile } from "./pages/Profile";
+import { Register } from "./pages/Register";
 import { TradeDetail } from "./pages/TradeDetail";
 import { TradeHistory } from "./pages/TradeHistory";
 
@@ -27,6 +28,7 @@ function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
         <Route
           element={
             <ProtectedRoute>
