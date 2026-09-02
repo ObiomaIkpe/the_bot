@@ -21,6 +21,7 @@ class FakeBridge:
         self.placed = []       # list of dicts, as passed to place_pending_order
         self.cancelled = []    # list of tickets
         self.modified = []     # list of (ticket, take_profit)
+        self.closed = []       # list of tickets, via close_position() -- sibling-race fix
         self._next_ticket = 1000
         self._pending_orders = {}   # ticket -> dict
         self._positions = {}        # ticket -> dict
@@ -32,6 +33,17 @@ class FakeBridge:
         self.symbol_info_call_count = 0
         self.balance_response = 1000.0
         self.balance_should_fail = False
+
+        # Sibling-race fix test controls -- see
+        # test_sibling_cancel_failure_* below. get_positions is called
+        # TWICE within one check_for_fills() when a sibling-cancel fails
+        # -- once by check_for_fills() itself (fill detection), once by
+        # _handle_sibling_cancel_failure() (the duplicate check) -- so
+        # "fail from call N onward" lets a test target just the second
+        # one, distinct from failing fill-detection itself.
+        self.get_positions_call_count = 0
+        self.get_positions_should_fail_from_call = None
+        self.close_position_should_fail = False
 
     def get_symbol_info(self, symbol):
         self.symbol_info_call_count += 1
@@ -60,12 +72,32 @@ class FakeBridge:
         return [o for o in self._pending_orders.values() if o["magic"] == magic]
 
     def get_positions(self, magic):
+        self.get_positions_call_count += 1
+        if (
+            self.get_positions_should_fail_from_call is not None
+            and self.get_positions_call_count >= self.get_positions_should_fail_from_call
+        ):
+            raise Exception("simulated bridge failure")
         return [p for p in self._positions.values() if p["magic"] == magic]
 
     def cancel_pending_order(self, ticket):
+        # Real broker behavior: cancelling a ticket that isn't a live
+        # pending order anymore (already filled -- moved to
+        # self._positions via simulate_fill -- or otherwise gone) fails.
+        # Raising here (rather than the old .pop(ticket, None) no-op)
+        # is what makes the sibling-race tests below meaningful.
+        if ticket not in self._pending_orders:
+            raise Exception(f"cancel failed: order {ticket} not found")
         self.cancelled.append(ticket)
-        self._pending_orders.pop(ticket, None)
+        self._pending_orders.pop(ticket)
         return {"order_ticket": ticket, "retcode": 10009}
+
+    def close_position(self, ticket):
+        if self.close_position_should_fail:
+            raise Exception("simulated bridge failure")
+        self.closed.append(ticket)
+        self._positions.pop(ticket, None)
+        return {"ticket": ticket, "retcode": 10009}
 
     def modify_position(self, ticket, take_profit):
         self.modified.append((ticket, take_profit))
@@ -201,6 +233,125 @@ def test_race_winner_cancels_the_loser():
     assert bridge.cancelled == [ticket_b], "the loser (B) should be cancelled, not the winner (A)"
     assert om._winner_ticket == ticket_a
     assert om._winner_position_ticket == ticket_a
+
+
+def test_sibling_race_both_fill_closes_the_duplicate_instead_of_orphaning_it():
+    """The real bug, fixed 2026-09-02 (see PENDING_ITEMS.md's "Real bugs
+    found 2026-09-02"): both siblings fill before the loser's cancel can
+    run. The old code just logged the cancel failure and dropped the
+    loser from tracking, leaving a real, untracked position with no
+    take-profit to ride unmanaged until it eventually hit its stop.
+    The fix must instead recognize the loser is now a real filled
+    position and close it immediately."""
+    bridge = FakeBridge()
+    received = []
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1", event_sink=received.append)
+    om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=12, mss_bar=15, entry=1.1050, stop=1.1040))
+    om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=20, mss_bar=23, entry=1.1050, stop=1.1040))
+    ticket_a = bridge.placed[0]["order_ticket"]
+    ticket_b = bridge.placed[1]["order_ticket"]
+
+    # Both fill -- the real race this bug came from.
+    bridge.simulate_fill(ticket_a, open_price=1.1050)
+    bridge.simulate_fill(ticket_b, open_price=1.1050)
+    om.check_for_fills()
+
+    assert bridge.cancelled == [], "cancel should have been attempted and failed, not succeeded"
+    assert bridge.closed == [ticket_b], "the duplicate (loser) should be closed, not left running"
+    assert om._winner_ticket == ticket_a, "the winner is still whichever check_for_fills saw first"
+
+    dup_events = [e for e in received if e.get("event_type") == "duplicate_fill_closed"]
+    assert len(dup_events) == 1
+    assert dup_events[0]["order_ticket"] == ticket_b
+    # symbol_info_response isn't configured in this test, so
+    # compute_lot_size's own fallback-and-log-a-check-failure path fires
+    # for unrelated reasons on every candidate here -- irrelevant noise.
+    # What matters is that a successfully-handled duplicate does NOT
+    # ALSO log it as a cancel/close failure.
+    relevant_check_names = {
+        e["check_name"] for e in received
+        if e.get("event_type") == "safety_check_failed" and e.get("order_ticket") == ticket_b
+    }
+    assert relevant_check_names == set(), "a successfully-handled duplicate should not also emit a check failure"
+
+
+def test_sibling_cancel_failure_without_a_real_fill_still_just_logs():
+    """The cancel can fail for an ordinary reason too (order already
+    expired/gone some other way) -- no real position exists, so this
+    should behave exactly as before: a safety_check_failed event, no
+    close_position call."""
+    bridge = FakeBridge()
+    received = []
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1", event_sink=received.append)
+    om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=12, mss_bar=15, entry=1.1050, stop=1.1040))
+    om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=20, mss_bar=23, entry=1.1050, stop=1.1040))
+    ticket_a = bridge.placed[0]["order_ticket"]
+    ticket_b = bridge.placed[1]["order_ticket"]
+
+    bridge.simulate_fill(ticket_a, open_price=1.1050)
+    bridge._pending_orders.pop(ticket_b)  # vanished some other way -- never became a position
+    om.check_for_fills()
+
+    assert bridge.closed == []
+    # symbol_info_response isn't configured in this test, so
+    # compute_lot_size's own fallback path also logs unrelated check
+    # failures on every candidate here -- scope to ticket_b specifically.
+    check_failures = [
+        e for e in received if e.get("event_type") == "safety_check_failed" and e.get("order_ticket") == ticket_b
+    ]
+    assert len(check_failures) == 1
+    assert check_failures[0]["check_name"] == "cancel_sibling_order"
+
+
+def test_sibling_race_falls_back_to_check_failure_if_positions_fetch_fails():
+    bridge = FakeBridge()
+    received = []
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1", event_sink=received.append)
+    om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=12, mss_bar=15, entry=1.1050, stop=1.1040))
+    om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=20, mss_bar=23, entry=1.1050, stop=1.1040))
+    ticket_a = bridge.placed[0]["order_ticket"]
+    ticket_b = bridge.placed[1]["order_ticket"]
+
+    bridge.simulate_fill(ticket_a, open_price=1.1050)
+    bridge.simulate_fill(ticket_b, open_price=1.1050)
+    # Let check_for_fills()'s own fill-detection call through (call 1),
+    # only fail the second get_positions() call -- the one inside
+    # _handle_sibling_cancel_failure() checking for a duplicate.
+    bridge.get_positions_should_fail_from_call = 2
+    om.check_for_fills()
+
+    assert bridge.closed == [], "can't even check -- must not guess, must fall back safely"
+    check_failures = [
+        e for e in received if e.get("event_type") == "safety_check_failed" and e.get("order_ticket") == ticket_b
+    ]
+    assert len(check_failures) == 1
+    assert check_failures[0]["check_name"] == "cancel_sibling_order"
+
+
+def test_sibling_race_duplicate_close_failure_emits_distinct_check_name():
+    """Worst case: the duplicate is correctly identified, but closing it
+    also fails -- a real, known, unmanaged position a human needs to
+    close by hand. Must be loud, and distinguishable from an ordinary
+    cancel failure."""
+    bridge = FakeBridge()
+    received = []
+    om = OrderManager(make_model_config(), "EURUSDm", bridge, DEFAULT_SESSION_FACTORY, "user1", event_sink=received.append)
+    om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=12, mss_bar=15, entry=1.1050, stop=1.1040))
+    om.on_trade_candidate_ready(make_candidate_event(direction="long", raid_bar=20, mss_bar=23, entry=1.1050, stop=1.1040))
+    ticket_a = bridge.placed[0]["order_ticket"]
+    ticket_b = bridge.placed[1]["order_ticket"]
+
+    bridge.simulate_fill(ticket_a, open_price=1.1050)
+    bridge.simulate_fill(ticket_b, open_price=1.1050)
+    bridge.close_position_should_fail = True
+    om.check_for_fills()
+
+    assert bridge.closed == []
+    check_failures = [
+        e for e in received if e.get("event_type") == "safety_check_failed" and e.get("order_ticket") == ticket_b
+    ]
+    assert len(check_failures) == 1
+    assert check_failures[0]["check_name"] == "duplicate_fill_close_failed"
 
 
 def test_no_third_order_placed_after_a_winner_is_decided():

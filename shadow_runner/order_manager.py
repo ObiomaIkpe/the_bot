@@ -177,7 +177,7 @@ class OrderManager:
             (see VALID_EVENT_TYPES additions needed in app/models/event.py):
             pending_order_placed, pending_order_cancelled,
             candidate_filled, target_attached, order_placement_failed,
-            order_skipped_paused.
+            order_skipped_paused, duplicate_fill_closed.
         """
         self.model_config = model_config
         self.symbol = symbol
@@ -624,9 +624,60 @@ class OrderManager:
                     }
                 )
             except Exception as e:
-                self._emit_check_failure("cancel_sibling_order", e, order_ticket=info["order_ticket"])
+                self._handle_sibling_cancel_failure(info["order_ticket"], e)
 
         self._pending = {winning_key: winning_info}
+
+    def _handle_sibling_cancel_failure(self, order_ticket: int, error: Exception) -> None:
+        """Real live-money bug, fixed 2026-09-02 (see PENDING_ITEMS.md's
+        "Real bugs found 2026-09-02" and PHASE3_VALIDATION.md's
+        correction section for the full incident this fixes).
+
+        A sibling's cancel can fail for two very different reasons: an
+        ordinary broker/network hiccup (nothing to act on -- the order
+        may already be gone some other way, e.g. expired), or the
+        dangerous case -- the sibling filled too, in the same race as
+        the winner, and there's now a real, untracked SECOND position
+        on the account. The old code treated both identically (log +
+        move on), which silently orphaned a real position: it never got
+        a take-profit attached (that only happens for the tracked
+        winner) and rode alone, unmanaged, until it eventually hit its
+        stop-loss. Distinguish the two by actually checking, rather
+        than assuming either way, and close the duplicate immediately
+        if it's real -- a genuine second fill from one candidate-set is
+        an execution accident, not a second trade the strategy wanted.
+        """
+        try:
+            open_positions = self.bridge.get_positions(self.model_config["magic_number"])
+        except Exception:
+            # Can't even check right now -- fall back to the old
+            # behavior (log + safety-check event) rather than crashing
+            # fill-handling over a second bridge call failing too.
+            self._emit_check_failure("cancel_sibling_order", error, order_ticket=order_ticket)
+            return
+
+        duplicate = next((p for p in open_positions if p["ticket"] == order_ticket), None)
+        if duplicate is None:
+            # Genuinely just a cancel failure, no real position exists --
+            # same as before.
+            self._emit_check_failure("cancel_sibling_order", error, order_ticket=order_ticket)
+            return
+
+        try:
+            self.bridge.close_position(order_ticket)
+            self._emit(
+                {
+                    "event_type": "duplicate_fill_closed",
+                    "timestamp": self._now_ny(),
+                    "order_ticket": order_ticket,
+                    "reason": "sibling_race_both_filled",
+                }
+            )
+        except Exception as close_error:
+            # Worst case: a real, known, unmanaged position we could not
+            # act on. Distinct check name from the plain cancel failure
+            # above -- this one means a human needs to close it by hand.
+            self._emit_check_failure("duplicate_fill_close_failed", close_error, order_ticket=order_ticket)
 
     def attach_target(self, recent_bars: list[dict]) -> None:
         """Call once, after check_for_fills() has detected a fill, with

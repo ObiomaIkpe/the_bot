@@ -113,6 +113,13 @@ def _narrate(event_type: str, details: dict) -> str:
     if event_type == "safety_check_failed":
         return f"A safety check ({details['check_name']}) failed: {details['error']}"
 
+    if event_type == "duplicate_fill_closed":
+        return (
+            "Two competing setups filled at nearly the same instant -- one was the "
+            "real trade, the other was closed immediately as a duplicate rather than "
+            "left running unmanaged."
+        )
+
     if event_type == "daily_loss_threshold_crossed":
         return (
             f"Today's realized loss ({_fmt(details['realized_loss_pct'])}%) crossed the "

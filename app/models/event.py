@@ -114,6 +114,15 @@ VALID_EVENT_TYPES = (
     # REAL_ACTION_EVENT_TYPES below) --
     "manual_close_requested",
     "manual_cancel_requested",
+    # -- added 2026-09-02, fix for a real live-money bug (see
+    # PENDING_ITEMS.md's "Real bugs found 2026-09-02"): a sibling's
+    # pending-order cancel can fail because it had ALREADY filled too,
+    # in the same race as the winner -- previously this second real
+    # fill was silently dropped from tracking with no take-profit ever
+    # attached. Now order_manager.py checks for exactly this case and
+    # closes the duplicate immediately rather than leaving it to ride
+    # unmanaged; this event journals that it happened --
+    "duplicate_fill_closed",
 )
 
 # Fixes a real, stale bug: write_event() used to hardcode is_shadow=True
@@ -150,6 +159,7 @@ REAL_ACTION_EVENT_TYPES = frozenset(
         "safety_check_failed",
         "manual_close_requested",
         "manual_cancel_requested",
+        "duplicate_fill_closed",
     }
 )
 

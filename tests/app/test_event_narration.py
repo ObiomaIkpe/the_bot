@@ -127,6 +127,12 @@ def test_safety_check_failed():
     assert "limit exceeded" in text
 
 
+def test_duplicate_fill_closed():
+    text = narrate_event("duplicate_fill_closed", {"order_ticket": 3147397683, "reason": "sibling_race_both_filled"})
+    assert "duplicate" in text.lower()
+    assert "closed" in text.lower()
+
+
 def test_daily_loss_threshold_crossed():
     text = narrate_event(
         "daily_loss_threshold_crossed",
