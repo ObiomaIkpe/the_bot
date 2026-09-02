@@ -16,21 +16,28 @@ asking why a trade ran overnight instead of closing same-day. Full
 story in `PHASE3_VALIDATION.md`'s "Correction (2026-09-02)" section --
 these two are the same incident, two separate root causes.
 
-- [ ] **Sibling-order race: a second real fill can get silently
-      dropped instead of tracked.** When two candidates' pending orders
-      both fill before the loser's cancel completes,
-      `order_manager.py`'s `_on_fill()` unconditionally overwrites its
-      tracking to keep only the winning ticket -- even when the cancel
-      failed because the "loser" had *also* already filled for real.
-      That second real position never gets a take-profit attached (only
-      the tracked winner does) and is invisible to everything downstream
-      (multi-day position tracking, the trade write-path) from that
-      point on. Confirmed live: ticket `#3147397683`, 27 Aug 2026,
-      real Stop Loss but blank Take Profit, rode alone to a real loss.
-      Fix needs `_on_fill()` (or the cancel's exception handler) to
-      recognize "cancel failed because it already filled" as a SECOND
-      real fill needing its own tracking/target, not a cancel failure
-      to just log and move past.
+- [x] **Sibling-order race: a second real fill can get silently
+      dropped instead of tracked.** DONE 2026-09-02. When two
+      candidates' pending orders both fill before the loser's cancel
+      completes, `order_manager.py`'s `_on_fill()` used to unconditionally
+      overwrite its tracking to keep only the winning ticket -- even
+      when the cancel failed because the "loser" had *also* already
+      filled for real. That second real position never got a
+      take-profit attached (only the tracked winner does) and was
+      invisible to everything downstream from that point on. Confirmed
+      live: ticket `#3147397683`, 27 Aug 2026, real Stop Loss but blank
+      Take Profit, rode alone to a real loss. **Fix**: new
+      `_handle_sibling_cancel_failure()` actively checks whether the
+      cancel failed because the sibling is now a real open position --
+      if so, closes it immediately (a genuine second fill from one
+      candidate-set is an execution accident, not a second trade the
+      strategy wanted) rather than giving it its own parallel tracking
+      (a bigger, riskier change than this warranted). New
+      `duplicate_fill_closed` event journals it; a distinct
+      `duplicate_fill_close_failed` check name if even the close fails,
+      so a human knows to act. 5 new tests. 356 passed / 1 skipped / 10
+      pre-existing unrelated failures, 0 regressions. **Not yet deployed
+      to the live VPS.**
 - [ ] **Cross-day restart recovery gap, confirmed to have happened for
       real.** `PHASE3_RESTART_RECOVERY.md`/`PHASE3_VALIDATION.md` both
       already documented that the runner has no recovery for anything
