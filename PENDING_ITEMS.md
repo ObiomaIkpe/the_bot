@@ -38,29 +38,37 @@ these two are the same incident, two separate root causes.
       so a human knows to act. 5 new tests. 356 passed / 1 skipped / 10
       pre-existing unrelated failures, 0 regressions. **Not yet deployed
       to the live VPS.**
-- [ ] **Cross-day restart recovery gap, confirmed to have happened for
-      real.** `PHASE3_RESTART_RECOVERY.md`/`PHASE3_VALIDATION.md` both
-      already documented that the runner has no recovery for anything
-      before "today" -- a restart spanning midnight means that whole
-      prior day is never journaled. Previously theoretical ("not yet
-      exercised for real"); now confirmed: `shadow_runner` appears to
-      have gone down for ~20 hours spanning 27-28 Aug 2026 (continuous
-      swing-tracking events stop cold at 16:35 UTC on the 27th, nothing
-      again until an unrelated event at 12:21 UTC on the 28th), and
-      *neither* of that day's two real trades was ever written to the
-      `trades` table -- confirmed via both the user's own Trade History
-      and the admin cross-user Trades view, both showing zero rows for
-      that day. Both real MT5 positions kept resolving on the broker's
-      side the whole time, completely invisible to the app. Needs real
-      cross-day recovery (replay a prior day's events from the bridge's
-      own history if the runner comes back up after missing a
-      boundary), not just "today, in progress."
-      **Directly strengthens the case for the missed-trading-day alert**
-      (see "Monitoring/alerting" below, explicitly skipped earlier this
-      session) -- this incident is exactly the failure mode that alert
-      would have caught, and it went undetected by anything for about a
-      week until the user happened to notice a discrepancy against
-      their own MT5 app.
+- [x] **Cross-day restart recovery gap, confirmed to have happened for
+      real.** DONE 2026-09-02. `PHASE3_RESTART_RECOVERY.md`/
+      `PHASE3_VALIDATION.md` both already documented that the runner
+      has no recovery for anything before "today" -- a restart spanning
+      midnight means that whole prior day is never journaled.
+      Previously theoretical ("not yet exercised for real"); confirmed
+      to have happened for real 27-28 Aug 2026 (see bug 1's entry above
+      for the shared incident). Planned via plan mode first (see this
+      session's plan history) after a mid-design discovery changed
+      scope: the bridge only supports looking up a KNOWN ticket's
+      history, not a date-range listing, so full reconciliation of
+      already-closed historical trades would need a new endpoint on
+      Tony's live bridge -- deliberately scoped out in favor of three
+      lower-risk pieces, all Hetzner-only: **(1)** a Telegram alert the
+      moment a cross-day gap is detected on startup; **(2)**
+      `shadow_runner/orphan_recovery.py` -- checks the broker directly
+      for a real open position with no matching `trades` row and
+      self-heals it (attaches the take-profit target it would have
+      gotten live), scoped to still-open positions only (the more
+      urgent case); **(3)** `_replay_historical_day()` -- reconstructs
+      the raid/MSS/FVG/candidate journal for each missed day,
+      structurally incapable of ever placing a real order for a
+      historical day (never constructs an `OrderManager` for one at
+      all, reusing the existing `combined_sink` guard rather than
+      adding a new conditional). 18 new tests, including a proof that a
+      real candidate firing during historical replay cannot reach a
+      real order. 370 passed / 1 skipped / 10 pre-existing unrelated
+      failures, 0 regressions. **Not yet deployed to the live VPS.**
+      Full historical reconciliation of already-closed trades (the
+      bridge-endpoint version) remains a known, documented, deliberate
+      gap -- revisit separately if it still matters once this is live.
 
 ## Quick cleanup (low effort, low risk)
 
