@@ -170,8 +170,13 @@ status changes -- don't let the two drift.
       hardcode the handful of real FX closures so the check is
       accurate, or (b) ship the naive version and accept the occasional
       false page. User chose to skip both for now rather than pick.
-- [ ] **Secret rotation** -- `JWT_SECRET_KEY`, `CREDENTIALS_ENCRYPTION_KEY`,
-      the Postgres password. Long-standing, never done.
+- [ ] **Secret rotation** -- `JWT_SECRET_KEY`, `CREDENTIALS_ENCRYPTION_KEY`
+      still pending, long-standing, never done. **Postgres password: DONE
+      2026-09-02** -- rotated live (`ALTER ROLE`, no `db` restart needed)
+      after it surfaced hardcoded in plaintext in the VPS's
+      `docker-compose.yml` during this session's deploy (now uses
+      `${POSTGRES_PASSWORD}` substitution like everything else); `api`/
+      `shadow_runner` restarted clean with zero downtime.
 
 ## Real-money gate (explicitly not started)
 
