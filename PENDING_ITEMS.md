@@ -103,37 +103,57 @@ these two are the same incident, two separate root causes.
 
 ## Real work, unblocked and ready
 
-- [x] **Dynamic model registry.** DONE 2026-08-31. User corrected a
-      wrong assumption (fvg/ob/fvg_ob are NOT the only models -- the
-      roster keeps growing, names unknown yet), which exposed a real
-      gap: `events.model`/`trades.model` had hardcoded DB CHECK
-      constraints limiting them to exactly those 3 names, and 3
-      separate frontend files hardcoded the same list. New `models`
-      table (migration 0018) + FK constraints instead; adding a model
-      is now one admin-UI form (`/admin/models`), not a migration --
-      backfills every existing user's `model_configs` row immediately,
-      no script run needed. 346 passed (7 new), 10 pre-existing
-      unrelated failures, 0 regressions. **Not yet deployed to the
-      live VPS** -- this one DOES include a migration + a `db`
-      restart-adjacent change (FK constraints), unlike the other two
-      pending deploys, so schedule it deliberately. Tracked in memory.
+- [x] **Dynamic model registry.** DONE 2026-08-31, **deployed to the
+      live VPS 2026-09-02.** User corrected a wrong assumption
+      (fvg/ob/fvg_ob are NOT the only models -- the roster keeps
+      growing, names unknown yet), which exposed a real gap:
+      `events.model`/`trades.model` had hardcoded DB CHECK constraints
+      limiting them to exactly those 3 names, and 3 separate frontend
+      files hardcoded the same list. New `models` table (migration
+      0018) + FK constraints instead; adding a model is now one
+      admin-UI form (`/admin/models`), not a migration -- backfills
+      every existing user's `model_configs` row immediately, no script
+      run needed. 346 passed (7 new), 10 pre-existing unrelated
+      failures, 0 regressions. Migration applied live via a one-off
+      `docker compose run --rm api alembic upgrade head` before the
+      code swap, same night the frontend itself went live for the
+      first time ever.
 - [x] **Trader-facing trade story ("why was this trade placed").**
-      DONE 2026-08-31. Real traders are about to get access; outcome
-      numbers alone weren't enough, and the only page that explained a
-      trade's reasoning (`AdminTradeDetail.tsx`) was admin-only. New
-      `GET /trades/{trade_id}/event-chain` (`app/core/trade_story.py`,
+      DONE 2026-08-31, **deployed to the live VPS 2026-09-02.** Real
+      traders are about to get access; outcome numbers alone weren't
+      enough, and the only page that explained a trade's reasoning
+      (`AdminTradeDetail.tsx`) was admin-only. New `GET
+      /trades/{trade_id}/event-chain` (`app/core/trade_story.py`,
       `app/core/event_narration.py`) walks the raid -> MSS -> FVG ->
       candidate -> fill -> close chain and narrates it in plain
       English; new `/trades/:tradeId` page. 100% read-only, no schema
       migration, no shadow_runner write-path change. 339 passed (23
-      new), 10 pre-existing unrelated failures, 0 regressions. **Not
-      yet deployed to the live VPS** -- same pending-deploy pattern as
-      the admin section, tracked in memory.
+      new), 10 pre-existing unrelated failures, 0 regressions. Already
+      put to real use the same night it went live -- it's what led to
+      discovering the two real bugs above.
 - [x] **Write `PHASE3_VALIDATION.md`** (Phase 3 step 9). DONE
       2026-08-31 -- reports the real data: ~5 weeks of clean unattended
       live running, two real autonomous demo trades (one TP, one SL),
       plus the two cold-start bugs found/fixed on first deployment.
       Phase 3 is now complete, all 9 steps.
+- [ ] **Multi-user trade fan-out -- designed 2026-09-02, not built.**
+      The intended design was always "one shared detection engine per
+      model, execution fans out to every subscribed user's own
+      account" (`ModelConfig.status` already models per-user
+      opt-out) -- but `shadow_runner` is actually hardcoded to exactly
+      ONE user via env vars (`SHADOW_RUNNER_USER_ID`/`BRIDGE_URL`).
+      Every other user who connects a broker account gets a real,
+      independent bridge worker with nothing watching or trading it at
+      all. Full design in `MULTI_USER_FANOUT_PLAN.md` (not committed):
+      a new subscriber query (`ModelConfig` + `User` + `BrokerCredential`
+      join, doesn't exist yet) and widening the handful of places that
+      assume a single `OrderManager` per day into a dict keyed by
+      `user_id` -- `OrderManager` itself already doesn't need to
+      change, it's already correctly one-model-one-user-one-bridge
+      scoped. Explicitly scoped to design-only for now; building it,
+      and separately cutting the real live account over to it once
+      built, are both deliberately deferred to their own later
+      go-aheads.
 - [ ] **New models beyond `fvg` (`ob`, `fvg_ob`, and any others).**
       Clarified 2026-08-29: the user will bring the actual model
       definitions/specs when ready. The job is then the same shape of
@@ -162,9 +182,13 @@ these two are the same incident, two separate root causes.
       now writes its own 10MB x 5 rotating file at
       `<bridge_root>/logs/poller.log` instead of relying on whatever
       (if anything) captured its stderr. 299 passed, 10 pre-existing
-      unrelated failures, 0 regressions. Requires `docker compose up -d`
-      per VPS service to actually take effect (not hot-reloadable) --
-      not yet applied on the live VPS, just committed/pushed here.
+      unrelated failures, 0 regressions. **Hetzner half deployed
+      2026-09-02** (all 4 services recreated with the new logging
+      driver, including `db`, as part of that night's full deploy
+      pass). **Windows VPS half (the provisioning poller itself)
+      still NOT deployed** -- this got left behind that same night; it
+      needs its own separate `git pull` + Scheduled Task restart on
+      the Windows box, unrelated to anything Hetzner-side.
 - [ ] **Logging/audit review, part 2b: NSSM log rotation on Hetzner.**
       Deliberately deferred as its own separately-scheduled step, not
       bundled with 2a -- an earlier NSSM misconfiguration on this exact
