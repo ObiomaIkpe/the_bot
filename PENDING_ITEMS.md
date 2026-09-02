@@ -179,14 +179,21 @@ status changes -- don't let the two drift.
       2026-09-02** -- simple swap + `api`-only restart (confirmed
       `shadow_runner` never touches JWT, no HTTP auth layer); every
       logged-in session was signed out once, expected, no data risk.
-      **`CREDENTIALS_ENCRYPTION_KEY`: still pending, deliberately NOT
-      done the same casual way** -- it's the Fernet key encrypting
+      **`CREDENTIALS_ENCRYPTION_KEY`: tooling built 2026-09-02, not yet
+      run against the live table.** It's the Fernet key encrypting
       every stored broker credential (`broker_credentials`, including
-      the real live account) at rest. A naive swap would make every
+      the real live account) at rest -- a naive swap would make every
       existing encrypted row permanently undecryptable the instant the
-      app tries to read it -- this needs a real decrypt-with-old/
-      re-encrypt-with-new migration script, built and tested against a
-      copy of the data first, before it ever touches the live table.
+      app tries to read it. `app/scripts/rotate_credentials_encryption_key.py`
+      does this safely: decrypts every row under the old key, re-encrypts
+      under the new one, all inside one transaction (aborts the whole
+      batch, commits nothing, if any row fails to decrypt); `--dry-run`
+      proves the old key is correct first. 5 tests, 351 passed / 1
+      skipped / 10 pre-existing unrelated failures, 0 regressions.
+      Actually running it against the live table (then updating `.env`
+      and restarting `api` -- confirmed `shadow_runner`/the bridge never
+      decrypt credentials locally, so neither needs restarting) is still
+      its own separate, deliberate step, not done yet.
 
 ## Real-money gate (explicitly not started)
 
