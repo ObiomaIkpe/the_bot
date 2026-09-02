@@ -45,7 +45,12 @@ def test_get_models_requires_auth(client):
 
 
 def test_non_admin_cannot_create_model(client, db_session):
+    # Every user defaults to is_admin=True as of migration 0019 -- this
+    # test needs an explicit demote to still exercise the rejection path.
     token = _register_and_login(client, "models_nonadmin@example.com")
+    user = db_session.query(User).filter(User.email == "models_nonadmin@example.com").first()
+    user.is_admin = False
+    db_session.commit()
     resp = client.post(
         "/admin/models", json={"model_name": "drt", "display_name": "Displacement"},
         headers=_auth_header(token),

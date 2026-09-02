@@ -1,7 +1,12 @@
 """
 Grants (or revokes) is_admin on an existing user -- the one thing that
 unlocks app/routers/admin.py's cross-user views in the React frontend.
-Deliberately a manually-run script, not an HTTP endpoint -- same
+
+Every user defaults to is_admin=True as of migration 0019 (2026-09-02
+policy change -- see that migration's docstring), so this script is
+mainly for --revoke now: taking a specific account back out of the
+cross-user admin views without touching anyone else's. Still
+deliberately a manually-run script, not an HTTP endpoint -- same
 reasoning as app/scripts/register_provisioning_machine.py's own
 docstring: there is no correct way to let a JWT-holder grant itself (or
 anyone else) the ability to see every other user's data.

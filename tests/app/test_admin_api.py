@@ -28,7 +28,12 @@ def test_admin_routes_require_auth(client):
 
 
 def test_admin_routes_reject_non_admin_user(client, db_session):
+    # Every user defaults to is_admin=True as of migration 0019 -- this
+    # test needs an explicit demote to still exercise the rejection path.
     token = _register_and_login(client, "not_admin@example.com")
+    user = db_session.query(User).filter(User.email == "not_admin@example.com").first()
+    user.is_admin = False
+    db_session.commit()
     for path in ("/admin/events", "/admin/trades", "/admin/safety-checks", "/admin/audit-log", "/admin/model-configs"):
         resp = client.get(path, headers=_auth_header(token))
         assert resp.status_code == 403
