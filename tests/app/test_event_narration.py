@@ -133,6 +133,15 @@ def test_duplicate_fill_closed():
     assert "closed" in text.lower()
 
 
+def test_orphan_position_recovered():
+    text = narrate_event(
+        "orphan_position_recovered",
+        {"ticket": 3147397683, "direction": "long", "target": 1.16526, "fill_price": 1.16460},
+    )
+    assert "3147397683" in text
+    assert "1.16526" in text
+
+
 def test_daily_loss_threshold_crossed():
     text = narrate_event(
         "daily_loss_threshold_crossed",

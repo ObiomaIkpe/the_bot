@@ -45,6 +45,7 @@ def test_order_manager_events_are_not_shadow():
         "pending_order_placed", "pending_order_cancelled", "candidate_filled",
         "target_attached", "order_placement_failed", "order_skipped_paused",
         "real_trade_closed", "partial_close_executed", "duplicate_fill_closed",
+        "orphan_position_recovered",
     ]:
         write_event(db, {"event_type": event_type, "timestamp": "t"}, "user1", "fvg")
 

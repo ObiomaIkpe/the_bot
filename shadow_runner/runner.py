@@ -58,6 +58,7 @@ from shadow_runner.position_tracker import PositionTracker
 from shadow_runner.persistence import (
     event_type_exists,
     get_current_equity,
+    get_last_event_timestamp,
     get_last_event_timestamp_for_date,
     get_model_config,
     get_recent_swing_history,
@@ -65,6 +66,7 @@ from shadow_runner.persistence import (
     write_event,
     write_trade,
 )
+from shadow_runner.orphan_recovery import check_for_orphaned_positions
 
 log = logging.getLogger("shadow_runner.runner")
 
@@ -298,7 +300,17 @@ class ShadowRunner:
             cd.orchestrator.on_new_bar(bar["time_ny"], idx, bar["high"], bar["low"], bar["close"])
             self._flush_new_events(cd)
 
-    def _decide_day(self, cd: CurrentDay) -> None:
+    def _decide_day(self, cd: CurrentDay, historical: bool = False) -> None:
+        """historical=True is the cross-day recovery gap fix (2026-09-02,
+        see PENDING_ITEMS.md's "Real bugs found 2026-09-02"): reconstructs
+        a fully-missed PAST day's raid/MSS/FVG/candidate narrative for
+        the journal, without ever placing a real order for it. NO
+        OrderManager gets constructed at all in this mode -- combined_sink's
+        `cd.order_manager is not None` check below is the existing guard
+        that already exists for every other day; historical replay relies
+        on that same guard structurally never being satisfied, rather
+        than adding a new conditional that could be gotten wrong. See
+        _replay_historical_day()."""
         result = self.gate.gate_for_day(cd.date, cd.bars)
         cd.decided = True
         cd.tradeable = result.tradeable
@@ -320,7 +332,7 @@ class ShadowRunner:
         # combined sink below references cd.order_manager, and
         # DayOrchestrator's constructor immediately backfills bars
         # (which can emit trade_candidate_ready synchronously).
-        if self.model_config is not None:
+        if self.model_config is not None and not historical:
             cd.order_manager = OrderManager(
                 self.model_config, self.config.symbol, self.bridge,
                 self.session_factory, self.config.user_id,
@@ -350,6 +362,48 @@ class ShadowRunner:
         if new_events:
             self._write_events_now(new_events)
         cd._flushed_count = len(cd.todays_events)
+
+    def _replay_historical_day(self, date, session_bars: list[dict]) -> CurrentDay:
+        """Cross-day recovery gap fix (2026-09-02) -- reconstructs one
+        fully-missed PAST calendar day's raid/MSS/FVG/candidate journal,
+        for a day that's already completely over by the time this runs.
+
+        Deliberately does NOT reuse _process_bar()/self.current_day:
+        _process_bar() has its own stale-bar guard (refuses to start a
+        NEW CurrentDay for a bar dated before today -- see its own
+        comment, added for a different bug: a small stale FRAGMENT of an
+        already-finished day showing up on cold start) which would
+        immediately reject every bar here. More importantly, threading a
+        real historical day through self.current_day would corrupt the
+        REAL in-progress state that ordinary live polling depends on.
+        This operates entirely on a local, throwaway CurrentDay instead
+        -- never touches self.current_day.
+
+        Deliberately does NOT call _finalize_day() -- that would write a
+        `trades` row, but this only ever reconstructs the SIMULATED
+        detection narrative, never confirmed against what the broker
+        actually did that day (see check_for_orphaned_positions() for
+        the real-position half of cross-day recovery, and the plan
+        doc's explicit note that the two are not cross-referenced this
+        pass). The events written here (via _decide_day's own internal
+        flushing) are exactly what a trader would see in that day's
+        story -- day-skip, or raid/MSS/FVG/candidate -- nothing more.
+        """
+        cd = CurrentDay(date)
+        for bar in session_bars:
+            cd.update_daily_range(bar)
+            if not cd.is_session_bar(bar):
+                continue
+            cd.bars.append(bar)
+            if not cd.decided:
+                if cd.ready_to_decide():
+                    self._decide_day(cd, historical=True)
+                continue
+            if cd.tradeable:
+                idx = len(cd.bars) - 1
+                cd.orchestrator.on_new_bar(bar["time_ny"], idx, bar["high"], bar["low"], bar["close"])
+                self._flush_new_events(cd)
+        return cd
 
     def _write_events_now(self, events: list[dict]) -> None:
         db = self.session_factory()
@@ -520,6 +574,19 @@ class ShadowRunner:
         now_ny = datetime.now(NY_TZ).replace(tzinfo=None)
         today = now_ny.date()
 
+        # Cross-day recovery gap fix (2026-09-02) -- see PENDING_ITEMS.md's
+        # "Real bugs found 2026-09-02" and PHASE3_VALIDATION.md's
+        # correction section for the incident this exists to catch.
+        # Checked BEFORE the existing "today" logic below, which is
+        # unchanged -- this only concerns days strictly before today.
+        db = self.session_factory()
+        try:
+            last_overall_ts = get_last_event_timestamp(db, self.config.user_id, self.config.model)
+        finally:
+            db.close()
+        if last_overall_ts is not None and last_overall_ts.date() < today:
+            self._recover_cross_day_gap(last_overall_ts.date(), today, now_ny)
+
         db = self.session_factory()
         try:
             last_ts = get_last_event_timestamp_for_date(db, self.config.user_id, self.config.model, today)
@@ -554,6 +621,81 @@ class ShadowRunner:
         for bar in replay_bars:
             self._process_bar(bar)
             self.last_processed_bar_time_ny = bar["time_ny"]
+
+    def _recover_cross_day_gap(self, last_known_date, today, now_ny) -> None:
+        """Cross-day recovery gap fix (2026-09-02) -- see
+        recover_on_startup()'s call site for when this runs. Three
+        things, in order: alert immediately (cheapest, most time-
+        sensitive), check for a real orphaned open position (piece 2A,
+        shadow_runner/orphan_recovery.py), then reconstruct the
+        detection narrative for each missed day (piece 3,
+        _replay_historical_day()) -- see the plan doc
+        (misty-seeking-crescent.md in this session's history) for the
+        full design and why each piece is scoped the way it is.
+        """
+        missed_dates = []
+        d = last_known_date + timedelta(days=1)
+        while d < today:
+            missed_dates.append(d)
+            d += timedelta(days=1)
+        if not missed_dates:
+            # last_known_date was literally yesterday and today just
+            # hasn't started yet -- nothing actually missed in between.
+            return
+
+        missed_dates_str = ", ".join(d.isoformat() for d in missed_dates)
+        log.warning(
+            "Recovery: cross-day gap detected -- last journaled activity was %s, "
+            "today is %s. %d calendar day(s) in between may have been missed: %s",
+            last_known_date, today, len(missed_dates), missed_dates_str,
+        )
+        send_telegram_alert(
+            f"⚠️ shadow_runner restarted after a gap. Last journaled activity: "
+            f"{last_known_date.isoformat()}. Today: {today.isoformat()}. "
+            f"{len(missed_dates)} calendar day(s) may have been missed: {missed_dates_str}. "
+            f"Checking for orphaned positions and reconstructing the journal now."
+        )
+
+        if self.model_config is not None:
+            collected_events = []
+            db = self.session_factory()
+            try:
+                orphan_results = check_for_orphaned_positions(
+                    self.bridge, self.config.symbol, self.model_config["magic_number"],
+                    db, self.config.user_id, self.config.model, now_ny,
+                    event_sink=collected_events.append,
+                )
+            finally:
+                db.close()
+            if collected_events:
+                self._write_events_now(collected_events)
+            if orphan_results:
+                log.warning(
+                    "Recovery: orphan check found %d position(s): %s",
+                    len(orphan_results), orphan_results,
+                )
+
+        try:
+            candles = self.bridge.get_candles(self.config.symbol, "M5", 5000)
+        except BridgeError as e:
+            log.error(
+                "Recovery: bridge unavailable, could not replay missed days (%s) -- "
+                "the journal for %s will stay an honest gap.", e, missed_dates,
+            )
+            return
+
+        for missed_date in missed_dates:
+            day_bars = [b for b in candles if b["time_ny"].date() == missed_date]
+            if not day_bars:
+                log.info(
+                    "Recovery: no bars available for %s (weekend/holiday, or beyond "
+                    "this fetch's %d-bar lookback reach) -- leaving this date's "
+                    "journal as an honest gap rather than guessing.",
+                    missed_date, len(candles),
+                )
+                continue
+            log.info("Recovery: replaying %d bars for missed day %s", len(day_bars), missed_date)
+            self._replay_historical_day(missed_date, day_bars)
 
     # ---------- day finalization ----------
 

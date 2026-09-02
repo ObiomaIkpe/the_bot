@@ -120,6 +120,14 @@ def _narrate(event_type: str, details: dict) -> str:
             "left running unmanaged."
         )
 
+    if event_type == "orphan_position_recovered":
+        return (
+            f"A real open position (ticket {details['ticket']}) was found with no "
+            f"record of it -- likely filled while the bot was restarting -- and given "
+            f"the take-profit target ({_fmt(details['target'])}) it would have gotten "
+            f"if caught live."
+        )
+
     if event_type == "daily_loss_threshold_crossed":
         return (
             f"Today's realized loss ({_fmt(details['realized_loss_pct'])}%) crossed the "

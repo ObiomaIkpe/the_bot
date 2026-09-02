@@ -120,6 +120,39 @@ def get_last_event_timestamp_for_date(db: Session, user_id: str, model: str, dat
     return None
 
 
+def get_last_event_timestamp(db: Session, user_id: str, model: str) -> object | None:
+    """
+    Cross-day recovery gap fix (2026-09-02) -- see PENDING_ITEMS.md's
+    "Real bugs found 2026-09-02" and PHASE3_VALIDATION.md's correction
+    section for the incident this exists to catch.
+
+    Same shape as get_last_event_timestamp_for_date() above, but NOT
+    scoped to a single date -- the single most recent real event
+    overall, regardless of which day it's from. Used by
+    recover_on_startup() to detect a gap bigger than "today, in
+    progress": if this timestamp's date is before today, one or more
+    entire calendar days were silently missed (e.g. the runner was
+    down across a day boundary), not just "nothing journaled yet
+    today, still time to catch up."
+
+    Same trend_history_bootstrapped exclusion as the per-date version,
+    same reasoning -- that marker is bookkeeping, not real trading
+    activity, and would otherwise mask a real gap immediately behind it.
+    """
+    recent_events = (
+        db.query(Event)
+        .filter(Event.user_id == user_id, Event.model == model)
+        .order_by(Event.timestamp.desc())
+        .limit(500)  # generous cap -- see get_last_event_timestamp_for_date()'s NOTE
+        .all()
+    )
+    for e in recent_events:
+        if e.event_type == "trend_history_bootstrapped":
+            continue
+        return e.timestamp
+    return None
+
+
 def get_model_config(db: Session, user_id: str, model_name: str) -> dict | None:
     """
     Phase 4 step 2c. Fetches the real (status, risk_pct, magic_number)

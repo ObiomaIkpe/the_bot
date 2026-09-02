@@ -123,6 +123,14 @@ VALID_EVENT_TYPES = (
     # closes the duplicate immediately rather than leaving it to ride
     # unmanaged; this event journals that it happened --
     "duplicate_fill_closed",
+    # -- added 2026-09-02, cross-day recovery gap fix (the other half of
+    # the same incident -- see PENDING_ITEMS.md's "Real bugs found
+    # 2026-09-02"): shadow_runner/orphan_recovery.py's startup check for
+    # a real open position that doesn't match any known trades row
+    # (e.g. it filled while the runner was down across a day boundary).
+    # Journals that one was found and had its take-profit target
+    # attached, same as a live-caught fill would have gotten --
+    "orphan_position_recovered",
 )
 
 # Fixes a real, stale bug: write_event() used to hardcode is_shadow=True
@@ -160,6 +168,7 @@ REAL_ACTION_EVENT_TYPES = frozenset(
         "manual_close_requested",
         "manual_cancel_requested",
         "duplicate_fill_closed",
+        "orphan_position_recovered",
     }
 )
 
