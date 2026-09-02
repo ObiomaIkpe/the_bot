@@ -12,6 +12,16 @@ class Settings(BaseSettings):
 
     database_url: str
 
+    # `db`'s own credential, not something app code ever reads directly
+    # (database_url already embeds it) -- declared here only because
+    # this whole class rejects unknown env vars (pydantic-settings'
+    # BaseSettings default), and .env is loaded wholesale into every
+    # service via `env_file: ./.env` in docker-compose.yml, POSTGRES_PASSWORD
+    # included. Surfaced 2026-09-02: `docker compose run --rm api alembic
+    # ...` was the first thing to actually construct Settings() against
+    # this exact .env/model_config combination and hit it.
+    postgres_password: str | None = None
+
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
