@@ -170,30 +170,33 @@ status changes -- don't let the two drift.
       hardcode the handful of real FX closures so the check is
       accurate, or (b) ship the naive version and accept the occasional
       false page. User chose to skip both for now rather than pick.
-- [ ] **Secret rotation.** **Postgres password: DONE 2026-09-02** --
-      rotated live (`ALTER ROLE`, no `db` restart needed) after it
-      surfaced hardcoded in plaintext in the VPS's `docker-compose.yml`
-      during this session's deploy (now uses `${POSTGRES_PASSWORD}`
-      substitution like everything else); `api`/`shadow_runner`
-      restarted clean with zero downtime. **`JWT_SECRET_KEY`: DONE
-      2026-09-02** -- simple swap + `api`-only restart (confirmed
+- [x] **Secret rotation -- all three done 2026-09-02.** **Postgres
+      password**: rotated live (`ALTER ROLE`, no `db` restart needed)
+      after it surfaced hardcoded in plaintext in the VPS's
+      `docker-compose.yml` during this session's deploy (now uses
+      `${POSTGRES_PASSWORD}` substitution like everything else);
+      `api`/`shadow_runner` restarted clean with zero downtime.
+      **`JWT_SECRET_KEY`**: simple swap + `api`-only restart (confirmed
       `shadow_runner` never touches JWT, no HTTP auth layer); every
       logged-in session was signed out once, expected, no data risk.
-      **`CREDENTIALS_ENCRYPTION_KEY`: tooling built 2026-09-02, not yet
-      run against the live table.** It's the Fernet key encrypting
-      every stored broker credential (`broker_credentials`, including
-      the real live account) at rest -- a naive swap would make every
-      existing encrypted row permanently undecryptable the instant the
-      app tries to read it. `app/scripts/rotate_credentials_encryption_key.py`
-      does this safely: decrypts every row under the old key, re-encrypts
-      under the new one, all inside one transaction (aborts the whole
-      batch, commits nothing, if any row fails to decrypt); `--dry-run`
-      proves the old key is correct first. 5 tests, 351 passed / 1
-      skipped / 10 pre-existing unrelated failures, 0 regressions.
-      Actually running it against the live table (then updating `.env`
-      and restarting `api` -- confirmed `shadow_runner`/the bridge never
-      decrypt credentials locally, so neither needs restarting) is still
-      its own separate, deliberate step, not done yet.
+      **`CREDENTIALS_ENCRYPTION_KEY`**: the one that needed real care --
+      it's the Fernet key encrypting every stored broker credential
+      (`broker_credentials`, including the real live account) at rest,
+      and a naive swap would have made every existing encrypted row
+      permanently undecryptable. Built
+      `app/scripts/rotate_credentials_encryption_key.py` first (decrypts
+      every row under the old key, re-encrypts under the new one, all
+      inside one transaction -- aborts the whole batch, commits nothing,
+      if any row fails to decrypt; `--dry-run` proves the old key is
+      correct before anything real happens; 5 tests). Then ran it for
+      real against the live table (5 rows, dry-run confirmed first),
+      updated `.env`, restarted `api`. **Verified live in the browser**
+      -- the Live page showed real balance/equity ($48,936.80) and real
+      pending orders with real ticket numbers immediately after, proving
+      the bridge successfully authenticated using credentials decrypted
+      under the new key end-to-end, not just that the key format was
+      accepted. 351 passed / 1 skipped / 10 pre-existing unrelated
+      failures, 0 regressions.
 
 ## Real-money gate (explicitly not started)
 
