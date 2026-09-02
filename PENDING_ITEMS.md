@@ -170,13 +170,23 @@ status changes -- don't let the two drift.
       hardcode the handful of real FX closures so the check is
       accurate, or (b) ship the naive version and accept the occasional
       false page. User chose to skip both for now rather than pick.
-- [ ] **Secret rotation** -- `JWT_SECRET_KEY`, `CREDENTIALS_ENCRYPTION_KEY`
-      still pending, long-standing, never done. **Postgres password: DONE
-      2026-09-02** -- rotated live (`ALTER ROLE`, no `db` restart needed)
-      after it surfaced hardcoded in plaintext in the VPS's
-      `docker-compose.yml` during this session's deploy (now uses
-      `${POSTGRES_PASSWORD}` substitution like everything else); `api`/
-      `shadow_runner` restarted clean with zero downtime.
+- [ ] **Secret rotation.** **Postgres password: DONE 2026-09-02** --
+      rotated live (`ALTER ROLE`, no `db` restart needed) after it
+      surfaced hardcoded in plaintext in the VPS's `docker-compose.yml`
+      during this session's deploy (now uses `${POSTGRES_PASSWORD}`
+      substitution like everything else); `api`/`shadow_runner`
+      restarted clean with zero downtime. **`JWT_SECRET_KEY`: DONE
+      2026-09-02** -- simple swap + `api`-only restart (confirmed
+      `shadow_runner` never touches JWT, no HTTP auth layer); every
+      logged-in session was signed out once, expected, no data risk.
+      **`CREDENTIALS_ENCRYPTION_KEY`: still pending, deliberately NOT
+      done the same casual way** -- it's the Fernet key encrypting
+      every stored broker credential (`broker_credentials`, including
+      the real live account) at rest. A naive swap would make every
+      existing encrypted row permanently undecryptable the instant the
+      app tries to read it -- this needs a real decrypt-with-old/
+      re-encrypt-with-new migration script, built and tested against a
+      copy of the data first, before it ever touches the live table.
 
 ## Real-money gate (explicitly not started)
 
