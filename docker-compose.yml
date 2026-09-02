@@ -69,6 +69,22 @@ services:
         condition: service_healthy
     restart: unless-stopped
     logging: *default-logging
+  frontend:
+    # First-ever deploy of the React frontend (2026-09-02) -- previously
+    # had no Dockerfile/compose service at all. `frontend/.env` must
+    # exist on the host BEFORE this builds (VITE_API_BASE_URL is baked
+    # in at build time, not read at container-runtime). Host nginx
+    # reverse-proxies thebot.ihusale.com.ng to this container's port
+    # 8005 -- see DEPLOY_PLAN.md for the nginx block + Certbot steps,
+    # not part of this repo (same VPS-only treatment as the API's own
+    # nginx config).
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8005:80"
+    restart: unless-stopped
+    logging: *default-logging
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
