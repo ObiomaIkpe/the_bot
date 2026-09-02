@@ -8,6 +8,53 @@ status changes -- don't let the two drift.
 
 ---
 
+## Real bugs found 2026-09-02 (live-money-affecting, discovered a week late)
+
+Found by cross-referencing the real MT5 mobile app's trade history
+against this app's own `events`/`trades` tables, prompted by the user
+asking why a trade ran overnight instead of closing same-day. Full
+story in `PHASE3_VALIDATION.md`'s "Correction (2026-09-02)" section --
+these two are the same incident, two separate root causes.
+
+- [ ] **Sibling-order race: a second real fill can get silently
+      dropped instead of tracked.** When two candidates' pending orders
+      both fill before the loser's cancel completes,
+      `order_manager.py`'s `_on_fill()` unconditionally overwrites its
+      tracking to keep only the winning ticket -- even when the cancel
+      failed because the "loser" had *also* already filled for real.
+      That second real position never gets a take-profit attached (only
+      the tracked winner does) and is invisible to everything downstream
+      (multi-day position tracking, the trade write-path) from that
+      point on. Confirmed live: ticket `#3147397683`, 27 Aug 2026,
+      real Stop Loss but blank Take Profit, rode alone to a real loss.
+      Fix needs `_on_fill()` (or the cancel's exception handler) to
+      recognize "cancel failed because it already filled" as a SECOND
+      real fill needing its own tracking/target, not a cancel failure
+      to just log and move past.
+- [ ] **Cross-day restart recovery gap, confirmed to have happened for
+      real.** `PHASE3_RESTART_RECOVERY.md`/`PHASE3_VALIDATION.md` both
+      already documented that the runner has no recovery for anything
+      before "today" -- a restart spanning midnight means that whole
+      prior day is never journaled. Previously theoretical ("not yet
+      exercised for real"); now confirmed: `shadow_runner` appears to
+      have gone down for ~20 hours spanning 27-28 Aug 2026 (continuous
+      swing-tracking events stop cold at 16:35 UTC on the 27th, nothing
+      again until an unrelated event at 12:21 UTC on the 28th), and
+      *neither* of that day's two real trades was ever written to the
+      `trades` table -- confirmed via both the user's own Trade History
+      and the admin cross-user Trades view, both showing zero rows for
+      that day. Both real MT5 positions kept resolving on the broker's
+      side the whole time, completely invisible to the app. Needs real
+      cross-day recovery (replay a prior day's events from the bridge's
+      own history if the runner comes back up after missing a
+      boundary), not just "today, in progress."
+      **Directly strengthens the case for the missed-trading-day alert**
+      (see "Monitoring/alerting" below, explicitly skipped earlier this
+      session) -- this incident is exactly the failure mode that alert
+      would have caught, and it went undetected by anything for about a
+      week until the user happened to notice a discrepancy against
+      their own MT5 app.
+
 ## Quick cleanup (low effort, low risk)
 
 - [ ] **Delete the pre-cutover backup file on the VPS**

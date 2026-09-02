@@ -95,6 +95,62 @@ statistical edge; that's explicitly deferred to the real-money gate
 validation and slippage/spread modeling, neither done yet, both
 required before any of this trades real money).
 
+## Correction (2026-09-02): trade 2's real story, found by cross-checking the actual MT5 account
+
+The "5 weeks clean, unattended, no further bugs" framing above turned
+out to be **incomplete** — it was true of everything the app itself
+could see, but not of what actually happened on the broker side. Found
+by cross-referencing the real MT5 mobile app's trade history (the
+user's own screenshots) against this app's `events`/`trades` tables for
+the same window, prompted by the user asking why trade 2 ran overnight
+instead of closing same-day.
+
+**What actually happened, in order:**
+
+1. Two separate raid candidates (different `raid_bar`/`mss_bar` keys)
+   independently computed the *identical* entry/stop level for the
+   same EUR/USD setup. Both got their own real pending order placed
+   (normal sibling behavior) -- tickets `#3147397442` and
+   `#3147397683`, both Buy 7.55 lots at 1.16460, both stop-loss
+   1.16395.
+2. Both **filled within the same instant** (27 Aug 2026, ~15:59:22
+   broker time) -- a genuine race, not the usual "one fills, the other
+   is still pending and gets cleanly cancelled" case.
+3. `order_manager.py`'s `_on_fill()` tried to cancel the loser
+   (`#3147397683`) as a sibling -- but it had *already filled too*, so
+   the cancel failed (`retcode=10013, 'Invalid request'`, logged as a
+   `cancel_sibling_order` safety-check failure). **Real bug**:
+   `_on_fill()` unconditionally overwrites its tracking to keep only
+   the winning ticket regardless of whether the cancel actually
+   succeeded -- so the second real fill was silently dropped from
+   tracking instead of being recognized as its own live position. It
+   never got a take-profit target attached (that only happens for the
+   tracked winner), which is exactly why its MT5 record shows a Stop
+   Loss but a blank Take Profit.
+4. Separately, and compounding it: `shadow_runner` appears to have gone
+   down for roughly 20 hours spanning the day boundary -- the `events`
+   table shows continuous `intraday_swing_high/low_confirmed` activity
+   every 10-30 minutes through 16:35 UTC on the 27th, then **total
+   silence** until an unrelated `model_config_updated` event at
+   12:21:43 UTC on the 28th. This lines up with a gap this document
+   already flagged as real but "not yet exercised" -- **the runner has
+   no recovery for anything before "today,"** so a restart spanning
+   midnight means that whole prior day's activity is simply never
+   journaled. That's exactly what happened here: **neither trade 1 nor
+   trade 2 was ever written to the `trades` table at all**, confirmed
+   by checking both the user's own Trade History and the admin
+   cross-user Trades view -- both show zero rows for this day. Both
+   real MT5 positions kept running and resolving on the broker's own
+   side throughout (MT5 enforces SL/TP independently of whether the bot
+   process is alive), completely invisible to the app the whole time.
+
+**Net effect**: a real trade lost real (demo) money partly *because*
+it never got a take-profit, and the whole incident -- including a full
+day of genuine trading activity -- went undetected by the app itself
+for about a week, until the user happened to notice a discrepancy
+against their own MT5 app. Nothing in this system would have caught
+it on its own. Both bugs are now tracked in `PENDING_ITEMS.md`.
+
 ## Status: Phase 3 complete
 
 All 9 steps done. Ready for Phase 4's own validation to build on this
