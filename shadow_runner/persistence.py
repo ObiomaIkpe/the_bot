@@ -9,7 +9,7 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import Event, ModelConfig, REAL_ACTION_EVENT_TYPES, Trade, UserSettings
+from app.models import BrokerCredential, Event, ModelConfig, REAL_ACTION_EVENT_TYPES, Trade, User, UserSettings
 
 log = logging.getLogger("shadow_runner.persistence")
 
@@ -179,6 +179,56 @@ def get_model_config(db: Session, user_id: str, model_name: str) -> dict | None:
         "magic_number": row.magic_number,
         "is_paused": row.is_paused,
     }
+
+
+def get_active_subscribers(db: Session, model_name: str) -> list[dict]:
+    """
+    Multi-user fan-out, piece 1 (MULTI_USER_FANOUT_PLAN.md) -- who
+    currently has `model_name` active and a live bridge to execute on.
+    Joins three tables that already model this individually but have
+    never been joined this way: ModelConfig (status='active') ->
+    User (is_active) -> BrokerCredential (is_active, bridge_url set).
+
+    Deliberately does NOT check is_paused (UserSettings/ModelConfig) --
+    that stays exactly where it already is, checked fresh per-candidate
+    inside OrderManager.on_trade_candidate_ready() (see
+    get_user_paused_status()/get_model_paused_status() above). This
+    function only answers "should an OrderManager exist for this user
+    today," not "should it be allowed to trade right now" -- keeping
+    those two questions separate is what lets a mid-day pause take
+    effect without needing to rebuild the subscriber list.
+
+    Queried fresh every call, never cached -- same discipline as every
+    other per-poll check in this module. A user flipping the model off,
+    or losing their bridge connection, takes effect on the very next
+    call.
+
+    BrokerCredential.is_active is enforced unique per user at the DB
+    level (uq_broker_credentials_one_active_per_user), so this join
+    can never return more than one row per subscriber.
+    """
+    rows = (
+        db.query(ModelConfig, BrokerCredential)
+        .join(User, User.user_id == ModelConfig.user_id)
+        .join(BrokerCredential, BrokerCredential.user_id == ModelConfig.user_id)
+        .filter(
+            ModelConfig.model_name == model_name,
+            ModelConfig.status == "active",
+            User.is_active.is_(True),
+            BrokerCredential.is_active.is_(True),
+            BrokerCredential.bridge_url.isnot(None),
+        )
+        .all()
+    )
+    return [
+        {
+            "user_id": mc.user_id,
+            "bridge_url": bc.bridge_url,
+            "magic_number": mc.magic_number,
+            "risk_pct": mc.risk_pct,
+        }
+        for mc, bc in rows
+    ]
 
 
 def get_user_paused_status(db: Session, user_id: str) -> bool:
