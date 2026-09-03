@@ -92,8 +92,13 @@ def list_all_trades(
     _admin: User = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ):
-    """Same shape as GET /trades, minus the user_id scoping."""
-    q = db.query(Trade, User).join(User, Trade.user_id == User.user_id)
+    """Same shape as GET /trades, minus the user_id scoping.
+
+    Multi-user fan-out, piece 2: outer join, not inner -- the model's
+    ownerless shadow row (Trade.user_id IS NULL, see migration 0021) has
+    no User to join to, and an inner join would silently drop it from
+    this list. AdminTradeOut.from_model() already handles user=None."""
+    q = db.query(Trade, User).outerjoin(User, Trade.user_id == User.user_id)
     if model:
         q = q.filter(Trade.model == model)
     if is_shadow is not None:

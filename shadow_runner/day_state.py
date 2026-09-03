@@ -33,9 +33,14 @@ class CurrentDay:
         self.trend: str | None = None
         self.skip_reason: str | None = None
         self.orchestrator = None         # DayOrchestrator, only if tradeable
-        self.order_manager = None        # OrderManager, only if tradeable AND
-                                          # a model_configs row exists -- see
-                                          # runner.py's _decide_day()
+        # Multi-user fan-out, piece 2 (MULTI_USER_FANOUT_PLAN.md): one
+        # OrderManager per subscriber, keyed by user_id -- only if
+        # tradeable AND at least one get_active_subscribers() row exists
+        # for this model (see runner.py's _decide_day()). Empty dict
+        # (not None) when there are no subscribers, so `if
+        # cd.order_managers:` reads correctly everywhere without a
+        # separate None-check.
+        self.order_managers: dict = {}
         self.todays_events: list[dict] = []  # raw event dicts, for the
                                               # entry/exit-timestamp lookup
                                               # at finalize time

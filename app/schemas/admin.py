@@ -54,7 +54,11 @@ class AdminEventOut(BaseModel):
 
 class AdminTradeOut(BaseModel):
     trade_id: uuid.UUID
-    user_email: str
+    # Multi-user fan-out, piece 2: None for the model's ownerless shadow
+    # row (trade.user_id IS NULL -- see migration 0021) -- there's no
+    # User row to join for that one. Every per-subscriber real-outcome
+    # row always still carries a real email.
+    user_email: str | None
     model: str
     is_shadow: bool
 
@@ -77,10 +81,10 @@ class AdminTradeOut(BaseModel):
     real_profit: float | None
 
     @classmethod
-    def from_model(cls, trade: Trade, user: User) -> "AdminTradeOut":
+    def from_model(cls, trade: Trade, user: User | None) -> "AdminTradeOut":
         return cls(
             trade_id=trade.trade_id,
-            user_email=user.email,
+            user_email=user.email if user is not None else None,
             model=trade.model,
             is_shadow=trade.is_shadow,
             direction=trade.direction,

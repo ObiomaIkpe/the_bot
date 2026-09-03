@@ -11,7 +11,14 @@ class Trade(Base):
     __tablename__ = "trades"
 
     trade_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
+    # Nullable since migration 0021 (multi-user fan-out, piece 2) -- NULL
+    # means the model's own ownerless "shadow" row (is_shadow=True,
+    # real_outcome always None), written once per model per day
+    # regardless of how many real subscribers exist. Every per-subscriber
+    # REAL-outcome row still always carries a real user_id (
+    # get_active_subscribers() only ever returns real users) -- this is
+    # NOT a general relaxation of trade ownership, just the one shared row.
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
 
     # FK to models.model_name (migration 0018) -- previously a hardcoded
     # CHECK constraint (ck_trades_model_valid, 'fvg'/'ob'/'fvg_ob' only);

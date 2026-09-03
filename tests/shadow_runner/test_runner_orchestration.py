@@ -15,11 +15,18 @@ from app.models import UserSettings
 
 
 class FakeQuery:
-    def __init__(self, one_result=None, first_result=None):
+    def __init__(self, one_result=None, first_result=None, all_result=None):
         self._one = one_result
         self._first = first_result
+        self._all = [] if all_result is None else all_result
 
     def filter(self, *a, **k):
+        return self
+
+    def join(self, *a, **k):
+        # Multi-user fan-out, piece 2: get_active_subscribers() joins
+        # ModelConfig/User/BrokerCredential -- see FakeDB.query() below
+        # for why this always resolves to an empty subscriber list here.
         return self
 
     def order_by(self, *a, **k):
@@ -30,6 +37,9 @@ class FakeQuery:
 
     def first(self):
         return self._first
+
+    def all(self):
+        return self._all
 
 
 class FakeDB:
@@ -42,7 +52,17 @@ class FakeDB:
         self.shared_writes = shared_writes
         self.risk_pct = risk_pct
 
-    def query(self, model_cls):
+    def query(self, *model_classes):
+        # Multi-user fan-out, piece 2: get_active_subscribers() queries
+        # db.query(ModelConfig, BrokerCredential) -- two classes at once.
+        # None of these orchestration tests seed a subscriber (they're
+        # about detection/day-decision logic, not fan-out), so "no
+        # subscribers" is always the correct, intended answer -- matches
+        # every one of them already expecting cd.order_managers to stay
+        # empty unless a test explicitly wires one in by hand.
+        if len(model_classes) > 1:
+            return FakeQuery(all_result=[])
+        model_cls = model_classes[0]
         if model_cls is UserSettings:
             return FakeQuery(one_result=UserSettings(risk_pct=self.risk_pct))
         # Trade query (get_current_equity) -- no prior trades in these tests

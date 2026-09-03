@@ -250,7 +250,7 @@ def test_historical_decide_day_never_constructs_an_order_manager():
     cd = runner._replay_historical_day(next_date, bars)
 
     assert cd.tradeable is True, "sanity check -- this day should have been judged tradeable"
-    assert cd.order_manager is None, "historical replay must never construct a real OrderManager"
+    assert cd.order_managers == {}, "historical replay must never construct a real OrderManager"
     assert bridge.placed == []
 
 
@@ -260,7 +260,7 @@ def test_historical_replay_never_places_a_real_order():
     trade_candidate_ready DOES reach OrderManager during live
     _process_bar) -- inverted here to prove the SAME real candidate
     firing during a HISTORICAL replay never reaches
-    on_trade_candidate_ready(), because cd.order_manager is None."""
+    on_trade_candidate_ready(), because cd.order_managers is empty."""
     config = make_config()
     db = FakeDB([])
     bridge = OrderFakeBridge()
@@ -279,7 +279,7 @@ def test_historical_replay_never_places_a_real_order():
     # same technique test_order_manager_wiring.py uses at the live
     # _process_bar level.
     cd = runner._replay_historical_day(next_date, bars_before_10am + [bars_from_10am_on[0]])
-    assert cd.order_manager is None
+    assert cd.order_managers == {}
     assert cd.orchestrator is not None
 
     fire_bar = len(cd.bars)
@@ -310,16 +310,14 @@ class GapFakeBridge(OrderFakeBridge):
 
 
 class GapFakeDB(FakeDB):
-    """FakeDB's own FakeQuery has no .all() -- fine for everything it
-    was originally built for (UserSettings/Trade-equity .first()/.one()
-    lookups), but check_for_orphaned_positions() needs a real
-    Trade-query .all() too. No orphans exist in these fixtures (bridge
-    positions are empty), so an empty list is the correct answer either
-    way -- this just needs to not crash."""
+    """check_for_orphaned_positions() needs a real Trade-query .all() --
+    no orphans exist in these fixtures (bridge positions are empty), so
+    an empty list is the correct answer either way -- this just needs to
+    not crash."""
 
-    def query(self, model_cls):
+    def query(self, *model_classes):
         from app.models import Trade
-        if model_cls is Trade:
+        if len(model_classes) == 1 and model_classes[0] is Trade:
             class _EmptyTradeQuery:
                 def filter(self, *a, **k):
                     return self
@@ -327,7 +325,7 @@ class GapFakeDB(FakeDB):
                 def all(self):
                     return []
             return _EmptyTradeQuery()
-        return super().query(model_cls)
+        return super().query(*model_classes)
 
 
 def test_recover_cross_day_gap_noop_when_nothing_actually_missed(monkeypatch):
@@ -398,6 +396,6 @@ def test_historical_replay_skipped_day_still_journals_day_skip_event():
     cd = runner._replay_historical_day(next_date, bars)
 
     assert cd.tradeable is False
-    assert cd.order_manager is None
+    assert cd.order_managers == {}
     skip_events = [w for w in shared_writes if getattr(w, "event_type", "").startswith("day_skipped_")]
     assert len(skip_events) == 1

@@ -57,10 +57,10 @@ from shadow_runner.order_manager import OrderManager
 from shadow_runner.position_tracker import PositionTracker
 from shadow_runner.persistence import (
     event_type_exists,
+    get_active_subscribers,
     get_current_equity,
     get_last_event_timestamp,
     get_last_event_timestamp_for_date,
-    get_model_config,
     get_recent_swing_history,
     link_events_to_trade,
     write_event,
@@ -73,31 +73,54 @@ log = logging.getLogger("shadow_runner.runner")
 NY_TZ = ZoneInfo("America/New_York")
 BAR_DURATION = timedelta(minutes=5)  # M5 bars, matches config.symbol's timeframe
 
+# Multi-user fan-out, piece 2 (MULTI_USER_FANOUT_PLAN.md section 5): the
+# model's own simulated day (the "ownerless" shadow Trade row, written
+# regardless of how many real subscribers exist -- see _write_trade())
+# tracks a purely notional equity curve, decoupled from any real
+# account's balance or risk setting. 0.01 matches the pre-fan-out
+# fallback this replaces (the old "no model_config loaded" case);
+# 10000.0 is an arbitrary round starting balance, deliberately NOT
+# derived from the reference bridge's real account (same "no coupling
+# to that account's identity" principle already used for the reference
+# price feed itself).
+SHADOW_NOTIONAL_RISK_PCT = 0.01
+SHADOW_NOTIONAL_STARTING_EQUITY = 10000.0
+
 
 class ShadowRunner:
-    def __init__(self, config: ShadowRunnerConfig, bridge: BridgeClient, session_factory, gate=None):
+    def __init__(
+        self, config: ShadowRunnerConfig, bridge: BridgeClient, session_factory, gate=None,
+        bridge_factory=BridgeClient,
+    ):
         self.config = config
-        self.bridge = bridge
+        self.bridge = bridge  # the REFERENCE bridge -- detection's price feed only,
+                                # see MULTI_USER_FANOUT_PLAN.md's "reference price feed"
+                                # decision. Never used for a subscriber's own orders.
         self.session_factory = session_factory  # e.g. app.core.database.SessionLocal
         self.gate = gate or DaySelectionGate()
         self.current_day: CurrentDay | None = None
         self.last_processed_bar_time_ny: datetime | None = None
-        # Phase 4 step 2c: this model's real (status, risk_pct,
-        # magic_number) from model_configs -- loaded once at startup via
-        # _load_model_config(), not per-day. None until loaded; also
-        # stays None if no model_configs row exists for this model at
-        # all (distinct from status='disabled', which is a real row
-        # that's just intentionally off -- see get_model_config()'s
-        # docstring). When None, OrderManager is never constructed and
-        # this runner behaves exactly like pre-Phase-4 Phase 3: pure
-        # journaling, no order-manager involvement at all.
-        self.model_config: dict | None = None
-        # Phase 4 overnight-position handling: constructed once
-        # model_config is loaded (see _load_model_config()), NOT
-        # day-scoped like OrderManager -- survives day rollovers and,
-        # via load_from_db(), restarts too. See position_tracker.py's
-        # module docstring for why this can't be day-scoped.
-        self.position_tracker: PositionTracker | None = None
+        # Multi-user fan-out, piece 2: constructs a per-subscriber
+        # BridgeClient from their own bridge_url (get_active_subscribers()'s
+        # result) -- overridable in tests to return a fake regardless of
+        # URL, same dependency-injection shape as `bridge`/`session_factory`/
+        # `gate` above. Defaults to the real BridgeClient class itself.
+        self.bridge_factory = bridge_factory
+        # Multi-user fan-out, piece 2: one PositionTracker per subscriber,
+        # keyed by user_id -- NOT day-scoped like CurrentDay.order_managers
+        # (a real position can outlive the day it opened on, see
+        # position_tracker.py's module docstring), so this dict only ever
+        # GROWS (see _ensure_position_tracker()): built for every current
+        # subscriber once at startup (_load_initial_position_trackers(),
+        # so a restart doesn't lose track of an already-open multi-day
+        # position -- matches the old single-user behavior exactly), then
+        # topped up for any newly-added subscriber at each _decide_day()
+        # call so they don't need a full runner restart to get overnight
+        # risk coverage. An entry is never removed just because a
+        # subscriber later unsubscribes -- any position it's still
+        # tracking keeps being managed to natural resolution regardless
+        # (see MULTI_USER_FANOUT_PLAN.md's "Open questions, resolved" #2).
+        self.position_trackers: dict = {}
         # Logging/audit review, part 3 (monitoring/alerting): proves the
         # main loop itself is alive and cycling, not just that the process
         # exists -- see app.core.healthchecks' module docstring for why
@@ -105,30 +128,62 @@ class ShadowRunner:
         # same VPS. Dormant (no-ops) until HEALTHCHECKS_PING_URL is set.
         self.heartbeat = HeartbeatPinger()
 
-    def _load_model_config(self) -> None:
+    def _ensure_position_tracker(self, subscriber: dict) -> None:
+        """Multi-user fan-out, piece 2. Constructs + load_from_db()'s a
+        PositionTracker for this subscriber if one doesn't already exist
+        -- a no-op otherwise, so calling this repeatedly (every
+        _decide_day()) never disturbs an existing entry's in-flight
+        multi-day tracking state. `subscriber` is one row from
+        get_active_subscribers()."""
+        user_id = subscriber["user_id"]
+        if user_id in self.position_trackers:
+            return
+        model_config = {
+            "model_name": self.config.model, "status": "active",
+            "risk_pct": subscriber["risk_pct"], "magic_number": subscriber["magic_number"],
+        }
+        bridge = self.bridge_factory(subscriber["bridge_url"])
+        pt = PositionTracker(bridge, self.session_factory, user_id, model_config)
+        pt.load_from_db()
+        self.position_trackers[user_id] = pt
+
+    def _load_initial_position_trackers(self) -> None:
+        """Multi-user fan-out, piece 2. Call once, before run_forever() --
+        replaces the old single-user _load_model_config()/PositionTracker
+        construction. Queries today's subscribers once and builds a
+        PositionTracker for each, so a runner restart doesn't lose track
+        of anyone's already-open multi-day position (same immediacy the
+        old single-user startup path already had) -- _decide_day() then
+        keeps this dict current for any subscriber added later, without
+        needing another restart."""
         db = self.session_factory()
         try:
-            self.model_config = get_model_config(db, self.config.user_id, self.config.model)
+            subscribers = get_active_subscribers(db, self.config.model)
         finally:
             db.close()
-        if self.model_config is None:
-            log.warning(
-                "No model_configs row found for model=%s -- OrderManager will not be "
-                "constructed; this runner will only journal, never place real orders, "
-                "regardless of any future model_configs row added later this session "
-                "(restart required to pick up a newly-added row).",
-                self.config.model,
-            )
-        else:
-            log.info(
-                "Loaded model config: model=%s status=%s risk_pct=%s magic_number=%s",
-                self.model_config["model_name"], self.model_config["status"],
-                self.model_config["risk_pct"], self.model_config["magic_number"],
-            )
-            self.position_tracker = PositionTracker(
-                self.bridge, self.session_factory, self.config.user_id, self.model_config
-            )
-            self.position_tracker.load_from_db()
+        for subscriber in subscribers:
+            self._ensure_position_tracker(subscriber)
+        log.info(
+            "Loaded %d initial subscriber(s) for model=%s", len(subscribers), self.config.model,
+        )
+
+    @staticmethod
+    def _make_tagging_sink(append_to: list, user_id):
+        """Multi-user fan-out, piece 2. Every event a specific
+        subscriber's OrderManager/orphan-check emits needs to carry WHICH
+        subscriber it belongs to, since all subscribers' events flow
+        through the same shared list (cd.todays_events, or the orphan-
+        recovery collector) before _write_events_now() persists them.
+        Tags with `_origin_user_id`, which _write_events_now() pops back
+        off before the row is ever written -- never reaches `details`.
+        Narrative events never get this tag (nothing reads it for them --
+        write_event() nulls user_id for NARRATIVE_EVENT_TYPES regardless
+        of what's passed, see app/models/event.py)."""
+        def sink(e: dict) -> None:
+            tagged = dict(e)
+            tagged["_origin_user_id"] = user_id
+            append_to.append(tagged)
+        return sink
 
     # ---------- polling ----------
 
@@ -145,18 +200,34 @@ class ShadowRunner:
         self._check_order_manager_fills()
         self._check_order_manager_close()
         self._check_daily_loss_threshold()
-        if self.position_tracker is not None:
-            self.position_tracker.check_positions()
+        for user_id, pt in self.position_trackers.items():
+            try:
+                pt.check_positions()
+            except Exception:
+                log.exception(
+                    "PositionTracker.check_positions() failed for user_id=%s -- "
+                    "continuing to the next subscriber", user_id,
+                )
 
     def _check_daily_loss_threshold(self) -> None:
         """Phase 4 step 4 Part 2. Visibility only -- see
         OrderManager.check_daily_loss_threshold()'s own docstring for
         the full reasoning (does not block trades, does not force-close
-        anything)."""
+        anything). Multi-user fan-out, piece 2: loops over every
+        subscriber's own OrderManager, each isolated in its own
+        try/except -- one subscriber's failure here must never block the
+        loss-visibility check for anyone else."""
         cd = self.current_day
-        if cd is None or cd.order_manager is None:
+        if cd is None or not cd.order_managers:
             return
-        cd.order_manager.check_daily_loss_threshold()
+        for user_id, om in cd.order_managers.items():
+            try:
+                om.check_daily_loss_threshold()
+            except Exception:
+                log.exception(
+                    "check_daily_loss_threshold() failed for user_id=%s -- "
+                    "continuing to the next subscriber", user_id,
+                )
         self._flush_new_events(cd)
 
     def _check_order_manager_close(self) -> None:
@@ -164,31 +235,58 @@ class ShadowRunner:
         reasoning as _check_order_manager_fills() -- real broker state
         (whether the winning position has closed) can change between
         bar closes, not just at them. OrderManager itself already
-        journals the real_trade_closed event via its own event_sink
-        (same cd.todays_events.append hookup as fills/placements) -- no
-        additional action needed here beyond calling it; this method
-        exists mainly for symmetry/discoverability alongside its fills
-        counterpart, and as the natural place to extend later (e.g.
-        correlating the real close back into the simulated trade record
-        -- not yet built, see PHASE4 step 3 scope)."""
+        journals the real_trade_closed event via its own event_sink --
+        no additional action needed here beyond calling it. Multi-user
+        fan-out, piece 2: same per-subscriber isolation as the loss
+        check above."""
         cd = self.current_day
-        if cd is None or cd.order_manager is None:
+        if cd is None or not cd.order_managers:
             return
-        cd.order_manager.check_for_close()
+        for user_id, om in cd.order_managers.items():
+            try:
+                om.check_for_close()
+            except Exception:
+                log.exception(
+                    "check_for_close() failed for user_id=%s -- continuing to the "
+                    "next subscriber", user_id,
+                )
         self._flush_new_events(cd)
 
     def _check_order_manager_fills(self) -> None:
         """Checked once per poll cycle, independent of whether any new
         bars arrived -- fills happen against REAL broker state, which
-        can change between bar closes, not just at them."""
+        can change between bar closes, not just at them.
+
+        Multi-user fan-out, piece 2: loops over every subscriber's
+        OrderManager (isolated try/except each), tracking WHICH ones
+        actually got a fill THIS poll -- only those get attach_target()
+        called, not every subscriber. The bars used for target
+        computation are fetched ONCE from the shared REFERENCE bridge
+        (self.bridge), reused for every subscriber who filled this poll
+        -- same "detection's price feed is shared" principle already
+        applied to the narrative itself (see MULTI_USER_FANOUT_PLAN.md),
+        extended here since target computation is fundamentally a
+        price-action question, not an execution one; fetching each
+        subscriber's own bars separately would mean N redundant bridge
+        calls per poll for no meaningful precision gain.
+        """
         cd = self.current_day
-        if cd is None or cd.order_manager is None:
+        if cd is None or not cd.order_managers:
             return
-        newly_filled = cd.order_manager.check_for_fills()
+        newly_filled_user_ids = []
+        for user_id, om in cd.order_managers.items():
+            try:
+                if om.check_for_fills():
+                    newly_filled_user_ids.append(user_id)
+            except Exception:
+                log.exception(
+                    "check_for_fills() failed for user_id=%s -- continuing to the "
+                    "next subscriber", user_id,
+                )
         self._flush_new_events(cd)  # flush regardless of outcome below --
                                       # placements/cancellations already
                                       # emitted must not wait for a bar
-        if not newly_filled:
+        if not newly_filled_user_ids:
             return
         try:
             candles = self.bridge.get_candles(self.config.symbol, "M5", 20)
@@ -209,7 +307,14 @@ class ShadowRunner:
             c for c in candles
             if (c["time_ny"].replace(tzinfo=None) if c["time_ny"].tzinfo else c["time_ny"]) + BAR_DURATION <= now_ny
         ]
-        cd.order_manager.attach_target(closed_bars)
+        for user_id in newly_filled_user_ids:
+            try:
+                cd.order_managers[user_id].attach_target(closed_bars)
+            except Exception:
+                log.exception(
+                    "attach_target() failed for user_id=%s -- continuing to the "
+                    "next subscriber", user_id,
+                )
         self._flush_new_events(cd)
 
     def _filter_new_closed_bars(self, candles: list[dict], now_ny: datetime) -> list[dict]:
@@ -305,12 +410,13 @@ class ShadowRunner:
         see PENDING_ITEMS.md's "Real bugs found 2026-09-02"): reconstructs
         a fully-missed PAST day's raid/MSS/FVG/candidate narrative for
         the journal, without ever placing a real order for it. NO
-        OrderManager gets constructed at all in this mode -- combined_sink's
-        `cd.order_manager is not None` check below is the existing guard
-        that already exists for every other day; historical replay relies
-        on that same guard structurally never being satisfied, rather
-        than adding a new conditional that could be gotten wrong. See
-        _replay_historical_day()."""
+        OrderManagers get constructed at all in this mode -- combined_sink's
+        `cd.order_managers` loop below stays empty by construction, the
+        same guard that already existed for every other day (just widened
+        from a single object to a dict, see MULTI_USER_FANOUT_PLAN.md
+        piece 2); historical replay relies on that same guard structurally
+        never being satisfied, rather than adding a new conditional that
+        could be gotten wrong. See _replay_historical_day()."""
         result = self.gate.gate_for_day(cd.date, cd.bars)
         cd.decided = True
         cd.tradeable = result.tradeable
@@ -328,21 +434,46 @@ class ShadowRunner:
             {"event_type": "day_trend_determined", "timestamp": cd.bars[-1]["time_ny"], "trend": result.trend}
         )
 
-        # Phase 4 step 2c: construct BEFORE DayOrchestrator, since the
-        # combined sink below references cd.order_manager, and
-        # DayOrchestrator's constructor immediately backfills bars
-        # (which can emit trade_candidate_ready synchronously).
-        if self.model_config is not None and not historical:
-            cd.order_manager = OrderManager(
-                self.model_config, self.config.symbol, self.bridge,
-                self.session_factory, self.config.user_id,
-                event_sink=cd.todays_events.append,
-            )
+        # Multi-user fan-out, piece 2: construct BEFORE DayOrchestrator,
+        # same reasoning as the old single-OrderManager code -- combined
+        # sink below references cd.order_managers, and DayOrchestrator's
+        # constructor immediately backfills bars (which can emit
+        # trade_candidate_ready synchronously). Queries subscribers fresh
+        # every day (never cached -- see get_active_subscribers()'s own
+        # docstring), so this is the ONE place the subscriber list gets
+        # snapshotted for the day, matching how detection already only
+        # decides once per day, not per-poll.
+        if not historical:
+            db = self.session_factory()
+            try:
+                subscribers = get_active_subscribers(db, self.config.model)
+            finally:
+                db.close()
+            for subscriber in subscribers:
+                self._ensure_position_tracker(subscriber)
+                model_config = {
+                    "model_name": self.config.model, "status": "active",
+                    "risk_pct": subscriber["risk_pct"], "magic_number": subscriber["magic_number"],
+                }
+                bridge = self.bridge_factory(subscriber["bridge_url"])
+                cd.order_managers[subscriber["user_id"]] = OrderManager(
+                    model_config, self.config.symbol, bridge, self.session_factory,
+                    subscriber["user_id"],
+                    event_sink=self._make_tagging_sink(cd.todays_events, subscriber["user_id"]),
+                )
 
         def combined_sink(e: dict) -> None:
             cd.todays_events.append(e)
-            if e.get("event_type") == "trade_candidate_ready" and cd.order_manager is not None:
-                cd.order_manager.on_trade_candidate_ready(e)
+            if e.get("event_type") != "trade_candidate_ready":
+                return
+            for user_id, om in cd.order_managers.items():
+                try:
+                    om.on_trade_candidate_ready(e)
+                except Exception:
+                    log.exception(
+                        "on_trade_candidate_ready() failed for user_id=%s -- "
+                        "continuing to the next subscriber", user_id,
+                    )
 
         cd.orchestrator = DayOrchestrator(
             result.trend, result.session_start_idx, result.session_end_idx,
@@ -406,10 +537,20 @@ class ShadowRunner:
         return cd
 
     def _write_events_now(self, events: list[dict]) -> None:
+        """Multi-user fan-out, piece 2: each event dict may carry an
+        `_origin_user_id` tag (see _make_tagging_sink()) identifying
+        WHICH subscriber it belongs to -- popped off here and used as
+        the real user_id passed to write_event(), instead of the old
+        single hardcoded self.config.user_id. A narrative event has no
+        tag (defaults to None), which is correct either way: write_event()
+        nulls user_id for NARRATIVE_EVENT_TYPES regardless of what's
+        passed (see app/models/event.py)."""
         db = self.session_factory()
         try:
             for e in events:
-                row = write_event(db, e, self.config.user_id, self.config.model)
+                write_payload = dict(e)
+                origin_user_id = write_payload.pop("_origin_user_id", None)
+                row = write_event(db, write_payload, origin_user_id, self.config.model)
                 # Logging/audit review, part 3: stash the real DB event_id
                 # back onto the source dict (write_event() itself works off
                 # a copy, so this never mutates its own input) -- lets
@@ -429,18 +570,27 @@ class ShadowRunner:
         # is safe to leave unconditional here. order_skipped_paused is
         # deliberately NOT alerted on -- that's an intentional, expected
         # skip (the model is paused), not a failure.
+        #
+        # Multi-user fan-out, piece 2: identifies the real subscriber via
+        # `_origin_user_id` (always present for these two event types --
+        # both are REAL_ACTION_EVENT_TYPES, always emitted by a specific
+        # subscriber's OrderManager). self.config.user_id is kept only as
+        # a harmless fallback for the case that tag is somehow missing --
+        # should never actually happen for these two types, but a fallback
+        # costs nothing and keeps the alert readable either way.
         for e in events:
             event_type = e.get("event_type")
+            origin_user_id = e.get("_origin_user_id", self.config.user_id)
             if event_type == "safety_check_failed":
                 send_telegram_alert(
                     f"⚠️ safety_check_failed: {e.get('check_name')} "
-                    f"(user={self.config.user_id}, model={self.config.model})\n"
+                    f"(user={origin_user_id}, model={self.config.model})\n"
                     f"{e.get('error')}"
                 )
             elif event_type == "order_placement_failed":
                 send_telegram_alert(
                     f"🔴 order_placement_failed "
-                    f"(user={self.config.user_id}, model={self.config.model}, "
+                    f"(user={origin_user_id}, model={self.config.model}, "
                     f"candidate={e.get('candidate_key')})\n"
                     f"{e.get('error')}"
                 )
@@ -557,7 +707,7 @@ class ShadowRunner:
         2. Today's in-progress session: replay if safe, skip with a
            logged gap if not -- see docstring further down.
         """
-        self._load_model_config()
+        self._load_initial_position_trackers()
         self._bootstrap_trend_history_if_needed()
 
         db = self.session_factory()
@@ -632,6 +782,15 @@ class ShadowRunner:
         _replay_historical_day()) -- see the plan doc
         (misty-seeking-crescent.md in this session's history) for the
         full design and why each piece is scoped the way it is.
+
+        Multi-user fan-out, piece 2: the orphan check now runs once PER
+        SUBSCRIBER (self.position_trackers, already built at startup --
+        reused rather than a fresh get_active_subscribers() query, since
+        each PositionTracker already carries exactly what's needed: its
+        own bridge, magic_number, user_id) -- a gap can leave ANY
+        subscriber's account with an unmanaged real position, not just
+        one. Each isolated in its own try/except, same reasoning as
+        every other per-subscriber loop in this file.
         """
         missed_dates = []
         d = last_known_date + timedelta(days=1)
@@ -656,24 +815,31 @@ class ShadowRunner:
             f"Checking for orphaned positions and reconstructing the journal now."
         )
 
-        if self.model_config is not None:
+        if self.position_trackers:
             collected_events = []
             db = self.session_factory()
             try:
-                orphan_results = check_for_orphaned_positions(
-                    self.bridge, self.config.symbol, self.model_config["magic_number"],
-                    db, self.config.user_id, self.config.model, now_ny,
-                    event_sink=collected_events.append,
-                )
+                for user_id, pt in self.position_trackers.items():
+                    try:
+                        orphan_results = check_for_orphaned_positions(
+                            pt.bridge, self.config.symbol, pt.model_config["magic_number"],
+                            db, user_id, self.config.model, now_ny,
+                            event_sink=self._make_tagging_sink(collected_events, user_id),
+                        )
+                        if orphan_results:
+                            log.warning(
+                                "Recovery: orphan check for user_id=%s found %d position(s): %s",
+                                user_id, len(orphan_results), orphan_results,
+                            )
+                    except Exception:
+                        log.exception(
+                            "Orphan check failed for user_id=%s -- continuing to the "
+                            "next subscriber", user_id,
+                        )
             finally:
                 db.close()
             if collected_events:
                 self._write_events_now(collected_events)
-            if orphan_results:
-                log.warning(
-                    "Recovery: orphan check found %d position(s): %s",
-                    len(orphan_results), orphan_results,
-                )
 
         try:
             candles = self.bridge.get_candles(self.config.symbol, "M5", 5000)
@@ -709,12 +875,21 @@ class ShadowRunner:
         if trade:
             self._write_trade(cd, trade)
 
-        # Phase 4 step 2c: cancel anything the order-manager still has
-        # genuinely pending (never filled today) -- independent of the
-        # simulation's own finalize() above, since it operates on real
-        # broker state, not the simulated attempts.
-        if cd.order_manager is not None:
-            cd.order_manager.cancel_all_at_day_end()
+        # Phase 4 step 2c: cancel anything each subscriber's order-manager
+        # still has genuinely pending (never filled today) -- independent
+        # of the simulation's own finalize() above, since it operates on
+        # real broker state, not the simulated attempts. Multi-user
+        # fan-out, piece 2: one subscriber's cancel failure must never
+        # block cleanup for the others.
+        for user_id, om in cd.order_managers.items():
+            try:
+                om.cancel_all_at_day_end()
+            except Exception:
+                log.exception(
+                    "cancel_all_at_day_end() failed for user_id=%s -- continuing "
+                    "to the next subscriber", user_id,
+                )
+        if cd.order_managers:
             self._flush_new_events(cd)
 
         # Daily swing detection runs on EVERY closed day, tradeable or
@@ -726,6 +901,31 @@ class ShadowRunner:
                 self._write_events_now(swing_events)
 
     def _write_trade(self, cd: CurrentDay, trade: dict) -> None:
+        """Multi-user fan-out, piece 2 (MULTI_USER_FANOUT_PLAN.md section
+        5's Trade.user_id decision -- see "Open questions, resolved").
+        Writes TWO kinds of row now, not one:
+
+        1. The "shadow" row -- ALWAYS written, user_id=None, is_shadow=True,
+           real_outcome=None. This is the model's own simulated outcome
+           for the day, independent of how many (if any) real subscribers
+           exist -- what shadow-mode model evaluation has always been,
+           now genuinely ownerless instead of piggybacking on one
+           hardcoded account. Uses a fixed notional risk_pct/starting
+           equity (SHADOW_NOTIONAL_RISK_PCT/_STARTING_EQUITY above),
+           deliberately decoupled from any real account's balance.
+        2. One row PER SUBSCRIBER whose OrderManager actually has a real
+           outcome today (most subscribers most days will have none --
+           their candidate never filled) -- user_id=that subscriber,
+           is_shadow=False (every cd.order_managers entry is, by
+           construction, someone whose model status was 'active' today),
+           real_outcome=their own OrderManager.get_real_outcome().
+
+        The shared fill_event/close_event (found once below, from the
+        narrative -- order_filled/trade_closed are always
+        NARRATIVE_EVENT_TYPES) link to the SHADOW row's trade_id, not any
+        subscriber's -- they describe the shared simulated narrative, not
+        any one subscriber's real fill/close.
+        """
         fill_event = next(
             (
                 e for e in cd.todays_events
@@ -767,93 +967,92 @@ class ShadowRunner:
 
         db = self.session_factory()
         try:
-            # Phase 4 fix: risk_pct now comes from self.model_config
-            # (model_configs, per-model) -- NOT UserSettings.risk_pct,
-            # which was the Phase 0/3-era account-wide/single-model
-            # assumption and is now stale for this purpose (the column
-            # still exists on UserSettings for other settings, just no
-            # longer used for this). Falls back to a conservative
-            # default only if somehow no model_configs row was loaded
-            # (logged loudly at startup already if so -- see
-            # _load_model_config()) rather than crashing a trade write.
-            if self.model_config is not None:
-                risk_pct = self.model_config["risk_pct"]
-            else:
-                log.error(
-                    "%s: no model_config loaded -- falling back to a conservative "
-                    "0.01 risk_pct for this trade write. This should not happen; "
-                    "investigate why model_configs had no row for model=%s.",
-                    cd.date, self.config.model,
-                )
-                risk_pct = 0.01
-
-            starting_equity_hint = None  # only fetched from the bridge if actually needed
-            equity_before = get_current_equity(
-                db, self.config.user_id, self.config.model,
-                bridge_starting_equity=None,
+            shadow_equity_before = get_current_equity(
+                db, None, self.config.model,
+                bridge_starting_equity=SHADOW_NOTIONAL_STARTING_EQUITY,
             )
-            if equity_before is None:  # no prior trade exists -- seed from the real account
-                acct = self.bridge.account_info()
-                starting_equity_hint = acct["balance"]
-                equity_before = starting_equity_hint
-
-            # Phase 4 step 3 (part 2): is_shadow reflects this model's
-            # ACTUAL status, not a hardcoded True -- a model at 'active'
-            # status means a real order genuinely could have been
-            # placed today (whether one actually filled is separate --
-            # real_outcome below is None if not). Defaults to shadow
-            # (True) if somehow no model_config was loaded, matching
-            # the same fail-safe direction as the risk_pct fallback above.
-            is_shadow = True if self.model_config is None else (self.model_config["status"] != "active")
-            real_outcome = cd.order_manager.get_real_outcome() if cd.order_manager is not None else None
-
-            row = write_trade(
+            shadow_row = write_trade(
                 db, trade,
                 entry_time_utc=entry_bar["time_utc"],
                 entry_time_ny=entry_bar["time_ny"],
                 exit_time_utc=exit_bar["time_utc"],
-                user_id=self.config.user_id,
+                user_id=None,
                 model=self.config.model,
-                risk_pct=risk_pct,
-                equity_before=equity_before,
+                risk_pct=SHADOW_NOTIONAL_RISK_PCT,
+                equity_before=shadow_equity_before,
                 setup_context={"trend": cd.trend, "risk_pips": trade["risk_pips"]},
-                is_shadow=is_shadow,
-                real_outcome=real_outcome,
+                is_shadow=True,
+                real_outcome=None,
             )
             db.commit()
             log.info(
-                "%s: trade journaled -- %s %s, outcome=%s, entry=%.5f exit=%.5f, "
-                "is_shadow=%s, real_outcome=%s",
+                "%s: shadow trade journaled -- %s %s, outcome=%s, entry=%.5f exit=%.5f",
                 cd.date, trade["direction"], self.config.model, trade["outcome"],
-                trade["entry"], trade["exit_price"], is_shadow, real_outcome is not None,
+                trade["entry"], trade["exit_price"],
             )
 
             # Logging/audit review, part 3: persist the trade<->event link
             # this function already computed above (fill_event/close_event)
             # -- see persistence.link_events_to_trade()'s docstring. Guarded
-            # on non-empty so row.trade_id is only ever touched when there's
-            # actually something to link (row is a plain None in a couple of
-            # existing tests that stub out write_trade() entirely).
+            # on non-empty so shadow_row.trade_id is only ever touched when
+            # there's actually something to link (row is a plain None in a
+            # couple of existing tests that stub out write_trade() entirely).
             linked_event_ids = [
                 ev["_event_id"] for ev in (fill_event, close_event)
                 if ev is not None and ev.get("_event_id") is not None
             ]
             if linked_event_ids:
-                link_events_to_trade(db, linked_event_ids, row.trade_id)
+                link_events_to_trade(db, linked_event_ids, shadow_row.trade_id)
                 db.commit()
 
-            # Phase 4 overnight-position handling: if a real order filled
-            # but hadn't ALREADY closed by the time this trade row was
-            # written (i.e. real_status == 'open', not 'closed'), hand
-            # off ongoing tracking to PositionTracker -- OrderManager
-            # and its CurrentDay are about to be discarded at the next
-            # bar's day rollover, but this position may still be open
-            # for days. If it already closed same-day (real_status ==
-            # 'closed'), there's nothing to hand off -- write_trade()
-            # already recorded the final outcome directly.
-            if real_outcome is not None and real_outcome["close_price"] is None and self.position_tracker is not None:
-                self.position_tracker.register_new_position(
-                    real_outcome["position_ticket"], row.trade_id, entry_bar["time_ny"]
-                )
+            for user_id, om in cd.order_managers.items():
+                try:
+                    real_outcome = om.get_real_outcome()
+                    if real_outcome is None:
+                        continue
+
+                    sub_equity_before = get_current_equity(
+                        db, user_id, self.config.model, bridge_starting_equity=None,
+                    )
+                    if sub_equity_before is None:  # no prior trade -- seed from THEIR real account
+                        acct = om.bridge.account_info()
+                        sub_equity_before = acct["balance"]
+
+                    sub_row = write_trade(
+                        db, trade,
+                        entry_time_utc=entry_bar["time_utc"],
+                        entry_time_ny=entry_bar["time_ny"],
+                        exit_time_utc=exit_bar["time_utc"],
+                        user_id=user_id,
+                        model=self.config.model,
+                        risk_pct=om.model_config["risk_pct"],
+                        equity_before=sub_equity_before,
+                        setup_context={"trend": cd.trend, "risk_pips": trade["risk_pips"]},
+                        is_shadow=False,
+                        real_outcome=real_outcome,
+                    )
+                    db.commit()
+                    log.info(
+                        "%s: real-outcome trade journaled for user_id=%s -- real_outcome=%s",
+                        cd.date, user_id, real_outcome,
+                    )
+
+                    # Phase 4 overnight-position handling: if a real order
+                    # filled but hadn't ALREADY closed by the time this
+                    # trade row was written (real_status == 'open', not
+                    # 'closed'), hand off ongoing tracking to THIS
+                    # subscriber's own PositionTracker -- OrderManager and
+                    # its CurrentDay are about to be discarded at the next
+                    # bar's day rollover, but this position may still be
+                    # open for days.
+                    if real_outcome["close_price"] is None and user_id in self.position_trackers:
+                        self.position_trackers[user_id].register_new_position(
+                            real_outcome["position_ticket"], sub_row.trade_id, entry_bar["time_ny"],
+                        )
+                except Exception:
+                    log.exception(
+                        "Writing the real-outcome trade failed for user_id=%s -- "
+                        "continuing to the next subscriber", user_id,
+                    )
         finally:
             db.close()

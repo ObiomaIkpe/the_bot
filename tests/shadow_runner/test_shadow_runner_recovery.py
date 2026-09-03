@@ -23,6 +23,12 @@ class RecoveryFakeQuery:
         self._conditions.extend(conditions)
         return self
 
+    def join(self, *a, **k):
+        # Multi-user fan-out, piece 2: get_active_subscribers()'s
+        # multi-table join -- see RecoveryFakeDB.query() below for why
+        # this always resolves to an empty subscriber list here.
+        return self
+
     def order_by(self, *a, **k):
         return self  # still not real ordering -- tests pre-sort fixtures
                       # where order actually matters
@@ -54,7 +60,14 @@ class RecoveryFakeDB:
         self.model_config_rows = model_config_rows or []  # empty by default -- see get_model_config() call sites
         self.added = []
 
-    def query(self, model_cls):
+    def query(self, *model_classes):
+        # Multi-user fan-out, piece 2: get_active_subscribers() queries
+        # db.query(ModelConfig, BrokerCredential) -- two classes at once.
+        # None of these recovery tests seed a subscriber, so "no
+        # subscribers" is always the correct, intended answer here.
+        if len(model_classes) > 1:
+            return RecoveryFakeQuery(all_result=[])
+        model_cls = model_classes[0]
         if model_cls is Event:
             return RecoveryFakeQuery(all_result=self.event_rows)
         if model_cls is ModelConfig:
