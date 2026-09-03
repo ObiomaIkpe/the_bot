@@ -61,6 +61,47 @@ def test_unrecognized_event_type_defaults_to_shadow_the_safe_direction():
     assert db.added[0].is_shadow is True
 
 
+def test_narrative_events_get_user_id_nulled_regardless_of_caller():
+    """Multi-user fan-out, piece 1.5 (MULTI_USER_FANOUT_PLAN.md section
+    5): write_event() overrides user_id to None for any
+    NARRATIVE_EVENT_TYPES row, even though the caller (runner.py's
+    _write_events_now()) always passes a real one -- same "decided from
+    event_type alone, no per-call-site changes needed" shape as
+    is_shadow above."""
+    db = RecordingFakeDB()
+    for event_type in [
+        "raid_detected", "mss_confirmed", "fvg_found", "fvg_rejected_min_stop",
+        "order_filled", "trade_closed", "trade_candidate_ready",
+        "daily_swing_high_confirmed", "daily_swing_low_confirmed",
+        "intraday_swing_high_confirmed", "intraday_swing_low_confirmed",
+        "day_trend_determined", "day_skipped_no_trend", "fomc_calendar_stale_warning",
+        "trend_history_bootstrapped",
+    ]:
+        write_event(db, {"event_type": event_type, "timestamp": "t"}, "a-real-user-id", "fvg")
+
+    assert all(row.user_id is None for row in db.added), (
+        f"expected every narrative event's user_id to be nulled, got: "
+        f"{[(r.event_type, r.user_id) for r in db.added]}"
+    )
+
+
+def test_real_action_events_keep_the_real_user_id():
+    """The other half of the same override -- a real-action event must
+    NEVER get its user_id silently nulled, or a subscriber's own fill/
+    close/safety-check history would become unattributable."""
+    db = RecordingFakeDB()
+    for event_type in [
+        "pending_order_placed", "candidate_filled", "real_trade_closed",
+        "safety_check_failed", "duplicate_fill_closed", "orphan_position_recovered",
+    ]:
+        write_event(db, {"event_type": event_type, "timestamp": "t"}, "a-real-user-id", "fvg")
+
+    assert all(row.user_id == "a-real-user-id" for row in db.added), (
+        f"expected every real-action event to keep its real user_id, got: "
+        f"{[(r.event_type, r.user_id) for r in db.added]}"
+    )
+
+
 def test_write_event_still_correctly_splits_details_regardless_of_is_shadow():
     """Confirm the is_shadow fix didn't disturb the existing, already-
     correct event_type/timestamp/details splitting behavior."""

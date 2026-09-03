@@ -464,16 +464,16 @@ class ShadowRunner:
         db = self.session_factory()
         try:
             already_bootstrapped = event_type_exists(
-                db, self.config.user_id, self.config.model, "trend_history_bootstrapped"
+                db, self.config.model, "trend_history_bootstrapped"
             )
             if already_bootstrapped:
                 log.info("Bootstrap: already done previously, skipping")
                 return
 
             has_real_swing_history = event_type_exists(
-                db, self.config.user_id, self.config.model, "daily_swing_high_confirmed"
+                db, self.config.model, "daily_swing_high_confirmed"
             ) or event_type_exists(
-                db, self.config.user_id, self.config.model, "daily_swing_low_confirmed"
+                db, self.config.model, "daily_swing_low_confirmed"
             )
         finally:
             db.close()
@@ -562,7 +562,7 @@ class ShadowRunner:
 
         db = self.session_factory()
         try:
-            highs, lows = get_recent_swing_history(db, self.config.user_id, self.config.model)
+            highs, lows = get_recent_swing_history(db, self.config.model)
         finally:
             db.close()
         self.gate.seed_trend_history(highs, lows)
@@ -581,7 +581,7 @@ class ShadowRunner:
         # unchanged -- this only concerns days strictly before today.
         db = self.session_factory()
         try:
-            last_overall_ts = get_last_event_timestamp(db, self.config.user_id, self.config.model)
+            last_overall_ts = get_last_event_timestamp(db, self.config.model)
         finally:
             db.close()
         if last_overall_ts is not None and last_overall_ts.date() < today:
@@ -589,7 +589,7 @@ class ShadowRunner:
 
         db = self.session_factory()
         try:
-            last_ts = get_last_event_timestamp_for_date(db, self.config.user_id, self.config.model, today)
+            last_ts = get_last_event_timestamp_for_date(db, self.config.model, today)
         finally:
             db.close()
 

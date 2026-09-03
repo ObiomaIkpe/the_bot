@@ -31,6 +31,23 @@ def test_list_events_returns_only_current_users_events(client, db_session):
     assert body[0]["event_type"] == "raid_detected"
 
 
+def test_list_events_includes_shared_narrative_events_from_any_user(client, db_session):
+    """Multi-user fan-out, piece 1.5: a shared narrative event
+    (user_id=NULL -- see app.models.event.NARRATIVE_EVENT_TYPES) isn't
+    anyone's private data, so it shows up for ANY authenticated user,
+    not just whoever's account happens to be running detection."""
+    token = _register_and_login(client, "narr_a@example.com")
+
+    db_session.add(Event(user_id=None, model="fvg", event_type="raid_detected", details={}))
+    db_session.commit()
+
+    resp = client.get("/events", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["event_type"] == "raid_detected"
+
+
 def test_list_events_requires_auth(client):
     resp = client.get("/events")
     assert resp.status_code == 401

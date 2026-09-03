@@ -84,7 +84,9 @@ def test_already_bootstrapped_marker_prevents_any_reinjection():
     config = make_config()
     marker_event = Event(
         event_type="trend_history_bootstrapped", timestamp=datetime.datetime.now(),
-        details={}, user_id="test-user-id", model="fvg",
+        # Multi-user fan-out, piece 1.5: narrative events are shared/
+        # ownerless -- user_id=None.
+        details={}, user_id=None, model="fvg",
     )
     db = TrackingFakeDB(event_rows=[marker_event])
     bridge = FakeBridgeWithHistory(candles=[])  # should never be called
@@ -102,7 +104,7 @@ def test_preexisting_real_swing_history_marks_done_without_injecting():
         event_type="daily_swing_high_confirmed",
         timestamp=datetime.datetime.now(),
         details={"price": 1.1234},
-        user_id="test-user-id", model="fvg",
+        user_id=None, model="fvg",
     )
     db = TrackingFakeDB(event_rows=[real_swing_event])  # no marker yet, but real data exists
     bridge = FakeBridgeWithHistory(candles=[])  # should never be called -- no injection should happen

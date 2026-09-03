@@ -57,6 +57,25 @@ def test_admin_events_shows_rows_from_multiple_users(client, db_session):
     assert emails == {"admin_evt_a@example.com", "admin_evt_b@example.com"}
 
 
+def test_admin_events_includes_ownerless_shared_narrative_rows(client, db_session):
+    """Multi-user fan-out, piece 1.5: /admin/events must use an OUTER
+    join -- an inner join would silently drop every narrative row
+    (Event.user_id IS NULL) since there's no User to join to. Narrative
+    rows show user_email=None, not a crash or a dropped row."""
+    token = _register_and_login(client, "admin_evt_narr@example.com")
+    _promote(db_session, "admin_evt_narr@example.com")
+
+    db_session.add(Event(user_id=None, model="fvg", event_type="raid_detected", details={}))
+    db_session.commit()
+
+    resp = client.get("/admin/events", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["event_type"] == "raid_detected"
+    assert body[0]["user_email"] is None
+
+
 def test_admin_safety_checks_filters_to_safety_check_failed_only(client, db_session):
     token = _register_and_login(client, "admin_safety@example.com")
     user = db_session.query(User).filter(User.email == "admin_safety@example.com").first()
@@ -143,6 +162,47 @@ def test_admin_trade_event_chain_matches_fill_and_close(client, db_session):
     assert matched_fill["event_type"] == "order_filled"
     matched_close = next(e for e in body["day_events"] if e["event_id"] == body["matched_close_event_id"])
     assert matched_close["event_type"] == "trade_closed"
+
+
+def test_admin_trade_event_chain_attributes_narrative_and_personal_rows_correctly(client, db_session):
+    """Multi-user fan-out, piece 1.5: day_events now mixes a shared,
+    ownerless narrative row in with the trade owner's own real-action
+    events -- each row must be attributed correctly per-event, not
+    blanket-labeled with the trade owner's email (that would falsely
+    imply they personally caused the shared narrative event too)."""
+    token = _register_and_login(client, "admin_chain_narr@example.com")
+    user = db_session.query(User).filter(User.email == "admin_chain_narr@example.com").first()
+    _promote(db_session, "admin_chain_narr@example.com")
+
+    entry_time = datetime.datetime(2026, 8, 1, 10, 0, 0)
+    trade = Trade(
+        user_id=user.user_id, model="fvg", is_shadow=True, direction="long",
+        entry_price=1.1, stop_price=1.0, target_price=1.3, exit_price=1.3, outcome="win",
+        entry_time_utc=entry_time, entry_time_ny=entry_time, risk_pct_used=0.01, equity_before=1000.0,
+    )
+    db_session.add(trade)
+    db_session.commit()
+    db_session.refresh(trade)
+
+    narrative_event = Event(
+        user_id=None, model="fvg", event_type="raid_detected",
+        timestamp=entry_time - datetime.timedelta(minutes=30), details={},
+    )
+    personal_event = Event(
+        user_id=user.user_id, model="fvg", event_type="real_trade_closed",
+        timestamp=entry_time + datetime.timedelta(hours=2), details={},
+    )
+    db_session.add_all([narrative_event, personal_event])
+    db_session.commit()
+
+    resp = client.get(f"/admin/trades/{trade.trade_id}/event-chain", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body["day_events"]) == 2
+    narrative_row = next(e for e in body["day_events"] if e["event_type"] == "raid_detected")
+    personal_row = next(e for e in body["day_events"] if e["event_type"] == "real_trade_closed")
+    assert narrative_row["user_email"] is None
+    assert personal_row["user_email"] == "admin_chain_narr@example.com"
 
 
 def test_admin_trade_event_chain_prefers_real_trade_id_over_heuristic(client, db_session):

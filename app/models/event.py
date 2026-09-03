@@ -172,6 +172,54 @@ REAL_ACTION_EVENT_TYPES = frozenset(
     }
 )
 
+# Multi-user fan-out, piece 1.5 (MULTI_USER_FANOUT_PLAN.md, section 5).
+# Every event type actually emitted by the SHARED detection pipeline
+# (DayOrchestrator/TradeAttempt/DaySelectionGate -- raid -> MSS -> FVG ->
+# candidate -> simulated fill/close, plus the gate's day-level and
+# trend-history bookkeeping) rather than by anything that acts on one
+# specific real account. Deliberately built as an explicit allowlist,
+# not "is_shadow and not written by the admin API" -- an is_shadow
+# event can still genuinely belong to one person (model_config_updated,
+# account_settings_updated are is_shadow=True but written directly by
+# app/routers/settings.py and model_configs.py, never through
+# write_event(), and must never lose their real owner).
+#
+# Cross-checked against every actual emission site (grep across
+# shadow_runner/*.py and phase1/streaming/*.py), not just the VALID_EVENT_TYPES
+# comments above -- those are stale in at least one place: "order_filled"
+# is commented "not yet actually emitted by anything as of Phase 3" but
+# is very much real (phase1/streaming/trade_attempt.py's simulated fill,
+# load-bearing for both runner.py's _write_trade() and
+# app/core/trade_story.py's build_trade_chain()).
+#
+# write_event() (shadow_runner/persistence.py) uses this to force
+# user_id=NULL on these specific rows regardless of the user_id the
+# caller passed in -- same "decided from event_type alone, no per-call-site
+# changes needed" shape as REAL_ACTION_EVENT_TYPES/is_shadow above.
+NARRATIVE_EVENT_TYPES = frozenset(
+    {
+        "raid_detected",
+        "mss_confirmed",
+        "fvg_found",
+        "fvg_rejected_min_stop",
+        "order_filled",  # TradeAttempt's SIMULATED fill -- distinct from
+                          # OrderManager's real "candidate_filled"
+        "trade_closed",
+        "trade_candidate_ready",
+        "daily_swing_high_confirmed",
+        "daily_swing_low_confirmed",
+        "intraday_swing_high_confirmed",
+        "intraday_swing_low_confirmed",
+        "day_trend_determined",
+        "day_skipped_fomc",
+        "day_skipped_no_trend",
+        "day_skipped_insufficient_bars",
+        "day_skipped_no_session_start",
+        "fomc_calendar_stale_warning",
+        "trend_history_bootstrapped",
+    }
+)
+
 
 class Event(Base):
     """
@@ -183,7 +231,11 @@ class Event(Base):
     __tablename__ = "events"
 
     event_id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=False, index=True)
+    # Nullable since migration 0020 (multi-user fan-out, piece 1.5) --
+    # NULL means a shared, ownerless narrative row (see
+    # NARRATIVE_EVENT_TYPES above), not a missing/broken reference. Every
+    # other event type keeps a real user_id, same as always.
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
     # FK to models.model_name (migration 0018) -- previously a hardcoded
     # CHECK constraint (ck_events_model_valid, 'fvg'/'ob'/'fvg_ob' only);
     # see app/models/model.py's module docstring for why.

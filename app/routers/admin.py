@@ -12,6 +12,7 @@ import datetime
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -45,8 +46,13 @@ def list_all_events(
     db: Session = Depends(get_db),
 ):
     """Same shape as GET /events, minus the user_id scoping -- see that
-    router for the single-user equivalent."""
-    q = db.query(Event, User).join(User, Event.user_id == User.user_id)
+    router for the single-user equivalent.
+
+    Multi-user fan-out, piece 1.5: outer join, not inner -- a shared
+    narrative row (Event.user_id IS NULL) has no User to join to, and an
+    inner join would silently drop every one of those rows from this
+    feed. AdminEventOut.from_model() already handles user=None."""
+    q = db.query(Event, User).outerjoin(User, Event.user_id == User.user_id)
     if model:
         q = q.filter(Event.model == model)
     if since:
@@ -124,6 +130,12 @@ def get_trade_event_chain(
 
     No ownership check beyond existing -- an admin can look up any
     trade's chain regardless of which user it belongs to.
+
+    Multi-user fan-out, piece 1.5: `matched_fill`/`matched_close` below
+    look for "order_filled"/"trade_closed" -- both NARRATIVE_EVENT_TYPES
+    (shared, user_id IS NULL) -- so day_events must include those
+    alongside this trade's own real-action events, same or_() pattern as
+    app/core/trade_story.py's _same_day_events().
     """
     trade = db.query(Trade).filter(Trade.trade_id == trade_id).first()
     if trade is None:
@@ -137,7 +149,7 @@ def get_trade_event_chain(
     day_events = (
         db.query(Event)
         .filter(
-            Event.user_id == trade.user_id,
+            or_(Event.user_id == trade.user_id, Event.user_id.is_(None)),
             Event.model == trade.model,
             Event.timestamp >= day_start,
             Event.timestamp < day_end,
@@ -173,8 +185,16 @@ def get_trade_event_chain(
             None,
         )
 
+    # Multi-user fan-out, piece 1.5: day_events now also contains shared
+    # narrative rows (e.user_id IS NULL) alongside this trade's own
+    # real-action events -- pass `user` per-event, not blanket for the
+    # whole list, or a narrative event would get misattributed to the
+    # trade's owner in the admin UI.
     return AdminEventChainOut(
-        day_events=[AdminEventOut.from_model(e, user) for e in day_events],
+        day_events=[
+            AdminEventOut.from_model(e, user if e.user_id == trade.user_id else None)
+            for e in day_events
+        ],
         matched_fill_event_id=matched_fill.event_id if matched_fill else None,
         matched_close_event_id=matched_close.event_id if matched_close else None,
     )

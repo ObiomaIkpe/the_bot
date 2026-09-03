@@ -22,7 +22,12 @@ from app.models.user import User
 
 class AdminEventOut(BaseModel):
     event_id: uuid.UUID
-    user_email: str
+    # Multi-user fan-out, piece 1.5: None for a shared, ownerless
+    # narrative row (event.user_id IS NULL -- see
+    # app.models.event.NARRATIVE_EVENT_TYPES) -- there's no User row to
+    # join for those. Real-action events (a specific account's fill,
+    # close, safety-check-failed, etc.) always still carry a real email.
+    user_email: str | None
     model: str
     event_type: str
     timestamp: datetime.datetime
@@ -34,10 +39,10 @@ class AdminEventOut(BaseModel):
     narrative: str = ""
 
     @classmethod
-    def from_model(cls, event: Event, user: User) -> "AdminEventOut":
+    def from_model(cls, event: Event, user: User | None) -> "AdminEventOut":
         return cls(
             event_id=event.event_id,
-            user_email=user.email,
+            user_email=user.email if user is not None else None,
             model=event.model,
             event_type=event.event_type,
             timestamp=event.timestamp,

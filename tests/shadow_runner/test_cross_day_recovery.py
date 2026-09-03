@@ -42,24 +42,22 @@ def _make_user(db_session, email):
 
 
 def test_get_last_event_timestamp_returns_none_when_nothing_journaled(db_session):
-    user = _make_user(db_session, "gap_a@example.com")
-    assert get_last_event_timestamp(db_session, str(user.user_id), "fvg") is None
+    assert get_last_event_timestamp(db_session, "fvg") is None
 
 
 def test_get_last_event_timestamp_finds_the_most_recent_across_days(db_session):
-    user = _make_user(db_session, "gap_b@example.com")
     older = Event(
         event_type="raid_detected", timestamp=datetime.datetime(2026, 8, 27, 9, 0),
-        details={}, user_id=user.user_id, model="fvg",
+        details={}, user_id=None, model="fvg",
     )
     newer = Event(
         event_type="mss_confirmed", timestamp=datetime.datetime(2026, 8, 28, 12, 21, 43),
-        details={}, user_id=user.user_id, model="fvg",
+        details={}, user_id=None, model="fvg",
     )
     db_session.add_all([older, newer])
     db_session.commit()
 
-    result = get_last_event_timestamp(db_session, str(user.user_id), "fvg")
+    result = get_last_event_timestamp(db_session, "fvg")
     assert result == newer.timestamp
 
 
@@ -68,32 +66,39 @@ def test_get_last_event_timestamp_excludes_bootstrap_marker(db_session):
     reasoning -- the bootstrap marker is bookkeeping, not real trading
     activity, and would otherwise mask a real gap sitting right behind
     it."""
-    user = _make_user(db_session, "gap_c@example.com")
     real_event = Event(
         event_type="raid_detected", timestamp=datetime.datetime(2026, 8, 20, 9, 0),
-        details={}, user_id=user.user_id, model="fvg",
+        details={}, user_id=None, model="fvg",
     )
     marker = Event(
         event_type="trend_history_bootstrapped", timestamp=datetime.datetime(2026, 8, 29, 8, 0),
-        details={}, user_id=user.user_id, model="fvg",
+        details={}, user_id=None, model="fvg",
     )
     db_session.add_all([real_event, marker])
     db_session.commit()
 
-    result = get_last_event_timestamp(db_session, str(user.user_id), "fvg")
+    result = get_last_event_timestamp(db_session, "fvg")
     assert result == real_event.timestamp, "the marker (even though newer) must not count as real activity"
 
 
-def test_get_last_event_timestamp_scoped_to_user_and_model(db_session):
-    user_a = _make_user(db_session, "gap_d1@example.com")
-    user_b = _make_user(db_session, "gap_d2@example.com")
-    e_a = Event(event_type="raid_detected", timestamp=datetime.datetime(2026, 8, 20, 9, 0), details={}, user_id=user_a.user_id, model="fvg")
-    e_b = Event(event_type="raid_detected", timestamp=datetime.datetime(2026, 8, 25, 9, 0), details={}, user_id=user_b.user_id, model="fvg")
-    db_session.add_all([e_a, e_b])
+def test_get_last_event_timestamp_scoped_to_model(db_session):
+    """Multi-user fan-out, piece 1.5: get_last_event_timestamp() dropped
+    its user_id parameter entirely -- narrative events are shared,
+    model-level state now (MULTI_USER_FANOUT_PLAN.md section 5), not
+    personal to any one subscriber; there's no longer a "which user's
+    raid_detected" question to ask, since a given model+timestamp has
+    exactly one shared raid_detected, not one per subscriber. What still
+    needs proving is that it's scoped to the right MODEL -- a different
+    model's narrative must never leak into this one's gap check."""
+    e_fvg = Event(
+        event_type="raid_detected", timestamp=datetime.datetime(2026, 8, 20, 9, 0),
+        details={}, user_id=None, model="fvg",
+    )
+    db_session.add(e_fvg)
     db_session.commit()
 
-    assert get_last_event_timestamp(db_session, str(user_a.user_id), "fvg") == e_a.timestamp
-    assert get_last_event_timestamp(db_session, str(user_b.user_id), "fvg") == e_b.timestamp
+    assert get_last_event_timestamp(db_session, "fvg") == e_fvg.timestamp
+    assert get_last_event_timestamp(db_session, "some_other_model_no_events_for") is None
 
 
 # ---------- piece 2A: check_for_orphaned_positions() / _heal_orphan() ----------

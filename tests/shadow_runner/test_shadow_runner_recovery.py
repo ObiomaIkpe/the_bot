@@ -82,14 +82,17 @@ def test_get_recent_swing_history_returns_last_two_oldest_first():
         make_swing_event("daily_swing_high_confirmed", 1.20, datetime.datetime(2026, 7, 20)),  # most recent
     ]
     for e in highs:
-        e.user_id, e.model = "test-user-id", "fvg"
+        # Multi-user fan-out, piece 1.5: narrative events (swing
+        # confirmations included) are shared/ownerless now -- user_id=None,
+        # matching what write_event() actually produces for these.
+        e.user_id, e.model = None, "fvg"
     # RecoveryFakeQuery's order_by() isn't real ordering (see its own
     # docstring) -- hand it pre-sorted newest-first, matching what a
     # real DB's .order_by(desc()).limit(2) would already return, so
     # .limit(2) picks the right 2 regardless.
     db = RecoveryFakeDB(event_rows=sorted(highs, key=lambda e: e.timestamp, reverse=True))
 
-    confirmed_highs, confirmed_lows = persistence.get_recent_swing_history(db, "test-user-id", "fvg")
+    confirmed_highs, confirmed_lows = persistence.get_recent_swing_history(db, "fvg")
     prices = [p for _, p in confirmed_highs]
     assert prices == [1.15, 1.20], "should be oldest-first, last 2 only"
     assert confirmed_lows == []  # no daily_swing_low_confirmed events in this fixture
@@ -182,8 +185,9 @@ def test_recovery_skips_replay_when_events_already_exist_today():
         event_type="raid_detected",
         timestamp=datetime.datetime.combine(today, datetime.time(8, 0)),
         details={"price": 1.10},
-        user_id="test-user-id", model="fvg",  # must match query filters now that
-                                                # the fake DB does real filtering
+        # Multi-user fan-out, piece 1.5: user_id=None -- raid_detected is
+        # a shared narrative event, always written ownerless now.
+        user_id=None, model="fvg",
     )
     config = make_config()
     db = RecoveryFakeDB(event_rows=[existing_event])

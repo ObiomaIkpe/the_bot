@@ -1,6 +1,7 @@
 import datetime
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -20,7 +21,12 @@ def list_events(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    q = db.query(Event).filter(Event.user_id == current_user.user_id)
+    # Multi-user fan-out, piece 1.5: a shared, ownerless narrative row
+    # (user_id IS NULL -- see app.models.event.NARRATIVE_EVENT_TYPES)
+    # isn't anyone's private data, so it's included alongside this
+    # user's own personal/real-action events -- no ownership check
+    # needed for it, unlike a real ownership boundary would require.
+    q = db.query(Event).filter(or_(Event.user_id == current_user.user_id, Event.user_id.is_(None)))
     if model:
         q = q.filter(Event.model == model)
     if since:

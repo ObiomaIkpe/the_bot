@@ -15,6 +15,7 @@ state) matters more than shaving one query here.
 import dataclasses
 import datetime
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.event import Event
@@ -40,13 +41,23 @@ class TradeChainResult:
 
 
 def _same_day_events(db: Session, trade: Trade) -> list[Event]:
+    """
+    Multi-user fan-out, piece 1.5: the raid/MSS/FVG/candidate/simulated-
+    fill-and-close chain this walks is all NARRATIVE_EVENT_TYPES now --
+    shared, ownerless (user_id IS NULL), not this trade's owner's
+    personal events. Includes both: this trade's own real-action events
+    (user_id == trade.user_id, e.g. a real fill/close if one happened)
+    AND the shared narrative for that model/day, so the chain-walking
+    below still finds everything it did before this trade's owner had
+    to "own" the whole day's story.
+    """
     day = trade.entry_time_ny.date()
     day_start = datetime.datetime.combine(day, datetime.time.min)
     day_end = day_start + datetime.timedelta(days=1)
     return (
         db.query(Event)
         .filter(
-            Event.user_id == trade.user_id,
+            or_(Event.user_id == trade.user_id, Event.user_id.is_(None)),
             Event.model == trade.model,
             Event.timestamp >= day_start,
             Event.timestamp < day_end,

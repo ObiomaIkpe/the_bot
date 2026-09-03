@@ -9,12 +9,15 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.models import BrokerCredential, Event, ModelConfig, REAL_ACTION_EVENT_TYPES, Trade, User, UserSettings
+from app.models import (
+    BrokerCredential, Event, ModelConfig, NARRATIVE_EVENT_TYPES, REAL_ACTION_EVENT_TYPES,
+    Trade, User, UserSettings,
+)
 
 log = logging.getLogger("shadow_runner.persistence")
 
 
-def event_type_exists(db: Session, user_id: str, model: str, event_type: str) -> bool:
+def event_type_exists(db: Session, model: str, event_type: str) -> bool:
     """
     Phase 3 step 7 (cold-start trend bootstrap). Cheap existence check --
     used both to detect the one-time bootstrap marker
@@ -22,26 +25,40 @@ def event_type_exists(db: Session, user_id: str, model: str, event_type: str) ->
     pre-existing REAL daily_swing_*_confirmed events (guards against
     re-bootstrapping a system that's already been running for real --
     see runner.py's _bootstrap_trend_history_if_needed()).
+
+    Multi-user fan-out, piece 1.5: dropped the `user_id` parameter --
+    every event_type this is ever called with is a NARRATIVE_EVENT_TYPES
+    member (bootstrap marker, swing confirmations), always written with
+    user_id=NULL by write_event() -- this is a model-level check, not a
+    per-user one, same as detection itself. Filters user_id IS NULL
+    explicitly rather than ignoring an unused parameter, so a future
+    caller can't accidentally pass a REAL_ACTION_EVENT_TYPES type here
+    and silently get a wrong (always-empty) answer.
     """
     row = (
         db.query(Event)
-        .filter(Event.user_id == user_id, Event.model == model, Event.event_type == event_type)
+        .filter(Event.user_id.is_(None), Event.model == model, Event.event_type == event_type)
         .first()
     )
     return row is not None
 
 
-def get_recent_swing_history(db: Session, user_id: str, model: str) -> tuple[list, list]:
+def get_recent_swing_history(db: Session, model: str) -> tuple[list, list]:
     """
     Phase 3 step 6 (restart recovery). Returns (confirmed_highs,
     confirmed_lows) -- each a list of up to 2 (day_index, price) tuples,
     oldest first, matching DaySelectionGate._confirmed_highs/_lows'
     exact shape -- reconstructed from the last 2 daily_swing_high_confirmed
     and last 2 daily_swing_low_confirmed events already in the database
-    for this (user, model). day_index is synthesized as a simple
-    increasing placeholder (0, 1) since only relative order and price
-    matter to DaySelectionGate.seed_trend_history() -- see that method's
-    docstring for why the real historical day_index values aren't needed.
+    for this model. day_index is synthesized as a simple increasing
+    placeholder (0, 1) since only relative order and price matter to
+    DaySelectionGate.seed_trend_history() -- see that method's docstring
+    for why the real historical day_index values aren't needed.
+
+    Multi-user fan-out, piece 1.5: dropped `user_id` -- swing detection is
+    shared detection state (NARRATIVE_EVENT_TYPES, user_id=NULL), not
+    personal to any one subscriber. See event_type_exists()'s docstring
+    for the same reasoning.
 
     Returns ([], []) if fewer than 2 of either type exist yet (e.g. a
     brand-new deployment with no history at all) -- the gate will
@@ -51,7 +68,7 @@ def get_recent_swing_history(db: Session, user_id: str, model: str) -> tuple[lis
     highs = (
         db.query(Event)
         .filter(
-            Event.user_id == user_id,
+            Event.user_id.is_(None),
             Event.model == model,
             Event.event_type == "daily_swing_high_confirmed",
         )
@@ -62,7 +79,7 @@ def get_recent_swing_history(db: Session, user_id: str, model: str) -> tuple[lis
     lows = (
         db.query(Event)
         .filter(
-            Event.user_id == user_id,
+            Event.user_id.is_(None),
             Event.model == model,
             Event.event_type == "daily_swing_low_confirmed",
         )
@@ -79,17 +96,25 @@ def get_recent_swing_history(db: Session, user_id: str, model: str) -> tuple[lis
     return confirmed_highs, confirmed_lows
 
 
-def get_last_event_timestamp_for_date(db: Session, user_id: str, model: str, date) -> object | None:
+def get_last_event_timestamp_for_date(db: Session, model: str, date) -> object | None:
     """
-    Phase 3 step 6 (restart recovery). Returns the latest event
-    timestamp already journaled for this (user, model) on the given NY
-    calendar date, or None if nothing has been journaled for that date
-    yet. Used to decide whether it's safe to replay today's bars
-    (nothing written yet -> safe, no duplicate risk) or whether a
-    restart happened mid-day after partial progress was already
-    committed (unsafe to replay -- would duplicate everything before the
-    crash point; see runner.py's recover_on_startup() for how this
-    result gets used).
+    Phase 3 step 6 (restart recovery). Returns the latest NARRATIVE event
+    timestamp already journaled for this model on the given NY calendar
+    date, or None if nothing has been journaled for that date yet. Used
+    to decide whether it's safe to replay today's bars (nothing written
+    yet -> safe, no duplicate risk) or whether a restart happened mid-day
+    after partial progress was already committed (unsafe to replay --
+    would duplicate everything before the crash point; see runner.py's
+    recover_on_startup() for how this result gets used).
+
+    Multi-user fan-out, piece 1.5: dropped `user_id`, scoped to
+    NARRATIVE_EVENT_TYPES rows (user_id IS NULL) only -- this is
+    genuinely more correct than the old (user, model)-scoped version, not
+    just a compatibility shim: replaying bars only re-runs
+    DayOrchestrator/DaySelectionGate (shared detection), never any
+    subscriber's real order management, so "is it safe to replay" was
+    always really a question about detection's own journal, not any one
+    person's.
 
     NOTE: filters in Python on date, not via a DB-side date range query
     -- acceptable for now since one day's event volume is small (at most
@@ -98,7 +123,7 @@ def get_last_event_timestamp_for_date(db: Session, user_id: str, model: str, dat
     """
     todays_events = (
         db.query(Event)
-        .filter(Event.user_id == user_id, Event.model == model)
+        .filter(Event.user_id.is_(None), Event.model == model)
         .order_by(Event.timestamp.desc())
         .limit(500)  # generous cap -- see NOTE above
         .all()
@@ -120,14 +145,14 @@ def get_last_event_timestamp_for_date(db: Session, user_id: str, model: str, dat
     return None
 
 
-def get_last_event_timestamp(db: Session, user_id: str, model: str) -> object | None:
+def get_last_event_timestamp(db: Session, model: str) -> object | None:
     """
     Cross-day recovery gap fix (2026-09-02) -- see PENDING_ITEMS.md's
     "Real bugs found 2026-09-02" and PHASE3_VALIDATION.md's correction
     section for the incident this exists to catch.
 
     Same shape as get_last_event_timestamp_for_date() above, but NOT
-    scoped to a single date -- the single most recent real event
+    scoped to a single date -- the single most recent narrative event
     overall, regardless of which day it's from. Used by
     recover_on_startup() to detect a gap bigger than "today, in
     progress": if this timestamp's date is before today, one or more
@@ -135,13 +160,18 @@ def get_last_event_timestamp(db: Session, user_id: str, model: str) -> object | 
     down across a day boundary), not just "nothing journaled yet
     today, still time to catch up."
 
+    Multi-user fan-out, piece 1.5: dropped `user_id`, same reasoning as
+    get_last_event_timestamp_for_date() above -- gap detection is about
+    whether shared DETECTION has a hole in it, not any one subscriber's
+    personal activity.
+
     Same trend_history_bootstrapped exclusion as the per-date version,
     same reasoning -- that marker is bookkeeping, not real trading
     activity, and would otherwise mask a real gap immediately behind it.
     """
     recent_events = (
         db.query(Event)
-        .filter(Event.user_id == user_id, Event.model == model)
+        .filter(Event.user_id.is_(None), Event.model == model)
         .order_by(Event.timestamp.desc())
         .limit(500)  # generous cap -- see get_last_event_timestamp_for_date()'s NOTE
         .all()
@@ -343,15 +373,24 @@ def write_event(db: Session, event: dict, user_id: str, model: str) -> Event:
     wrong once OrderManager started emitting real-action events in
     Phase 4). See REAL_ACTION_EVENT_TYPES's own comment for the full
     reasoning on why this is decidable from event_type alone.
+
+    Multi-user fan-out, piece 1.5: user_id is likewise overridden to
+    NULL for any NARRATIVE_EVENT_TYPES row, regardless of what the
+    caller passed in -- same "decidable from event_type alone, no
+    per-call-site changes needed" shape as is_shadow above. The caller
+    (runner.py's _write_events_now()) still always passes a real
+    user_id; this is what lets every existing call site keep working
+    unchanged while narrative rows become genuinely ownerless.
     """
     event = dict(event)  # don't mutate the caller's dict
     event_type = event.pop("event_type")
     timestamp = event.pop("timestamp")
     is_shadow = event_type not in REAL_ACTION_EVENT_TYPES
+    event_user_id = None if event_type in NARRATIVE_EVENT_TYPES else user_id
 
     row = Event(
         event_id=uuid.uuid4(),
-        user_id=user_id,
+        user_id=event_user_id,
         model=model,
         event_type=event_type,
         timestamp=timestamp,

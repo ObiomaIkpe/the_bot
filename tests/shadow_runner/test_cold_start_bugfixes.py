@@ -28,11 +28,13 @@ def test_bootstrap_marker_excluded_from_todays_activity_check():
         event_type="trend_history_bootstrapped",
         timestamp=datetime.datetime.combine(today, datetime.time(8, 0)),
         details={"days_seeded": 21},
-        user_id="test-user-id", model="fvg",
+        # Multi-user fan-out, piece 1.5: narrative events (the bootstrap
+        # marker included) are shared/ownerless -- user_id=None.
+        user_id=None, model="fvg",
     )
     db = RecoveryFakeDB(event_rows=[marker_only])
 
-    result = get_last_event_timestamp_for_date(db, "test-user-id", "fvg", today)
+    result = get_last_event_timestamp_for_date(db, "fvg", today)
     assert result is None, "bootstrap marker alone should NOT count as today's activity"
 
 
@@ -43,16 +45,16 @@ def test_bootstrap_marker_ignored_but_real_event_same_day_still_detected():
     marker = Event(
         event_type="trend_history_bootstrapped",
         timestamp=datetime.datetime.combine(today, datetime.time(8, 0)),
-        details={}, user_id="test-user-id", model="fvg",
+        details={}, user_id=None, model="fvg",
     )
     real_event = Event(
         event_type="raid_detected",
         timestamp=datetime.datetime.combine(today, datetime.time(9, 0)),
-        details={}, user_id="test-user-id", model="fvg",
+        details={}, user_id=None, model="fvg",
     )
     db = RecoveryFakeDB(event_rows=[real_event, marker])
 
-    result = get_last_event_timestamp_for_date(db, "test-user-id", "fvg", today)
+    result = get_last_event_timestamp_for_date(db, "fvg", today)
     assert result == real_event.timestamp
 
 

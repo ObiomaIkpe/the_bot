@@ -99,6 +99,69 @@ def test_full_chain_resolves_and_excludes_same_day_decoy(client, db_session):
     assert "1.10740" in fill_row["narrative"]
 
 
+def test_chain_resolves_with_genuinely_ownerless_narrative_events(client, db_session):
+    """Multi-user fan-out, piece 1.5: the real, going-forward shape --
+    write_event() now writes raid/mss/fvg/candidate/simulated-fill/close
+    with user_id=NULL (see app.models.event.NARRATIVE_EVENT_TYPES), not
+    the trade owner's own id (that's what the OTHER full-chain test
+    above still uses, since older/pre-migration rows would look like
+    that -- both shapes must keep working)."""
+    token = _register_and_login(client, "chain_null@example.com")
+    user = db_session.query(User).filter(User.email == "chain_null@example.com").first()
+
+    entry_time = datetime.datetime(2026, 8, 1, 10, 0, 0)
+    trade = Trade(
+        user_id=user.user_id, model="fvg", is_shadow=True, direction="long",
+        entry_price=1.10740, stop_price=1.10500, target_price=1.11000, exit_price=1.11000,
+        outcome="win", entry_time_utc=entry_time, entry_time_ny=entry_time,
+        risk_pct_used=0.01, equity_before=1000.0,
+    )
+    db_session.add(trade)
+    db_session.commit()
+    db_session.refresh(trade)
+
+    raid = Event(
+        user_id=None, model="fvg", event_type="raid_detected",
+        timestamp=entry_time - datetime.timedelta(minutes=30),
+        details={"direction": "bull", "raid_level": 1.10500, "raid_bar_low": 1.10480, "bar_index": 12, "mss_reference_level": 1.10700},
+    )
+    mss = Event(
+        user_id=None, model="fvg", event_type="mss_confirmed",
+        timestamp=entry_time - datetime.timedelta(minutes=20),
+        details={"direction": "bull", "level": 1.10700, "close": 1.10720, "raid_bar_index": 12, "mss_bar_index": 20},
+    )
+    fvg = Event(
+        user_id=None, model="fvg", event_type="fvg_found",
+        timestamp=entry_time - datetime.timedelta(minutes=15),
+        details={"direction": "bull", "top": 1.10750, "bottom": 1.10730, "frame_idx": 18, "mss_bar_index": 20},
+    )
+    candidate = Event(
+        user_id=None, model="fvg", event_type="trade_candidate_ready",
+        timestamp=entry_time - datetime.timedelta(minutes=10),
+        details={"direction": "bull", "entry": 1.10740, "stop": 1.10500, "raid_bar": 12, "mss_bar": 20},
+    )
+    fill = Event(
+        user_id=None, model="fvg", event_type="order_filled", timestamp=entry_time,
+        details={"direction": "bull", "entry": 1.10740, "stop": 1.10500, "target": 1.11000, "fill_bar_index": 22},
+        trade_id=trade.trade_id,
+    )
+    close = Event(
+        user_id=None, model="fvg", event_type="trade_closed",
+        timestamp=entry_time + datetime.timedelta(hours=2),
+        details={"direction": "bull", "outcome": "win", "exit_price": 1.11000},
+        trade_id=trade.trade_id,
+    )
+    db_session.add_all([raid, mss, fvg, candidate, fill, close])
+    db_session.commit()
+
+    resp = client.get(f"/trades/{trade.trade_id}/event-chain", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["fully_resolved"] is True
+    event_types = [e["event_type"] for e in body["chain"]]
+    assert event_types == ["raid_detected", "mss_confirmed", "fvg_found", "trade_candidate_ready", "order_filled", "trade_closed"]
+
+
 def test_trade_belonging_to_another_user_404s(client, db_session):
     owner_token = _register_and_login(client, "chain_owner@example.com")
     _register_and_login(client, "chain_other@example.com")
