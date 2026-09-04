@@ -298,3 +298,74 @@ def test_a_db_commit_failure_for_one_subscriber_does_not_cascade_to_the_next(db_
     )
     assert len(failure_events) == 1, "the broken subscriber's write failure must be journaled, not just logged"
     assert failure_events[0].user_id == broken_id
+
+
+def test_a_failure_linking_events_after_the_shadow_row_commits_does_not_duplicate_it_on_retry(db_session, monkeypatch):
+    """A different, more serious variant of the same class of bug --
+    NOT about one subscriber's row, about the always-written SHADOW row
+    itself. Before this fix, write_trade() (shadow row) and
+    link_events_to_trade() were TWO separate commits. If the first
+    commit succeeded but the second one then failed, the exception
+    propagated uncaught out of _write_trade() entirely -- which,
+    upstream in _finalize_day()/_process_bar(), causes THIS SAME DAY to
+    be retried on the very next poll (self.current_day never advances
+    past a day whose finalize raised -- confirmed by reading
+    _process_bar()'s own control flow). A retry then calls write_trade()
+    AGAIN for the shadow row -- but the first one was already
+    successfully committed. Nothing prevents a genuine DUPLICATE shadow
+    row for the same day (no uniqueness constraint on this table).
+    Confirmed empirically before fixing: two _write_trade() calls with
+    a forced link_events_to_trade() failure on the first produced 2
+    shadow rows, not 1. Fixed by consolidating to one commit for both
+    steps, so a failure anywhere in that block rolls back the whole
+    thing and a retry starts from a genuinely clean slate."""
+    config = make_config()
+    runner = ShadowRunner(config, bridge=FakeBridge(), session_factory=lambda: db_session)
+    date = datetime.date(2026, 8, 3)
+    cd, trade = _make_cd_and_trade(date)
+    # order_filled needs a real-looking _event_id for linked_event_ids
+    # to be non-empty -- otherwise link_events_to_trade() is never even
+    # called (see _write_trade()'s own guard), and this test would prove
+    # nothing. The id itself doesn't need to match a real Event row --
+    # link_events_to_trade()'s bulk UPDATE is harmless against an id
+    # that matches nothing.
+    cd.todays_events[0]["_event_id"] = "11111111-1111-1111-1111-111111111111"
+
+    import shadow_runner.runner as runner_module
+    original_link = runner_module.link_events_to_trade
+    calls = {"n": 0}
+
+    def flaky_link(db, event_ids, trade_id):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise Exception("simulated failure linking events")
+        return original_link(db, event_ids, trade_id)
+
+    monkeypatch.setattr(runner_module, "link_events_to_trade", flaky_link)
+
+    # First attempt: fails inside link_events_to_trade() -- must raise
+    # (preserving the existing retry-next-poll behavior), not swallow it.
+    raised = False
+    try:
+        runner._write_trade(cd, trade)
+    except Exception:
+        raised = True
+    assert raised, "the shadow-row write failure must still propagate, so the day gets retried next poll"
+
+    # Second attempt: simulates that retry (same cd, same trade -- exactly
+    # what _finalize_day() would be called with again, since
+    # self.current_day never advanced past this unfinalized day).
+    runner._write_trade(cd, trade)
+
+    rows = db_session.query(Trade).filter(Trade.model == "fvg", Trade.user_id.is_(None)).all()
+    assert len(rows) == 1, f"expected exactly one shadow row after retry, got {len(rows)} -- duplicated"
+
+    failure_events = (
+        db_session.query(Event)
+        .filter(
+            Event.event_type == "safety_check_failed",
+            Event.details["check_name"].astext == "write_shadow_trade_failed",
+        )
+        .all()
+    )
+    assert len(failure_events) == 1, "the first attempt's failure must be journaled, not just logged"

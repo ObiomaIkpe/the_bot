@@ -986,43 +986,104 @@ class ShadowRunner:
 
         db = self.session_factory()
         try:
-            shadow_equity_before = get_current_equity(
-                db, None, self.config.model,
-                bridge_starting_equity=SHADOW_NOTIONAL_STARTING_EQUITY,
-            )
-            shadow_row = write_trade(
-                db, trade,
-                entry_time_utc=entry_bar["time_utc"],
-                entry_time_ny=entry_bar["time_ny"],
-                exit_time_utc=exit_bar["time_utc"],
-                user_id=None,
-                model=self.config.model,
-                risk_pct=SHADOW_NOTIONAL_RISK_PCT,
-                equity_before=shadow_equity_before,
-                setup_context={"trend": cd.trend, "risk_pips": trade["risk_pips"]},
-                is_shadow=True,
-                real_outcome=None,
-            )
-            db.commit()
-            log.info(
-                "%s: shadow trade journaled -- %s %s, outcome=%s, entry=%.5f exit=%.5f",
-                cd.date, trade["direction"], self.config.model, trade["outcome"],
-                trade["entry"], trade["exit_price"],
-            )
+            try:
+                shadow_equity_before = get_current_equity(
+                    db, None, self.config.model,
+                    bridge_starting_equity=SHADOW_NOTIONAL_STARTING_EQUITY,
+                )
+                shadow_row = write_trade(
+                    db, trade,
+                    entry_time_utc=entry_bar["time_utc"],
+                    entry_time_ny=entry_bar["time_ny"],
+                    exit_time_utc=exit_bar["time_utc"],
+                    user_id=None,
+                    model=self.config.model,
+                    risk_pct=SHADOW_NOTIONAL_RISK_PCT,
+                    equity_before=shadow_equity_before,
+                    setup_context={"trend": cd.trend, "risk_pips": trade["risk_pips"]},
+                    is_shadow=True,
+                    real_outcome=None,
+                )
 
-            # Logging/audit review, part 3: persist the trade<->event link
-            # this function already computed above (fill_event/close_event)
-            # -- see persistence.link_events_to_trade()'s docstring. Guarded
-            # on non-empty so shadow_row.trade_id is only ever touched when
-            # there's actually something to link (row is a plain None in a
-            # couple of existing tests that stub out write_trade() entirely).
-            linked_event_ids = [
-                ev["_event_id"] for ev in (fill_event, close_event)
-                if ev is not None and ev.get("_event_id") is not None
-            ]
-            if linked_event_ids:
-                link_events_to_trade(db, linked_event_ids, shadow_row.trade_id)
+                # Logging/audit review, part 3: persist the trade<->event
+                # link this function already computed above
+                # (fill_event/close_event) -- see
+                # persistence.link_events_to_trade()'s docstring. Guarded
+                # on non-empty so shadow_row.trade_id is only ever
+                # touched when there's actually something to link (row
+                # is a plain None in a couple of existing tests that
+                # stub out write_trade() entirely).
+                linked_event_ids = [
+                    ev["_event_id"] for ev in (fill_event, close_event)
+                    if ev is not None and ev.get("_event_id") is not None
+                ]
+                if linked_event_ids:
+                    link_events_to_trade(db, linked_event_ids, shadow_row.trade_id)
+
+                # 2026-09-04 fix: ONE commit for both the shadow row and
+                # its event-linking, not two separate ones. Confirmed
+                # empirically (see
+                # test_multi_subscriber_write_trade.py's
+                # ...duplicate_on_retry test) that two commits let a
+                # failure IN link_events_to_trade() (after the shadow
+                # row's own commit already succeeded) propagate
+                # uncaught out of this function -- which, upstream in
+                # _finalize_day()/_process_bar(), causes exactly this
+                # same day to be retried on the next poll (self.current_day
+                # never advances past a day whose finalize raised). A
+                # retry would then call write_trade() AGAIN for the
+                # shadow row, which was already committed the first
+                # time -- a genuine DUPLICATE row for the same day,
+                # nothing preventing it (no uniqueness constraint on
+                # this table by design). One commit means a failure
+                # anywhere in this block rolls back the WHOLE thing,
+                # so a retry cleanly redoes both steps from a truly
+                # clean slate instead of half-repeating them.
                 db.commit()
+                log.info(
+                    "%s: shadow trade journaled -- %s %s, outcome=%s, entry=%.5f exit=%.5f",
+                    cd.date, trade["direction"], self.config.model, trade["outcome"],
+                    trade["entry"], trade["exit_price"],
+                )
+            except Exception as e:
+                # This row is the prerequisite for the per-subscriber
+                # loop below (real subscriber rows describe THEIR
+                # response to this shared day -- meaningless without
+                # it), so unlike that loop's own per-subscriber
+                # isolation, this failure can't be "skip and continue"
+                # -- re-raised so the existing retry-next-poll behavior
+                # (via _finalize_day()'s uncaught-exception path,
+                # unchanged by this fix) still applies. What's new here
+                # is visibility: previously this only ever reached a
+                # raw log.exception() at run_forever()'s outer catch-all
+                # -- now also journaled as a real safety_check_failed
+                # event (own try/except: if even journaling this
+                # failure fails, don't let that suppress the original
+                # exception either).
+                db.rollback()
+                log.exception(
+                    "%s: writing/linking the shadow trade failed -- this day will be "
+                    "retried on the next poll", cd.date,
+                )
+                try:
+                    write_event(
+                        db,
+                        {
+                            "event_type": "safety_check_failed",
+                            "timestamp": datetime.now(NY_TZ).replace(tzinfo=None),
+                            "check_name": "write_shadow_trade_failed",
+                            "error": str(e),
+                        },
+                        None, self.config.model,
+                    )
+                    db.commit()
+                except Exception:
+                    log.exception(
+                        "%s: additionally failed to journal the above shadow-trade write failure",
+                        cd.date,
+                    )
+                    db.rollback()
+                raise
 
             for user_id, om in cd.order_managers.items():
                 try:
