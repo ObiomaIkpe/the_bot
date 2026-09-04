@@ -136,24 +136,45 @@ these two are the same incident, two separate root causes.
       live running, two real autonomous demo trades (one TP, one SL),
       plus the two cold-start bugs found/fixed on first deployment.
       Phase 3 is now complete, all 9 steps.
-- [ ] **Multi-user trade fan-out -- designed 2026-09-02, not built.**
-      The intended design was always "one shared detection engine per
-      model, execution fans out to every subscribed user's own
-      account" (`ModelConfig.status` already models per-user
-      opt-out) -- but `shadow_runner` is actually hardcoded to exactly
-      ONE user via env vars (`SHADOW_RUNNER_USER_ID`/`BRIDGE_URL`).
-      Every other user who connects a broker account gets a real,
-      independent bridge worker with nothing watching or trading it at
-      all. Full design in `MULTI_USER_FANOUT_PLAN.md` (not committed):
-      a new subscriber query (`ModelConfig` + `User` + `BrokerCredential`
-      join, doesn't exist yet) and widening the handful of places that
-      assume a single `OrderManager` per day into a dict keyed by
-      `user_id` -- `OrderManager` itself already doesn't need to
-      change, it's already correctly one-model-one-user-one-bridge
-      scoped. Explicitly scoped to design-only for now; building it,
-      and separately cutting the real live account over to it once
-      built, are both deliberately deferred to their own later
-      go-aheads.
+- [x] **Multi-user trade fan-out -- BUILT and tested 2026-09-03,
+      NOT yet deployed to the live VPS.** The intended design was
+      always "one shared detection engine per model, execution fans out
+      to every subscribed user's own account" (`ModelConfig.status`
+      already models per-user opt-out) -- `shadow_runner` was hardcoded
+      to exactly ONE user via env vars. Built across three commits:
+      `get_active_subscribers()` (`5710f87`); `Event.user_id`/
+      `Trade.user_id` both made nullable, migrations 0020/0021
+      (`9ec2a14`) so the shared narrative and the model's own always-on
+      shadow trade record have a genuinely ownerless home; `OrderManager`/
+      `PositionTracker` both widened to one-per-subscriber (`12c151d`)
+      -- the `PositionTracker` widening was a real gap found mid-build,
+      not in the original design (without it, real orders would have
+      fanned out correctly while overnight risk management silently
+      kept working for only one account). 396 passed / 1 skipped, 0
+      regressions. Full design + build notes in
+      `MULTI_USER_FANOUT_PLAN.md`, plain-language explanation in
+      `MULTI_USER_FANOUT_BUILD_EXPLAINED.md` (neither committed).
+      **Important**: no feature flag gates this -- the moment it's
+      deployed, any user with an active `ModelConfig` + working bridge
+      starts receiving real trades automatically. Still ahead before
+      the real account cuts over: the deployment-model shift (one
+      container per model), the 2-week journal-only rollout acceptance
+      criteria, and the admin UI's nested per-subscriber trade story
+      (deliberate fast-follow).
+- [ ] **Dedicated price-only reference account -- documented
+      2026-09-03, not started.** Today, and still after the fan-out
+      build above, one single real account does double duty: supplies
+      detection's price feed (`BRIDGE_URL`) AND is one of the accounts
+      that places real trades. A separate account whose only job is
+      supplying prices (a plain demo account works, never places a real
+      order) would decouple "is the price feed healthy" from "is this
+      specific trading account's connection healthy." Deliberately
+      deferred during the fan-out design ("build only if actually
+      needed") but built so it stays cheap to add later -- the
+      reference bridge is one config value (`BRIDGE_URL`), not tied to
+      which account also trades. Full steps in
+      `DEDICATED_REFERENCE_ACCOUNT.md` (not committed). User asked to
+      be reminded about this.
 - [ ] **New models beyond `fvg` (`ob`, `fvg_ob`, and any others).**
       Clarified 2026-08-29: the user will bring the actual model
       definitions/specs when ready. The job is then the same shape of
