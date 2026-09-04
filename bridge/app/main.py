@@ -109,11 +109,20 @@ def get_candles(
     symbol: str = Query(default=None, description="Defaults to config's default_symbol, e.g. EURUSDm"),
     timeframe: str = Query(default="M5", description="M1, M5, M15, M30, H1, H4, D1"),
     count: int = Query(default=100, ge=1, le=5000, description="Number of most recent closed/forming bars"),
+    # 2026-09-04: added for historical backfill (Aug 10 -> Sept 4 window) --
+    # MT5's copy_rates_from_pos already supports a start_pos offset, this
+    # bridge just never exposed it. Default 0 preserves today's exact
+    # behavior (most-recent-bar anchor) for every existing caller --
+    # additive, not a behavior change. Lets a caller page further back
+    # than one 5000-bar call can reach by requesting start_pos=5000,
+    # 10000, etc. -- see shadow_runner/bridge_client.py's
+    # get_candles_paginated().
+    start_pos: int = Query(default=0, ge=0, description="Bar index to start from, 0 = most recent"),
 ):
     config = get_config()
     sym = symbol or config.default_symbol
     try:
-        rows = mt5_client.candles(sym, timeframe, count)
+        rows = mt5_client.candles(sym, timeframe, count, start_pos)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except mt5_client.MT5Error as e:

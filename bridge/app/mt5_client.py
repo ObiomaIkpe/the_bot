@@ -227,13 +227,13 @@ def tick(symbol: str) -> dict:
     return _run(_do_tick, symbol)
 
 
-def _do_candles(symbol: str, timeframe: str, count: int) -> list[dict]:
+def _do_candles(symbol: str, timeframe: str, count: int, start_pos: int = 0) -> list[dict]:
     if timeframe not in TIMEFRAME_MAP:
         raise ValueError(f"Unsupported timeframe {timeframe!r}. Choose from {sorted(TIMEFRAME_MAP)}")
     _ensure_connected()
-    rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME_MAP[timeframe], 0, count)
+    rates = mt5.copy_rates_from_pos(symbol, TIMEFRAME_MAP[timeframe], start_pos, count)
     if rates is None:
-        _fail(f"mt5.copy_rates_from_pos({symbol!r}, {timeframe!r}, count={count})")
+        _fail(f"mt5.copy_rates_from_pos({symbol!r}, {timeframe!r}, start_pos={start_pos}, count={count})")
     out = []
     for r in rates:
         time_utc, time_ny = _to_ny(int(r["time"]))
@@ -251,8 +251,8 @@ def _do_candles(symbol: str, timeframe: str, count: int) -> list[dict]:
     return out
 
 
-def candles(symbol: str, timeframe: str, count: int) -> list[dict]:
-    return _run(_do_candles, symbol, timeframe, count)
+def candles(symbol: str, timeframe: str, count: int, start_pos: int = 0) -> list[dict]:
+    return _run(_do_candles, symbol, timeframe, count, start_pos)
 
 
 def _do_symbol_info(symbol: str) -> dict:

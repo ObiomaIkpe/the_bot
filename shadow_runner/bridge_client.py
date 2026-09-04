@@ -46,18 +46,25 @@ class BridgeClient:
         except requests.RequestException as e:
             raise BridgeError(f"GET /account_info failed: {e}") from e
 
-    def get_candles(self, symbol: str, timeframe: str, count: int) -> list[dict]:
+    def get_candles(self, symbol: str, timeframe: str, count: int, start_pos: int = 0) -> list[dict]:
         """
         Returns bars in the same order the bridge does (oldest first --
         confirmed in PHASE2_VALIDATION.md's sample output). Each bar dict
         has time_utc/time_ny (both parsed to tz-aware datetimes here,
         strings on the wire) plus open/high/low/close/tick_volume/spread/
         real_volume, matching the bridge's CandlesResponse model exactly.
+
+        start_pos (2026-09-04, historical backfill): 0 = most recent bar
+        (unchanged default -- every existing caller is unaffected). A
+        non-zero value pages further back than one 5000-bar call can
+        reach -- see get_candles_paginated() below, which is what should
+        actually be used for a deep historical fetch; this method still
+        only ever returns one page.
         """
         try:
             resp = requests.get(
                 f"{self.base_url}/candles",
-                params={"symbol": symbol, "timeframe": timeframe, "count": count},
+                params={"symbol": symbol, "timeframe": timeframe, "count": count, "start_pos": start_pos},
                 timeout=self.timeout_seconds,
             )
             resp.raise_for_status()
@@ -78,6 +85,46 @@ class BridgeClient:
             except (KeyError, ValueError) as e:
                 raise BridgeError(f"Malformed candle in bridge response: {c!r} ({e})") from e
         return candles
+
+    # Bridge-enforced ceiling on a single /candles call (main.py's
+    # `count: int = Query(..., le=5000)`) -- kept here as the page size
+    # get_candles_paginated pages by, not just a magic number.
+    MAX_CANDLES_PER_CALL = 5000
+    # Sanity bound so a bug (e.g. a broker that never returns a short
+    # final page) can't spin pulling the entire available terminal
+    # history -- 5 pages * 5000 = 25000 M5 bars, comfortably more than
+    # the ~7000-7200 bars a 25-calendar-day backfill actually needs.
+    MAX_PAGES = 5
+
+    def get_candles_paginated(self, symbol: str, timeframe: str, total_bars_needed: int) -> list[dict]:
+        """
+        2026-09-04, historical backfill (Aug 10 -> Sept 4 window):
+        get_candles() is capped at MAX_CANDLES_PER_CALL bars per call,
+        always anchored at the most recent bar -- not enough to reach a
+        gap wider than ~17 trading days. Pages backward via start_pos
+        (0, 5000, 10000, ...) until total_bars_needed bars are collected
+        or a page comes back shorter than requested (terminal history
+        exhausted -- MT5 has nothing older to give), capped at MAX_PAGES
+        pages as a safety bound.
+
+        Each page is itself oldest-first (see get_candles()'s docstring),
+        but an EARLIER page (lower start_pos) is always the MORE RECENT
+        segment -- so pages are collected then explicitly re-sorted by
+        time_utc (also de-duplicated by time_utc) rather than trusting
+        any assumed concatenation order between pages. Self-corrects even
+        if the exact MT5 boundary behavior between pages turns out to
+        overlap by a bar or two.
+        """
+        all_bars: dict[datetime, dict] = {}
+        start_pos = 0
+        for _ in range(self.MAX_PAGES):
+            page = self.get_candles(symbol, timeframe, self.MAX_CANDLES_PER_CALL, start_pos=start_pos)
+            for bar in page:
+                all_bars[bar["time_utc"]] = bar
+            if len(all_bars) >= total_bars_needed or len(page) < self.MAX_CANDLES_PER_CALL:
+                break
+            start_pos += self.MAX_CANDLES_PER_CALL
+        return sorted(all_bars.values(), key=lambda b: b["time_utc"])
 
     # -----------------------------------------------------------------
     # Phase 4: order placement
