@@ -750,13 +750,21 @@ class ShadowRunner:
             db.close()
 
         if last_ts is not None:
+            # 2026-09-04 fix: last_ts comes back tz-aware UTC (Event.timestamp),
+            # now_ny is naive NY-local (line 730, deliberately -- today's date
+            # boundary needs NY time). Logging them side by side unconverted
+            # made the printed gap look ~4-5h smaller than real (the EDT/EST
+            # offset) -- caught live, in this exact log line, during the
+            # 2026-09-04 deploy. Converting last_ts to NY here makes both
+            # endpoints the same, human-comparable clock.
+            last_ts_ny = last_ts.astimezone(NY_TZ).replace(tzinfo=None)
             log.warning(
-                "Recovery: %s already has journaled events up to %s -- a prior run "
+                "Recovery: %s already has journaled events up to %s NY -- a prior run "
                 "must have stopped partway through today. NOT replaying (would "
-                "duplicate everything before that point). Everything between %s "
-                "and now (%s) will be a documented gap in today's journal -- see "
+                "duplicate everything before that point). Everything between %s NY "
+                "and now (%s NY) will be a documented gap in today's journal -- see "
                 "PHASE3_RESTART_RECOVERY.md. Resuming normal live polling from here.",
-                today, last_ts, last_ts, now_ny,
+                today, last_ts_ny, last_ts_ny, now_ny,
             )
             return
 
