@@ -259,20 +259,25 @@ these two are the same incident, two separate root causes.
       surfaces (e.g. an admin acting on behalf of a user, or multiple
       credentials per user needing to be told apart in the audit trail).
 - [~] **Monitoring/alerting.** Foundation built 2026-08-31
-      (`app/core/telegram.py`, `app/core/healthchecks.py`), dormant
-      until real credentials exist -- **user needs to**: create a
-      Telegram bot via @BotFather, add it to an existing group, get the
-      bot token + group chat id; create two healthchecks.io checks (one
-      per service: api, shadow_runner), get their ping URLs. Once
-      those exist, set `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` in `.env`
-      and each service's `HEALTHCHECKS_PING_URL` in `docker-compose.yml`
-      (commented placeholders already there). Covered so far, built
-      incrementally:
+      (`app/core/telegram.py`, `app/core/healthchecks.py`).
+      **Telegram half: DONE, live 2026-09-04.** Bot created via
+      @BotFather, added to a group, `TELEGRAM_BOT_TOKEN`/
+      `TELEGRAM_CHAT_ID` set in `.env` on the live server, restarted,
+      verified with a real end-to-end test message actually landing in
+      the group (`app/scripts/test_telegram_alert.py`) -- not just
+      "configured," genuinely confirmed working. Real, direct
+      motivation for finally doing this: the 2026-09-04 incident (see
+      `SEPT_4_DEPLOY_AND_INCIDENT.md`) where every relevant failure got
+      journaled to the database but nothing paged anyone, since this
+      was still dormant at the time. **healthchecks.io half: still not
+      done** -- needs two checks created (one per service: api,
+      shadow_runner), their ping URLs set in `.env`, and uncommented in
+      `docker-compose.yml`. Covered so far, built incrementally:
         - [x] `safety_check_failed` events -> Telegram alert
         - [x] process/service down -> healthchecks.io dead-man's-switch
               (api: 60s heartbeat via lifespan background task;
               shadow_runner: pinged once per run_forever() loop
-              iteration)
+              iteration) -- built, not yet wired to real check URLs
         - [x] `order_placement_failed` events -> Telegram alert
               (2026-08-31)
       Not yet built, deliberately skipped 2026-08-31: **missed-trading-
