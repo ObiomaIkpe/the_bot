@@ -28,6 +28,8 @@ const STAGE_LABELS: Record<string, string> = {
   order_skipped_paused: "Skipped (paused)",
   safety_check_failed: "Safety check failed",
   daily_loss_threshold_crossed: "Daily loss threshold",
+  orphan_position_recovered: "Found unmanaged, healed",
+  orphan_trade_recorded: "Recorded",
 };
 
 function stageLabel(e: EventOut): string {

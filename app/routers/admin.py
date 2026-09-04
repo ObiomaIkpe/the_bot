@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import get_current_admin
 from app.core.provisioning import provision_model_for_all_users
+from app.core.trade_story import _orphan_recovery_events
 from app.models.audit_log import AuditLog
 from app.models.event import Event
 from app.models.model import Model
@@ -162,6 +163,21 @@ def get_trade_event_chain(
         .order_by(Event.timestamp.asc())
         .all()
     )
+
+    # 2026-09-04: an orphan-recovered trade's own discovery/heal events
+    # (orphan_position_recovered/orphan_trade_recorded) are timestamped
+    # on the day the gap was FOUND, not the trade's entry day -- could
+    # be days apart, so the entry-day window above misses them entirely.
+    # Merge them in by ticket (see trade_story._orphan_recovery_events'
+    # own docstring for why ticket, not trade_id) so an admin looking at
+    # a recovered trade sees its real story instead of an empty/
+    # misleadingly-unrelated day dump.
+    orphan_events = _orphan_recovery_events(db, trade)
+    if orphan_events:
+        day_events = sorted(
+            {e.event_id: e for e in (*day_events, *orphan_events)}.values(),
+            key=lambda e: e.timestamp,
+        )
 
     matched_fill = next((e for e in day_events if e.trade_id == trade.trade_id and e.event_type == "order_filled"), None)
     matched_close = next((e for e in day_events if e.trade_id == trade.trade_id and e.event_type == "trade_closed"), None)

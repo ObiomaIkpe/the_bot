@@ -191,6 +191,53 @@ def test_admin_trade_event_chain_matches_fill_and_close(client, db_session):
     assert matched_close["event_type"] == "trade_closed"
 
 
+def test_admin_trade_event_chain_merges_orphan_discovery_events_from_a_different_day(client, db_session):
+    """2026-09-04: an orphan-recovered trade's own discovery/heal
+    events land on the day it was FOUND, not its entry_time_ny day --
+    could be days apart. The entry-day window this endpoint otherwise
+    uses would silently omit them, leaving an admin looking at a
+    recovered trade's chain with no sign it was ever an orphan at all.
+    Must be merged in by ticket regardless of which day they're on."""
+    token = _register_and_login(client, "admin_chain_orphan@example.com")
+    user = db_session.query(User).filter(User.email == "admin_chain_orphan@example.com").first()
+    _promote(db_session, "admin_chain_orphan@example.com")
+
+    entry_time = datetime.datetime(2026, 9, 2, 13, 11, 4)
+    discovery_time = datetime.datetime(2026, 9, 4, 8, 0, 0)
+    ticket = 3173996588
+    trade = Trade(
+        user_id=user.user_id, model="fvg", is_shadow=False, direction="long",
+        entry_price=1.1586, stop_price=1.15776, target_price=1.1620,
+        entry_time_utc=entry_time, entry_time_ny=entry_time, risk_pct_used=0.01, equity_before=1000.0,
+        setup_context={"source": "orphan_recovery"}, real_position_ticket=ticket, real_status="open",
+    )
+    db_session.add(trade)
+    db_session.commit()
+    db_session.refresh(trade)
+
+    recovered = Event(
+        user_id=user.user_id, model="fvg", event_type="orphan_position_recovered",
+        timestamp=discovery_time, details={"ticket": ticket, "direction": "long", "target": 1.1620},
+    )
+    recorded = Event(
+        user_id=user.user_id, model="fvg", event_type="orphan_trade_recorded",
+        timestamp=discovery_time, details={"ticket": ticket, "trade_id": str(trade.trade_id)},
+        trade_id=trade.trade_id,
+    )
+    db_session.add_all([recovered, recorded])
+    db_session.commit()
+
+    resp = client.get(f"/admin/trades/{trade.trade_id}/event-chain", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    event_types = sorted(e["event_type"] for e in body["day_events"])
+    assert event_types == ["orphan_position_recovered", "orphan_trade_recorded"]
+    matched_close = next(
+        (e for e in body["day_events"] if e["event_id"] == body["matched_close_event_id"]), None
+    )
+    assert matched_close is None  # still open, no close event to match
+
+
 def test_admin_trade_event_chain_attributes_narrative_and_personal_rows_correctly(client, db_session):
     """Multi-user fan-out, piece 1.5: day_events now mixes a shared,
     ownerless narrative row in with the trade owner's own real-action

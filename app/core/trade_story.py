@@ -40,6 +40,39 @@ class TradeChainResult:
     fully_resolved: bool
 
 
+def _orphan_recovery_events(db: Session, trade: Trade) -> list[Event]:
+    """2026-09-04: a trade written by orphan_recovery.py's
+    write_orphan_trade() (setup_context.source == "orphan_recovery")
+    has no order_filled event to anchor a chain on -- there's no
+    detected candidate to reconstruct, since this is a real fill the
+    shared detection narrative never journaled (that's the definition
+    of an orphan). It's still fully journaled, just not as a
+    raid/MSS/FVG story: orphan_position_recovered (found + healed, may
+    be absent if healing itself failed) and orphan_trade_recorded
+    (this row's own creation) both exist and are worth surfacing
+    instead of an empty "story not available".
+
+    Matched by ticket, not trade_id -- orphan_position_recovered fires
+    BEFORE this trade row exists (in _heal_orphan(), ahead of
+    _record_orphan_trade()), so it never carries a trade_id. Also NOT
+    scoped to the entry day like _same_day_events() -- discovery can
+    happen days after the real fill (that's the whole premise of an
+    orphan), so these events are commonly on a different calendar day
+    than trade.entry_time_ny entirely.
+    """
+    if trade.real_position_ticket is None:
+        return []
+    return (
+        db.query(Event)
+        .filter(
+            Event.event_type.in_(("orphan_position_recovered", "orphan_trade_recorded")),
+            Event.details["ticket"].astext == str(trade.real_position_ticket),
+        )
+        .order_by(Event.timestamp.asc())
+        .all()
+    )
+
+
 def _same_day_events(db: Session, trade: Trade) -> list[Event]:
     """
     Multi-user fan-out, piece 1.5: the raid/MSS/FVG/candidate/simulated-
@@ -157,7 +190,8 @@ def build_trade_chain(db: Session, trade: Trade) -> TradeChainResult:
 
     fill = _find_fill(events, trade)
     if fill is None:
-        return TradeChainResult(chain=[], fully_resolved=False)
+        orphan_events = _orphan_recovery_events(db, trade)
+        return TradeChainResult(chain=orphan_events, fully_resolved=False)
 
     close = _find_close(events, trade)
     candidate = _find_candidate(events, fill)

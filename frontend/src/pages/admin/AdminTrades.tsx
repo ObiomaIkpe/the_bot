@@ -11,13 +11,16 @@ const OUTCOMES = ["win", "loss", "scratch"];
 
 /** Admin-only, all-users equivalent of TradeHistory.tsx -- replaces
  * admin_dashboard/'s "Trades" tab. No user filter (admin sees
- * everyone); each row links to the event-chain drill-down. */
+ * everyone); each row links to the event-chain drill-down.
+ *
+ * daysBack default widened 30 -> 3650 the same day and for the same
+ * reason as TradeHistory.tsx -- see that file's comment. */
 export function AdminTrades() {
   const modelsQuery = useModels();
   const [modelFilter, setModelFilter] = useState("");
   const [outcomeFilter, setOutcomeFilter] = useState("");
   const [shadowFilter, setShadowFilter] = useState<"" | "true" | "false">("");
-  const [daysBack, setDaysBack] = useState(30);
+  const [daysBack, setDaysBack] = useState(3650);
 
   const tradesQuery = useQuery({
     queryKey: ["admin-trades", modelFilter, outcomeFilter, shadowFilter, daysBack],

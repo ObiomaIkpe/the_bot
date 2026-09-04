@@ -17,13 +17,22 @@ type SortDir = "asc" | "desc";
  * with different UI needs, so they get separate pages instead of being
  * stacked on one. Backend sort is fixed (entry_time_ny DESC) and there's
  * no pagination beyond a hard limit -- client-side sort on the already
- * -fetched page is enough given the trade volume this account sees. */
+ * -fetched page is enough given the trade volume this account sees.
+ *
+ * daysBack default was 30 until 2026-09-04 -- widened to match
+ * Overview.tsx's own days_back=3650: an orphan trade is written with
+ * its REAL historical fill time as entry_time_ny, which can be well
+ * outside any recent window by the time it's discovered (that's the
+ * whole premise of an orphan). A 30-day default risked this page --
+ * the one place a trader actually audits history -- silently hiding
+ * exactly the kind of row this session's fixes exist to surface.
+ * Still user-adjustable, just no longer hides anything by default. */
 export function TradeHistory() {
   const modelsQuery = useModels();
   const [modelFilter, setModelFilter] = useState("");
   const [outcomeFilter, setOutcomeFilter] = useState("");
   const [shadowFilter, setShadowFilter] = useState<"" | "true" | "false">("");
-  const [daysBack, setDaysBack] = useState(30);
+  const [daysBack, setDaysBack] = useState(3650);
   const [sortKey, setSortKey] = useState<SortKey>("entry_time_ny");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 

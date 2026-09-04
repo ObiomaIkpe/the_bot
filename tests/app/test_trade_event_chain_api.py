@@ -235,3 +235,54 @@ def test_scratch_trade_with_no_candidate_falls_back_partially_resolved(client, d
     assert body["fully_resolved"] is False
     event_types = [e["event_type"] for e in body["chain"]]
     assert event_types == ["order_filled", "trade_closed"]
+
+
+def test_orphan_recovered_trade_surfaces_its_discovery_events_not_an_empty_chain(client, db_session):
+    """A trade written by orphan_recovery.py's write_orphan_trade() has
+    no order_filled event at all -- there's no detected candidate to
+    reconstruct, by definition (that's what makes it an orphan). Before
+    the 2026-09-04 fix this fell straight through to an empty chain
+    (fully_resolved=False, chain=[]), which the frontend renders as
+    "Story not available" -- technically true but misleading, since the
+    trade actually IS fully journaled, just not as a raid/MSS/FVG
+    story. Must instead surface its own discovery/heal events. Also
+    proves these are found even though they're timestamped DAYS after
+    the trade's entry_time_ny (discovery, not entry, day) -- the
+    ordinary entry-day window would miss them entirely."""
+    token = _register_and_login(client, "chain_orphan@example.com")
+    user = db_session.query(User).filter(User.email == "chain_orphan@example.com").first()
+
+    entry_time = datetime.datetime(2026, 9, 2, 13, 11, 4)
+    discovery_time = datetime.datetime(2026, 9, 4, 8, 0, 0)  # two days later
+    ticket = 3173996588  # a real, beyond-32-bit ticket -- also exercises migration 0022
+    trade = Trade(
+        user_id=user.user_id, model="fvg", is_shadow=False, direction="long",
+        entry_price=1.1586, stop_price=1.15776, target_price=1.1620,
+        entry_time_utc=entry_time, entry_time_ny=entry_time,
+        risk_pct_used=0.01, equity_before=1000.0,
+        setup_context={"source": "orphan_recovery"},
+        real_position_ticket=ticket, real_status="open",
+    )
+    db_session.add(trade)
+    db_session.commit()
+    db_session.refresh(trade)
+
+    recovered = Event(
+        user_id=user.user_id, model="fvg", event_type="orphan_position_recovered",
+        timestamp=discovery_time,
+        details={"ticket": ticket, "direction": "long", "target": 1.1620, "fill_price": 1.1586},
+    )
+    recorded = Event(
+        user_id=user.user_id, model="fvg", event_type="orphan_trade_recorded",
+        timestamp=discovery_time, details={"ticket": ticket, "trade_id": str(trade.trade_id)},
+        trade_id=trade.trade_id,
+    )
+    db_session.add_all([recovered, recorded])
+    db_session.commit()
+
+    resp = client.get(f"/trades/{trade.trade_id}/event-chain", headers=_auth_header(token))
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["fully_resolved"] is False
+    event_types = [e["event_type"] for e in body["chain"]]
+    assert event_types == ["orphan_position_recovered", "orphan_trade_recorded"]
