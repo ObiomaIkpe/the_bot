@@ -108,7 +108,14 @@ def list_positions(
             positions.extend(bridge.get_positions(mc.magic_number))
         return positions
     except BridgeError as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+        # Same reasoning as close_position()'s mapping below: the
+        # bridge's GET /positions is ALSO gated behind its own
+        # orders_enabled kill switch (not just the write endpoints) --
+        # every freshly-provisioned bridge worker starts with this off,
+        # so this is the single most common cause here, not a genuine
+        # gateway failure. Surface as a conflict so the frontend can show
+        # a specific, friendly message instead of a raw error string.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
 @router.get("/pending-orders", response_model=list[PendingOrder])
@@ -123,7 +130,8 @@ def list_pending_orders(
             orders.extend(bridge.get_pending_orders(mc.magic_number))
         return orders
     except BridgeError as e:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+        # Same reasoning as list_positions() above.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
 
 @router.post("/positions/{ticket}/close", response_model=CloseResult)

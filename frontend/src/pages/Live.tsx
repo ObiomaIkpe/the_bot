@@ -19,6 +19,15 @@ function NoBridgeConfigured() {
   );
 }
 
+function OrdersDisabled() {
+  return (
+    <EmptyState
+      title="Order placement is disabled for this account"
+      message="This bridge worker has order placement turned off, so positions and pending orders can't be listed. This is expected for an account not meant to trade for real."
+    />
+  );
+}
+
 export function Live() {
   const queryClient = useQueryClient();
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
@@ -68,6 +77,7 @@ export function Live() {
   });
 
   const noBridge = (err: unknown) => err instanceof ApiError && err.status === 503;
+  const ordersDisabled = (err: unknown) => err instanceof ApiError && err.status === 409;
 
   return (
     <div>
@@ -97,7 +107,8 @@ export function Live() {
 
       <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3">Open positions</h2>
       {positionsQuery.error && noBridge(positionsQuery.error) && <NoBridgeConfigured />}
-      {positionsQuery.error && !noBridge(positionsQuery.error) && (
+      {positionsQuery.error && ordersDisabled(positionsQuery.error) && <OrdersDisabled />}
+      {positionsQuery.error && !noBridge(positionsQuery.error) && !ordersDisabled(positionsQuery.error) && (
         <p className="text-negative">Failed to load positions: {String(positionsQuery.error)}</p>
       )}
       {positionsQuery.data && positionsQuery.data.length === 0 && (
@@ -140,7 +151,8 @@ export function Live() {
 
       <h2 className="text-[13px] uppercase tracking-wide text-text-muted mb-3 mt-8">Pending orders</h2>
       {pendingOrdersQuery.error && noBridge(pendingOrdersQuery.error) && <NoBridgeConfigured />}
-      {pendingOrdersQuery.error && !noBridge(pendingOrdersQuery.error) && (
+      {pendingOrdersQuery.error && ordersDisabled(pendingOrdersQuery.error) && <OrdersDisabled />}
+      {pendingOrdersQuery.error && !noBridge(pendingOrdersQuery.error) && !ordersDisabled(pendingOrdersQuery.error) && (
         <p className="text-negative">Failed to load pending orders: {String(pendingOrdersQuery.error)}</p>
       )}
       {pendingOrdersQuery.data && pendingOrdersQuery.data.length === 0 && (

@@ -23,17 +23,28 @@ def _auth_header(token):
 
 
 class FakeBridge:
-    def __init__(self, positions=None, pending_orders=None, raise_on_action=None):
+    def __init__(self, positions=None, pending_orders=None, raise_on_action=None, raise_on_list=None):
         self._positions = positions or []
         self._pending_orders = pending_orders or []
         self._raise_on_action = raise_on_action
+        # Separate from raise_on_action: close_position()/cancel_pending_order()
+        # both look up the target via get_positions()/get_pending_orders()
+        # FIRST (_find_owned_position/_find_owned_pending_order), before
+        # ever reaching the actual close/cancel call -- raise_on_action
+        # alone raising from get_positions() too would short-circuit that
+        # lookup and never exercise the close/cancel path those tests want.
+        self._raise_on_list = raise_on_list
         self.closed = []
         self.cancelled = []
 
     def get_positions(self, magic):
+        if self._raise_on_list:
+            raise self._raise_on_list
         return [p for p in self._positions if p["magic"] == magic]
 
     def get_pending_orders(self, magic):
+        if self._raise_on_list:
+            raise self._raise_on_list
         return [o for o in self._pending_orders if o["magic"] == magic]
 
     def close_position(self, ticket):
@@ -153,6 +164,26 @@ def test_positions_503_when_credential_exists_but_bridge_url_unset(client, db_se
 
     resp = client.get("/trading/positions", headers=_auth_header(token))
     assert resp.status_code == 503
+
+
+def test_list_positions_maps_bridge_error_to_409(client, db_session, bridge_client):
+    """The bridge's GET /positions is gated behind its own orders_enabled
+    kill switch -- every freshly-provisioned bridge worker starts with
+    this off. Must surface as 409, not a raw 502, so the frontend can
+    show a specific, friendly message instead of a raw error string."""
+    token = _register_and_login(client, "trad_j@example.com")
+    bridge_client(FakeBridge(raise_on_list=BridgeError("GET /positions failed: 403 Client Error: Forbidden")))
+
+    resp = client.get("/trading/positions", headers=_auth_header(token))
+    assert resp.status_code == 409
+
+
+def test_list_pending_orders_maps_bridge_error_to_409(client, db_session, bridge_client):
+    token = _register_and_login(client, "trad_k@example.com")
+    bridge_client(FakeBridge(raise_on_list=BridgeError("GET /orders/pending failed: 403 Client Error: Forbidden")))
+
+    resp = client.get("/trading/pending-orders", headers=_auth_header(token))
+    assert resp.status_code == 409
 
 
 def test_positions_503_when_only_credential_is_inactive(client, db_session):
