@@ -1,9 +1,10 @@
-# Dedicated price-only reference account -- not built, deferred
+# Dedicated price-only reference account -- DONE, live 2026-09-04
 
 Not committed -- working notes. Explains the "Option 2" idea from the
 multi-user fan-out price-feed discussion (see
-`MULTI_USER_FANOUT_PLAN.md`'s Context section) and what it would
-actually take to build, whenever it's actually needed.
+`MULTI_USER_FANOUT_PLAN.md`'s Context section) and what it actually
+took to build. **Built and cut over live 2026-09-04** -- see "Status"
+at the bottom for the full account of what actually happened.
 
 ## What this is
 
@@ -65,6 +66,44 @@ wanted. Step 1 needs the user to actually get the account first.
 
 ## Status
 
-Not started. Purely documented here so it doesn't get lost -- revisit
-when the reference-bridge SPOF or the "one account doing double duty"
-tradeoff actually starts to matter in practice, not before.
+**Done, live 2026-09-04.** Account created (Exness demo, login
+`476781537`, server `Exness-MT5Trial9`, registered under a dedicated
+user `reference-feed@ihusale.com.ng`), provisioned end-to-end through
+self-service (own MT5 terminal + bridge worker, port 8002 on the
+Windows VPS), verified genuinely live (real balance/equity showing in
+the app), and confirmed doubly safe: `orders_enabled: false` on its
+bridge worker (the bridge itself refuses order placement, a 403 at the
+HTTP layer) AND every `ModelConfig` for it left at the default
+`disabled` -- two independent layers, not just one. `BRIDGE_URL` cut
+over on the live server from the real account's own bridge (port 8001)
+to this one (port 8002), confirmed via the running container's actual
+environment and a clean same-day bar replay against the new feed.
+
+Two real things found and fixed along the way, not part of the original
+plan:
+- **A raw, unfriendly error** (`GET /positions failed: 403 Client
+  Error: Forbidden...`) surfaced on the Live page the moment this
+  account's positions/pending-orders were queried -- caused by the
+  bridge gating those GET endpoints behind the same `orders_enabled`
+  switch as real order placement, not just a display bug. Fixed
+  properly: `app/routers/trading.py`'s `list_positions`/
+  `list_pending_orders` now map this to `409 Conflict` (matching the
+  pattern `close_position` already used for the identical root cause),
+  and `frontend/src/pages/Live.tsx` shows a specific, friendly message
+  instead of the raw string. Fixes this for every account in this
+  situation, not just this one -- any brand-new account hits the exact
+  same raw error before someone flips `orders_enabled` on.
+- **`BRIDGE_URL`/`SHADOW_RUNNER_USER_ID` were hardcoded directly in
+  `docker-compose.yml`**, discovered while doing the cutover -- every
+  future change would have needed a code commit + deploy instead of a
+  server-side `.env` edit + restart, and it's exactly the kind of
+  tracked-file drift this project already got bitten by once. Moved
+  both into `.env`; required a real `api` rebuild (its `Settings` class
+  rejects unknown env vars, same class of issue as the earlier
+  `POSTGRES_PASSWORD` incident) -- deliberately scoped to `api` alone,
+  confirmed not to touch `shadow_runner`'s own (still-undeployed
+  fan-out) image.
+
+Revisit only if the reference-bridge itself ever needs to move again
+(e.g. a different account, or genuine redundancy) -- the one-line
+`.env` change is now the whole story for that.

@@ -161,20 +161,28 @@ these two are the same incident, two separate root causes.
       container per model), the 2-week journal-only rollout acceptance
       criteria, and the admin UI's nested per-subscriber trade story
       (deliberate fast-follow).
-- [ ] **Dedicated price-only reference account -- documented
-      2026-09-03, not started.** Today, and still after the fan-out
-      build above, one single real account does double duty: supplies
-      detection's price feed (`BRIDGE_URL`) AND is one of the accounts
-      that places real trades. A separate account whose only job is
-      supplying prices (a plain demo account works, never places a real
-      order) would decouple "is the price feed healthy" from "is this
-      specific trading account's connection healthy." Deliberately
-      deferred during the fan-out design ("build only if actually
-      needed") but built so it stays cheap to add later -- the
-      reference bridge is one config value (`BRIDGE_URL`), not tied to
-      which account also trades. Full steps in
-      `DEDICATED_REFERENCE_ACCOUNT.md` (not committed). User asked to
-      be reminded about this.
+- [x] **Dedicated price-only reference account -- DONE, live
+      2026-09-04.** Previously one single real account did double duty:
+      supplied detection's price feed (`BRIDGE_URL`) AND placed real
+      trades. Built a genuinely separate account (Exness demo, its own
+      dedicated user `reference-feed@ihusale.com.ng`, provisioned
+      end-to-end via self-service) whose only job is supplying prices --
+      doubly protected from ever placing a real order (`orders_enabled:
+      false` on its bridge worker, AND every `ModelConfig` left at the
+      default `disabled`). `BRIDGE_URL` cut over live from the real
+      account's own bridge (port 8001) to this one (port 8002),
+      confirmed via the running container's actual environment and a
+      clean same-day bar replay against the new feed. Two real things
+      found and fixed along the way: a raw, unfriendly 403 error on the
+      Live page (the bridge gates GET /positions/pending-orders behind
+      the same orders_enabled switch as real order placement -- now a
+      proper 409 + friendly frontend message, fixes this for every
+      account, not just this one) and `BRIDGE_URL`/
+      `SHADOW_RUNNER_USER_ID` being hardcoded directly in
+      `docker-compose.yml` (moved to `.env`, required a scoped `api`
+      rebuild -- `shadow_runner`'s own still-undeployed fan-out image
+      deliberately left untouched). Full account in
+      `DEDICATED_REFERENCE_ACCOUNT.md`.
 - [ ] **New models beyond `fvg` (`ob`, `fvg_ob`, and any others).**
       Clarified 2026-08-29: the user will bring the actual model
       definitions/specs when ready. The job is then the same shape of
