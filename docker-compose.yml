@@ -58,20 +58,19 @@ services:
       dockerfile: Dockerfile
     command: python -m shadow_runner.main
     env_file: ./.env
-    environment:
-      # Dedicated price-only reference account (2026-09-04) -- see
-      # DEDICATED_REFERENCE_ACCOUNT.md. Detection's price feed only;
-      # never places real orders (orders_enabled=false on this bridge
-      # worker, and its ModelConfig stays 'disabled' forever, deliberately
-      # not tied to whichever account also trades). Was
-      # http://38.247.137.208:8001 (the real trading account's own
-      # bridge, port 8001) -- kept here as the rollback value if this
-      # new feed ever needs to be reverted.
-      BRIDGE_URL: http://38.247.137.208:8002
-      SHADOW_RUNNER_USER_ID: d4469ab9-742c-4656-8959-c21602dc71c5
-      # Same monitoring note as api's block above -- uncomment once a
-      # real check exists for THIS service (a different URL than api's).
-      # HEALTHCHECKS_PING_URL: https://hc-ping.com/<shadow_runner's-check-uuid>
+    # BRIDGE_URL/SHADOW_RUNNER_USER_ID moved into .env (2026-09-04) --
+    # were hardcoded directly here, which meant every change (e.g. the
+    # 2026-09-04 cutover to the dedicated reference account, see
+    # DEDICATED_REFERENCE_ACCOUNT.md) needed a code commit + deploy
+    # instead of a server-side .env edit + restart. env_file above
+    # already loads them from .env directly; app/core/config.py's
+    # Settings declares both as optional fields for the unrelated reason
+    # that api ALSO loads .env wholesale and would otherwise reject them
+    # as unknown (same fix already applied for postgres_password).
+    # Same monitoring note as api's block above -- uncomment once a
+    # real check exists for THIS service (a different URL than api's).
+    # environment:
+    #   HEALTHCHECKS_PING_URL: https://hc-ping.com/<shadow_runner's-check-uuid>
     depends_on:
       db:
         condition: service_healthy

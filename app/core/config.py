@@ -22,6 +22,17 @@ class Settings(BaseSettings):
     # this exact .env/model_config combination and hit it.
     postgres_password: str | None = None
 
+    # shadow_runner's own config (shadow_runner/config.py reads these
+    # directly via os.environ, never through this Settings object) --
+    # declared here for the exact same reason as postgres_password above:
+    # once these move from docker-compose.yml's shadow_runner-only
+    # `environment:` block into the shared .env (2026-09-04, so a future
+    # BRIDGE_URL change is a server-side .env edit instead of a code
+    # change + deploy), `env_file: ./.env` loads them into `api` too, and
+    # this class rejects unknown env vars unless declared.
+    bridge_url: str | None = None
+    shadow_runner_user_id: str | None = None
+
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
