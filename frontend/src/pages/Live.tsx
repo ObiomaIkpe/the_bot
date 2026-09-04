@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { apiClient, ApiError } from "../api/client";
-import type { AccountInfo, BridgeHealth, PendingOrder, Position } from "../api/types";
+import type { AccountInfo, BridgeHealth, ModelConfigOut, PendingOrder, Position } from "../api/types";
 import { Button } from "../components/Button";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { EmptyState } from "../components/EmptyState";
@@ -59,6 +59,16 @@ export function Live() {
     retry: false,
     refetchInterval: 15_000,
   });
+
+  // Positions/pending orders only carry a raw MT5 magic number -- map it
+  // back to the model that owns it, same magic->model_name join Overview
+  // already does per-card, so a live row is identifiable once more than
+  // one model is ever active at once (not just today's single-model case).
+  const modelConfigsQuery = useQuery({
+    queryKey: ["model-configs"],
+    queryFn: () => apiClient.get<ModelConfigOut[]>("/model-configs"),
+  });
+  const modelNameByMagic = new Map((modelConfigsQuery.data ?? []).map((mc) => [mc.magic_number, mc.model_name]));
 
   const closePosition = useMutation({
     mutationFn: (ticket: number) => apiClient.post(`/trading/positions/${ticket}/close`),
@@ -119,11 +129,14 @@ export function Live() {
           <thead>
             <tr>
               <th>Ticket</th>
+              <th>Model</th>
               <th>Symbol</th>
               <th>Direction</th>
               <th>Volume</th>
               <th>Open</th>
               <th>Current</th>
+              <th>Stop</th>
+              <th>Target</th>
               <th>Profit</th>
               <th></th>
             </tr>
@@ -132,11 +145,14 @@ export function Live() {
             {positionsQuery.data.map((p) => (
               <tr key={p.ticket}>
                 <td>{p.ticket}</td>
+                <td>{modelNameByMagic.get(p.magic) ?? p.magic}</td>
                 <td>{p.symbol}</td>
                 <td>{p.direction}</td>
                 <td>{p.volume}</td>
                 <td className="font-mono">{p.open_price}</td>
                 <td className="font-mono">{p.current_price}</td>
+                <td className="font-mono">{p.stop_loss}</td>
+                <td className="font-mono">{p.take_profit}</td>
                 <td className={`font-mono ${p.profit >= 0 ? "text-positive" : "text-negative"}`}>{p.profit.toFixed(2)}</td>
                 <td>
                   <Button variant="destructive" onClick={() => setPendingAction({ kind: "close", ticket: p.ticket })}>
@@ -163,11 +179,13 @@ export function Live() {
           <thead>
             <tr>
               <th>Ticket</th>
+              <th>Model</th>
               <th>Symbol</th>
               <th>Direction</th>
               <th>Volume</th>
               <th>Entry</th>
               <th>Stop</th>
+              <th>Target</th>
               <th></th>
             </tr>
           </thead>
@@ -175,11 +193,13 @@ export function Live() {
             {pendingOrdersQuery.data.map((o) => (
               <tr key={o.order_ticket}>
                 <td>{o.order_ticket}</td>
+                <td>{modelNameByMagic.get(o.magic) ?? o.magic}</td>
                 <td>{o.symbol}</td>
                 <td>{o.direction}</td>
                 <td>{o.volume}</td>
                 <td className="font-mono">{o.entry_price}</td>
                 <td className="font-mono">{o.stop_loss}</td>
+                <td className="font-mono">{o.take_profit}</td>
                 <td>
                   <Button
                     variant="destructive"
