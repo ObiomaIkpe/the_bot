@@ -288,6 +288,32 @@ class PositionTracker:
                 self.user_id, self.model_config["model_name"],
             )
             db.commit()
+        except Exception as e:
+            # 2026-09-04 fix: unlike every other risky operation in this
+            # file (bridge calls above), this DB write previously had no
+            # except clause at all -- a failure here propagated straight
+            # out of check_positions()'s for-loop, silently skipping
+            # every OTHER tracked ticket for this subscriber for the rest
+            # of this poll (only caught, generically, at the outer
+            # poll_once() level, and never journaled). Also more
+            # dangerous than a normal write failure: the broker-side
+            # partial close above ALREADY happened -- real money already
+            # moved -- before this write was even attempted. If left
+            # retryable, the next poll would call
+            # bridge.close_position_partial() a SECOND time against the
+            # now-smaller remaining volume, over-closing the position.
+            # So: roll back, journal loudly (needs manual reconciliation
+            # of this ticket's partial-close numbers), and mark it
+            # partial_closed anyway -- the broker action is real and
+            # irreversible; retrying it would compound the problem
+            # instead of fixing the missing record.
+            db.rollback()
+            self._emit_check_failure(
+                "partial_close_db_write_failed", e, ticket=ticket,
+                note="broker-side partial close already executed -- DB record failed, needs manual reconciliation",
+            )
+            info["partial_closed"] = True
+            return
         finally:
             db.close()
 
@@ -334,6 +360,21 @@ class PositionTracker:
                 self.user_id, self.model_config["model_name"],
             )
             db.commit()
+        except Exception as e:
+            # 2026-09-04 fix: same class of gap as _do_partial_close()'s
+            # own comment -- previously no except clause at all here, so
+            # a write failure propagated out of check_positions()'s
+            # for-loop, silently skipping every OTHER tracked ticket for
+            # this subscriber for the rest of this poll, never journaled.
+            # Simpler than the partial-close case, though: this function
+            # only ever READS broker history (get_position_history()
+            # above), never triggers a broker-side action -- so it's safe
+            # to just roll back, journal, and leave the ticket in
+            # self._tracked for an ordinary retry next poll, same as the
+            # "history cache lag" branch above already does.
+            db.rollback()
+            self._emit_check_failure("final_close_db_write_failed", e, ticket=ticket)
+            return
         finally:
             db.close()
 

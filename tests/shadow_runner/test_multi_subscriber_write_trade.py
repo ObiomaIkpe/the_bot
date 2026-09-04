@@ -12,8 +12,9 @@ are specifically about who gets which row, which write_trade_lookup.py
 (monkeypatches write_trade() entirely) can't prove.
 """
 import datetime
+import uuid
 
-from app.models import Trade, User
+from app.models import Event, Trade, User
 from shadow_runner.config import ShadowRunnerConfig
 from shadow_runner.day_state import CurrentDay
 from shadow_runner.runner import ShadowRunner, SHADOW_NOTIONAL_RISK_PCT
@@ -227,3 +228,73 @@ def test_one_subscribers_write_failure_does_not_block_the_others(db_session):
     rows = db_session.query(Trade).filter(Trade.model == "fvg").all()
     user_ids = {r.user_id for r in rows}
     assert user_ids == {None, healthy_id}
+
+
+def test_a_db_commit_failure_for_one_subscriber_does_not_cascade_to_the_next(db_session):
+    """2026-09-04, part of the write-path audit prompted by "every trade
+    activity per user per model per account has to be accounted for".
+    The PRECEDING test only proves isolation for a failure BEFORE any DB
+    call (om.get_real_outcome() raising) -- every subscriber in this
+    loop shares ONE db session, and a failure AT commit() itself (a real
+    constraint violation, not a plain Python exception) leaves
+    Postgres's connection in an aborted-transaction state. Confirmed,
+    before this fix, that this silently dropped every SUBSEQUENT
+    subscriber's row too -- not just the broken one's -- with nothing
+    distinguishing "this subscriber's write failed" from "an earlier one
+    poisoned the session," and nothing journaled anywhere but a raw
+    log.exception() to stdout.
+
+    Forces a real DB-level failure -- a ticket number beyond even
+    BigInteger's own range (migration 0022's fix, tested for resilience
+    against recurring at an even larger scale) -- for the FIRST
+    subscriber, both subscribers otherwise perfectly valid, real users.
+    Proves the SECOND still gets its row, AND that the first one's
+    failure is actually journaled (not just logged), for BOTH
+    subscribers being real, so the journal write itself isn't
+    incidentally broken by the same failure being tested."""
+    config = make_config()
+    runner = ShadowRunner(config, bridge=FakeBridge(), session_factory=lambda: db_session)
+    broken_sub = _make_user(db_session, "cascade_broken@example.com")
+    healthy_sub = _make_user(db_session, "cascade_healthy@example.com")
+    broken_id, healthy_id = broken_sub.user_id, healthy_sub.user_id
+
+    date = datetime.date(2026, 8, 3)
+    cd, trade = _make_cd_and_trade(date)
+
+    real_outcome_broken = {
+        "position_ticket": 99_999_999_999_999_999_999,  # beyond BigInteger's own ~9.2e18 max
+        "fill_price": 1.10505, "fill_time_utc": cd.bars[2]["time_utc"],
+        "fill_time_ny": cd.bars[2]["time_ny"], "close_price": 1.10700,
+        "close_time_utc": cd.bars[4]["time_utc"], "close_time_ny": cd.bars[4]["time_ny"],
+        "profit": 5.0, "close_reason": "take_profit",
+    }
+    real_outcome_healthy = dict(real_outcome_broken, position_ticket=222)
+
+    # Insertion order matters -- dict iteration is insertion order, so
+    # the broken one's write is attempted first, healthy's second.
+    cd.order_managers[broken_id] = FakeSubscriberOrderManager(
+        {"model_name": "fvg", "status": "active", "risk_pct": 0.01, "magic_number": 900301},
+        FakeBridge(), real_outcome_broken,
+    )
+    cd.order_managers[healthy_id] = FakeSubscriberOrderManager(
+        {"model_name": "fvg", "status": "active", "risk_pct": 0.01, "magic_number": 900302},
+        FakeBridge(), real_outcome_healthy,
+    )
+
+    runner._write_trade(cd, trade)  # must not raise
+
+    rows = db_session.query(Trade).filter(Trade.model == "fvg").all()
+    user_ids = {r.user_id for r in rows}
+    assert healthy_id in user_ids, "healthy subscriber's row must exist even though an earlier one failed at commit"
+    assert broken_id not in user_ids, "the broken subscriber genuinely gets no row -- this isn't pretending the failure didn't happen"
+
+    failure_events = (
+        db_session.query(Event)
+        .filter(
+            Event.event_type == "safety_check_failed",
+            Event.details["check_name"].astext == "write_real_outcome_trade_failed",
+        )
+        .all()
+    )
+    assert len(failure_events) == 1, "the broken subscriber's write failure must be journaled, not just logged"
+    assert failure_events[0].user_id == broken_id

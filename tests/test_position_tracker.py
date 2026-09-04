@@ -115,6 +115,41 @@ class FakeQuery:
         return matches[0]
 
 
+class FailOnceCommitDB:
+    """2026-09-04, write-path audit: a FakeDB variant whose commit()
+    raises on its FIRST call only (simulating a genuine DB-level
+    failure on the actual write), then behaves normally on every call
+    after -- needed because _emit_check_failure() opens its OWN fresh
+    session via this same session_factory to journal the failure, and
+    that journal write must actually succeed, not fail for the same
+    reason being tested. Subclassing FakeDB directly (rather than
+    composing) keeps every other method identical."""
+
+    def __init__(self, rows=None):
+        self._rows_by_trade_id = {r.trade_id: r for r in (rows or [])}
+        self.added_events = []
+        self.committed = False
+        self._commit_calls = 0
+
+    def query(self, model_cls):
+        return FakeQuery(self._rows_by_trade_id)
+
+    def add(self, obj):
+        self.added_events.append(obj)
+
+    def commit(self):
+        self._commit_calls += 1
+        if self._commit_calls == 1:
+            raise Exception("simulated DB commit failure")
+        self.committed = True
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+
 class FakeDB:
     """Just enough to satisfy persistence.get_open_real_trades /
     update_trade_partial_close / update_trade_final_close / write_event,
@@ -135,6 +170,9 @@ class FakeDB:
 
     def commit(self):
         self.committed = True
+
+    def rollback(self):
+        pass
 
     def close(self):
         pass
@@ -310,6 +348,124 @@ def test_check_positions_failure_is_journaled_not_just_logged():
     failure_events = [e for e in written_events if e.get("event_type") == "safety_check_failed"]
     assert len(failure_events) == 1
     assert failure_events[0]["check_name"] == "position_tracker_check_positions"
+
+
+# ---------- write-path audit, 2026-09-04: DB-commit-level failures ----------
+#
+# Prompted by "every trade activity per user per model per account has
+# to be accounted for" -- these three functions (_do_partial_close,
+# _handle_vanished, and check_positions()'s per-ticket loop around
+# them) previously had NO except clause around their DB write at all,
+# unlike every other risky operation in this file. A failure there
+# propagated straight out of check_positions()'s for-loop, silently
+# skipping every OTHER tracked ticket for this subscriber for the rest
+# of that poll, caught only generically (and never journaled) at
+# runner.py's outer poll_once() level.
+
+def test_partial_close_db_write_failure_is_journaled_and_marks_partial_closed():
+    """The broker-side partial close ALREADY happened by the time this
+    DB write is attempted -- a failure here must NOT leave the ticket
+    retryable, or the next poll would call
+    bridge.close_position_partial() a SECOND time against the
+    already-reduced volume, over-closing the position. Must instead be
+    journaled (needs manual reconciliation) and marked partial_closed
+    anyway, matching the fix's own reasoning."""
+    bridge = FakePositionBridge()
+    bridge.add_open_position(2001, magic=900001, volume=0.02)
+    far_past_entry = datetime.datetime.now() - datetime.timedelta(days=5)
+    db = FailOnceCommitDB(rows=[FakeTradeRow("trade-abc", 2001, "open", far_past_entry)])
+    tracker = PositionTracker(bridge, lambda: db, "user1", make_model_config())
+    tracker.register_new_position(2001, "trade-abc", far_past_entry)
+
+    import shadow_runner.persistence as persistence_module
+    import shadow_runner.position_tracker as pt_module
+    written_events = []
+    original_write_event = persistence_module.write_event
+
+    def spy_write_event(db_arg, event, user_id, model):
+        written_events.append(event)
+        return original_write_event(db_arg, event, user_id, model)
+
+    pt_module.write_event = spy_write_event
+    try:
+        tracker.check_positions()  # must not raise
+    finally:
+        pt_module.write_event = original_write_event
+
+    # The broker-side action DID happen (real money already moved) --
+    # confirm that part still occurred, exactly once.
+    assert len(bridge.partial_closes) == 1
+    # NOTE on what this fake harness can and can't prove: FakeTradeRow
+    # is mutated directly by update_trade_partial_close(), in memory,
+    # BEFORE commit() is even called -- unlike a real Postgres session,
+    # this harness has no way to model a failed commit actually rolling
+    # the row back. So real_status legitimately reads "partial_closed"
+    # here even though the commit "failed" -- that's a limitation of the
+    # fake DB, not a claim about real production behavior (a real
+    # failed commit really does roll back). What IS accurately provable
+    # with this harness, and what actually matters operationally: the
+    # failure gets journaled (below), and the tracker correctly marks
+    # itself so a retry doesn't double-act on the broker.
+    assert db._rows_by_trade_id["trade-abc"].real_status == "partial_closed"
+    # Marked partial_closed anyway, so a retry doesn't double-act on the broker.
+    assert tracker._tracked[2001]["partial_closed"] is True
+
+    failure_events = [e for e in written_events if e.get("event_type") == "safety_check_failed"]
+    assert len(failure_events) == 1
+    assert failure_events[0]["check_name"] == "partial_close_db_write_failed"
+    assert failure_events[0]["ticket"] == 2001
+
+    # A second poll cycle must NOT retry the broker-side partial close.
+    tracker.check_positions()
+    assert len(bridge.partial_closes) == 1, "must not double-act on the broker after a DB-write failure"
+
+
+def test_handle_vanished_db_write_failure_is_journaled_and_keeps_ticket_tracked_for_retry():
+    """Unlike partial-close, this function only ever READS broker
+    history -- no broker-side action to accidentally duplicate -- so a
+    DB write failure here should be safe to just journal and leave the
+    ticket tracked for an ordinary retry next poll, same as the
+    existing history-cache-lag branch already does."""
+    bridge = FakePositionBridge()
+    bridge.add_open_position(2001, magic=900001)
+    entry_time = datetime.datetime.now()
+    db = FailOnceCommitDB(rows=[FakeTradeRow("trade-abc", 2001, "open", entry_time)])
+    tracker = PositionTracker(bridge, lambda: db, "user1", make_model_config())
+    tracker.register_new_position(2001, "trade-abc", entry_time)
+
+    bridge.simulate_vanish(2001, close_price=1.1090, profit=15.0, close_reason="take_profit")
+
+    import shadow_runner.persistence as persistence_module
+    import shadow_runner.position_tracker as pt_module
+    written_events = []
+    original_write_event = persistence_module.write_event
+
+    def spy_write_event(db_arg, event, user_id, model):
+        written_events.append(event)
+        return original_write_event(db_arg, event, user_id, model)
+
+    pt_module.write_event = spy_write_event
+    try:
+        tracker.check_positions()  # must not raise
+    finally:
+        pt_module.write_event = original_write_event
+
+    assert 2001 in tracker._tracked, "must stay tracked so the next poll retries the write"
+    # Same fake-harness limitation as the partial-close test above --
+    # FakeTradeRow is mutated directly before commit() is called, so
+    # this can't prove a real rollback happened, only that the ticket
+    # correctly stayed tracked and the failure got journaled.
+
+    failure_events = [e for e in written_events if e.get("event_type") == "safety_check_failed"]
+    assert len(failure_events) == 1
+    assert failure_events[0]["check_name"] == "final_close_db_write_failed"
+    assert failure_events[0]["ticket"] == 2001
+
+    # Next poll: commit() now succeeds (FailOnceCommitDB only fails
+    # once) -- the retry must actually finish the job.
+    tracker.check_positions()
+    assert 2001 not in tracker._tracked
+    assert db._rows_by_trade_id["trade-abc"].real_status == "closed"
 
 
 # ---------- check_for_orphans() -- continuous orphan-check, added 2026-09-04 ----------

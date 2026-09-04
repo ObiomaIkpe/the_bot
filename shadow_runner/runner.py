@@ -1068,10 +1068,54 @@ class ShadowRunner:
                         self.position_trackers[user_id].register_new_position(
                             real_outcome["position_ticket"], sub_row.trade_id, entry_bar["time_ny"],
                         )
-                except Exception:
+                except Exception as e:
                     log.exception(
                         "Writing the real-outcome trade failed for user_id=%s -- "
                         "continuing to the next subscriber", user_id,
                     )
+                    # 2026-09-04 fix: every subscriber in this loop shares
+                    # ONE db session (see this function's docstring for
+                    # why -- the shadow row + every subscriber's row all
+                    # go through it). A failure AT commit() (a real
+                    # constraint/FK violation, not just an exception from
+                    # om.get_real_outcome() before any DB call) leaves
+                    # that shared session in Postgres's aborted-
+                    # transaction state -- confirmed empirically (see
+                    # tests/shadow_runner/test_multi_subscriber_write_trade.py's
+                    # ...at_commit_time_blocks_the_next test): every
+                    # subsequent subscriber in this same loop would then
+                    # ALSO silently fail to get a row, cascading from one
+                    # bad write, with nothing distinguishing "this
+                    # subscriber's own write failed" from "an earlier
+                    # subscriber poisoned the session." Roll back before
+                    # continuing so subsequent subscribers get a clean
+                    # session to write into.
+                    db.rollback()
+                    # Also journal loudly, not just log.exception() to
+                    # stdout -- this is a real trade write silently not
+                    # happening, exactly the class of failure this
+                    # session's other fixes exist to surface. Own
+                    # try/except: if even journaling THIS failure fails,
+                    # don't let that crash the loop too -- the log.exception()
+                    # above already made it visible in the container logs
+                    # even in that worst case.
+                    try:
+                        write_event(
+                            db,
+                            {
+                                "event_type": "safety_check_failed",
+                                "timestamp": datetime.now(NY_TZ).replace(tzinfo=None),
+                                "check_name": "write_real_outcome_trade_failed",
+                                "error": str(e),
+                            },
+                            user_id, self.config.model,
+                        )
+                        db.commit()
+                    except Exception:
+                        log.exception(
+                            "Additionally failed to journal the above write failure for user_id=%s",
+                            user_id,
+                        )
+                        db.rollback()
         finally:
             db.close()
