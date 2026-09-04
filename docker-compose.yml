@@ -59,7 +59,15 @@ services:
     command: python -m shadow_runner.main
     env_file: ./.env
     environment:
-      BRIDGE_URL: http://38.247.137.208:8001
+      # Dedicated price-only reference account (2026-09-04) -- see
+      # DEDICATED_REFERENCE_ACCOUNT.md. Detection's price feed only;
+      # never places real orders (orders_enabled=false on this bridge
+      # worker, and its ModelConfig stays 'disabled' forever, deliberately
+      # not tied to whichever account also trades). Was
+      # http://38.247.137.208:8001 (the real trading account's own
+      # bridge, port 8001) -- kept here as the rollback value if this
+      # new feed ever needs to be reverted.
+      BRIDGE_URL: http://38.247.137.208:8002
       SHADOW_RUNNER_USER_ID: d4469ab9-742c-4656-8959-c21602dc71c5
       # Same monitoring note as api's block above -- uncomment once a
       # real check exists for THIS service (a different URL than api's).
