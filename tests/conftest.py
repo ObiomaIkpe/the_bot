@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -10,8 +12,13 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
 
+# pytest-xdist runs each worker as its own separate process, each with its
+# own "session" scope -- without a per-worker suffix here, every worker
+# would DROP/CREATE the *same* database name and race each other. Serial
+# runs (no PYTEST_XDIST_WORKER set) keep the exact plain name as before.
+_worker_suffix = f"_{os.environ['PYTEST_XDIST_WORKER']}" if "PYTEST_XDIST_WORKER" in os.environ else ""
 _TEST_DB_URL = make_url(settings.database_url).set(
-    database=make_url(settings.database_url).database + "_test"
+    database=make_url(settings.database_url).database + "_test" + _worker_suffix
 )
 _ADMIN_DB_URL = _TEST_DB_URL.set(database="postgres")
 
