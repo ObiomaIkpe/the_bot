@@ -1,4 +1,5 @@
 import datetime
+import logging
 import uuid
 from zoneinfo import ZoneInfo
 
@@ -7,10 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.telegram import alert_for_event
 from app.models.model_config import ModelConfig
 from app.models.user import User
 from app.schemas.model_configs import ModelConfigOut, ModelConfigUpdate
 from shadow_runner.persistence import write_event
+
+log = logging.getLogger("app.routers.model_configs")
 
 router = APIRouter(prefix="/model-configs", tags=["model-configs"])
 
@@ -57,16 +61,54 @@ def update_model_config(
     db.commit()
     db.refresh(row)
 
-    write_event(
-        db,
-        {
-            "event_type": "model_config_updated",
-            "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
-            "changed_fields": changes,
-        },
-        current_user.user_id,
-        row.model_name,
-    )
-    db.commit()
+    # 2026-09-04 write-path audit fix: the real change above (e.g.
+    # flipping a model to active -- REAL trading starting for this
+    # user/model) is already durably committed by this point, in its
+    # own separate transaction. A failure in this second commit
+    # (journaling model_config_updated) previously had no try/except at
+    # all, so it would 500 the request -- misleadingly telling the user
+    # their change failed when it had actually already taken effect.
+    # Same class of bug as trading.py's close_position/cancel_pending_
+    # order, arguably higher-stakes here: a user seeing a false error
+    # might not realize their model really is now active (or inactive).
+    try:
+        write_event(
+            db,
+            {
+                "event_type": "model_config_updated",
+                "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
+                "changed_fields": changes,
+            },
+            current_user.user_id,
+            row.model_name,
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        log.exception(
+            "Journaling model_config_updated for config_id=%s failed (the actual change "
+            "above already committed regardless) -- attempting to journal the failure itself",
+            config_id,
+        )
+        try:
+            write_event(
+                db,
+                {
+                    "event_type": "safety_check_failed",
+                    "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
+                    "check_name": "model_config_updated_journal_failed",
+                    "error": str(e),
+                },
+                current_user.user_id, row.model_name,
+            )
+            db.commit()
+        except Exception:
+            log.exception("Additionally failed to journal the above model-config journaling failure")
+            db.rollback()
+        else:
+            alert_for_event(
+                {"event_type": "safety_check_failed", "check_name": "model_config_updated_journal_failed", "error": str(e)},
+                current_user.user_id, row.model_name,
+            )
 
     return row

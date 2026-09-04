@@ -1,4 +1,5 @@
 from app.models.model_config import ModelConfig
+from app.routers import model_configs
 
 
 def _register_and_login(client, email):
@@ -101,3 +102,29 @@ def test_patch_model_config_no_fields_is_400(client, db_session):
 
     resp = client.patch(f"/model-configs/{mc.config_id}", json={}, headers=_auth_header(token))
     assert resp.status_code == 400
+
+
+def test_patch_model_config_journal_failure_does_not_turn_a_real_change_into_a_500(client, db_session, monkeypatch):
+    """2026-09-04 write-path audit fix: the real status change is
+    already durably committed in its own transaction before this
+    endpoint even attempts to journal it -- so a journal-write failure
+    must not misleadingly turn a REAL, already-applied change (e.g.
+    real trading turning on for this user/model) into an apparent
+    500 failure."""
+    token = _register_and_login(client, "mcj@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "shadow"
+    db_session.commit()
+
+    def broken_write_event(db, event, user_id, model):
+        raise Exception("simulated journal write failure")
+
+    monkeypatch.setattr(model_configs, "write_event", broken_write_event)
+
+    resp = client.patch(f"/model-configs/{mc.config_id}", json={"status": "active"}, headers=_auth_header(token))
+    assert resp.status_code == 200, "the real status change already committed -- must not report failure"
+    assert resp.json()["status"] == "active"
+
+    db_session.refresh(mc)
+    assert mc.status == "active", "the real change must have actually taken effect"

@@ -9,6 +9,7 @@ those stay single-user-scoped for every ordinary caller; this file is
 the one place in the whole API that reads across ALL users on purpose.
 """
 import datetime
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.deps import get_current_admin
 from app.core.provisioning import provision_model_for_all_users
+from app.core.telegram import alert_for_event
 from app.core.trade_story import _orphan_recovery_events
 from app.models.audit_log import AuditLog
 from app.models.event import Event
@@ -34,8 +36,11 @@ from app.schemas.admin import (
     AdminTradeOut,
 )
 from app.schemas.model import AdminModelCreateOut, ModelCreate
+from shadow_runner.persistence import write_event
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+log = logging.getLogger("app.routers.admin")
 
 
 @router.get("/events", response_model=list[AdminEventOut])
@@ -289,7 +294,50 @@ def create_model(
         )
     db.refresh(model)
 
-    backfilled = provision_model_for_all_users(db, payload.model_name)
+    # 2026-09-04 write-path audit fix: the model row above is already
+    # durably committed by this point -- it's real and live (shows up
+    # in GET /models immediately) regardless of what happens next. A
+    # failure backfilling ModelConfig rows for existing users (e.g.
+    # _insert_model_configs_with_retry() exhausting its magic-number
+    # allocation retries) previously propagated uncaught, 500ing an
+    # admin action that had actually mostly succeeded -- and, worse,
+    # silently leaving a model registered with zero users able to see
+    # it as even "disabled" for their account (no ModelConfig row at
+    # all), a genuine per-user-per-model gap with no error surfaced
+    # anywhere to explain it. Lower-stakes than the trading/settings
+    # instances of this same bug (this is a rare, admin-only action,
+    # not routine trading), but the same class of "real action already
+    # happened, a later step failing shouldn't lie about that" gap --
+    # fixed the same way for consistency, not left as an exception.
+    try:
+        backfilled = provision_model_for_all_users(db, payload.model_name)
+    except Exception as e:
+        db.rollback()
+        log.exception(
+            "Backfilling ModelConfig rows for new model '%s' failed (the model itself "
+            "already committed regardless)", payload.model_name,
+        )
+        backfilled = 0
+        try:
+            write_event(
+                db,
+                {
+                    "event_type": "safety_check_failed",
+                    "timestamp": datetime.datetime.utcnow(),
+                    "check_name": "model_backfill_failed",
+                    "error": str(e),
+                },
+                _admin.user_id, payload.model_name,
+            )
+            db.commit()
+        except Exception:
+            log.exception("Additionally failed to journal the above model-backfill failure")
+            db.rollback()
+        else:
+            alert_for_event(
+                {"event_type": "safety_check_failed", "check_name": "model_backfill_failed", "error": str(e)},
+                _admin.user_id, payload.model_name,
+            )
 
     return AdminModelCreateOut(
         model_name=model.model_name,

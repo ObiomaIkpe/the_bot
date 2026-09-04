@@ -1,4 +1,5 @@
 from app.models.audit_log import AuditLog
+from app.routers import auth as auth_router
 
 
 def test_register_creates_user(client):
@@ -227,6 +228,30 @@ def test_register_writes_audit_log(client, db_session):
     assert row.actor_type == "user"
     assert str(row.actor_id) == user_id
     assert row.actor_label == "audit_reg@example.com"
+
+
+def test_register_audit_log_failure_does_not_hide_a_real_successful_registration(client, monkeypatch):
+    """2026-09-04 write-path audit fix: the user account (and their
+    model configs) are already durably committed before this final
+    audit-log commit even runs. Proves a failure there no longer 500s
+    a registration that actually succeeded."""
+    def broken_write_audit_log(db, event_type, actor_type, **kwargs):
+        raise Exception("simulated audit log write failure")
+
+    monkeypatch.setattr(auth_router, "write_audit_log", broken_write_audit_log)
+
+    resp = client.post(
+        "/auth/register",
+        json={"email": "audit_fail_reg@example.com", "password": "a-real-password"},
+    )
+    assert resp.status_code == 201, "the account itself already committed -- must not report failure"
+    assert resp.json()["email"] == "audit_fail_reg@example.com"
+
+    monkeypatch.undo()
+    login_resp = client.post(
+        "/auth/login", data={"username": "audit_fail_reg@example.com", "password": "a-real-password"},
+    )
+    assert login_resp.status_code == 200, "the account must actually be usable"
 
 
 def test_login_success_writes_audit_log(client, db_session):

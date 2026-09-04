@@ -1,5 +1,6 @@
 from app.models.model_config import ModelConfig
 from app.models.user_settings import UserSettings
+from app.routers import settings as settings_router
 
 
 def _register_and_login(client, email):
@@ -68,6 +69,29 @@ def test_patch_settings_updates_is_paused_and_journals_per_model(client, db_sess
     # PATCH /settings fans out one event per model_config the user has.
     assert len(journaled) == 3, "one event per model_config the user has"
     assert {e["model"] for e in journaled} == {"fvg", "ob", "fvg_ob"}
+
+
+def test_patch_settings_journal_failure_does_not_turn_a_real_pause_into_a_500(client, db_session, monkeypatch):
+    """2026-09-04 write-path audit fix: is_paused's real change is
+    already durably committed, in its own transaction, before this
+    endpoint attempts to journal it per-model. Arguably the highest-
+    stakes instance of this bug class in the whole audit -- is_paused
+    is the account-wide emergency stop; a user must never see a false
+    failure for a pause/unpause that actually succeeded."""
+    token = _register_and_login(client, "sd_journal_fail@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+
+    def broken_write_event(db, event, user_id, model):
+        raise Exception("simulated journal write failure")
+
+    monkeypatch.setattr(settings_router, "write_event", broken_write_event)
+
+    resp = client.patch("/settings", json={"is_paused": True}, headers=_auth_header(token))
+    assert resp.status_code == 200, "the real is_paused change already committed -- must not report failure"
+    assert resp.json()["is_paused"] is True
+
+    row = db_session.query(UserSettings).filter_by(user_id=user_id).one()
+    assert row.is_paused is True, "the real change must have actually taken effect"
 
 
 def test_patch_settings_no_model_configs_is_a_noop_journal(client, db_session):

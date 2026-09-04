@@ -139,3 +139,33 @@ def test_creating_a_model_backfills_existing_users_immediately(client, db_sessio
     mc_resp = client.get("/model-configs", headers=_auth_header(existing_token))
     names = {mc["model_name"] for mc in mc_resp.json()}
     assert "drt" in names
+
+
+def test_backfill_failure_does_not_hide_that_the_model_was_actually_created(client, db_session, monkeypatch):
+    """2026-09-04 write-path audit fix: the Model row is already
+    durably committed before the backfill step even runs. A failure
+    backfilling ModelConfig rows for existing users previously
+    propagated uncaught, 500ing an action that had actually mostly
+    succeeded (the model IS real and live) -- proves it now returns
+    201 with backfilled_users=0 instead, so the caller at least knows
+    the truth rather than getting a misleading blanket failure."""
+    admin_token = _register_and_login(client, "models_admin5@example.com")
+    _promote(db_session, "models_admin5@example.com")
+
+    import app.routers.admin as admin_module
+
+    def broken_backfill(db, model_name):
+        raise Exception("simulated backfill failure")
+
+    monkeypatch.setattr(admin_module, "provision_model_for_all_users", broken_backfill)
+
+    resp = client.post(
+        "/admin/models", json={"model_name": "drt2", "display_name": "Displacement 2"},
+        headers=_auth_header(admin_token),
+    )
+    assert resp.status_code == 201, "the model itself was actually created -- must not report failure"
+    assert resp.json()["model_name"] == "drt2"
+    assert resp.json()["backfilled_users"] == 0
+
+    models = client.get("/models", headers=_auth_header(admin_token)).json()
+    assert any(m["model_name"] == "drt2" for m in models), "the model must actually be registered"

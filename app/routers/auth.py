@@ -39,13 +39,30 @@ def register(payload: UserRegister, request: Request, db: Session = Depends(get_
 
     # Its own commit, same reasoning as above -- provision_new_user_defaults
     # already committed, so there's nothing left to keep this atomic with.
-    write_audit_log(
-        db, "user_registered", "user",
-        actor_id=user.user_id, actor_label=user.email,
-        resource_type="user", resource_id=user.user_id,
-        ip_address=client_ip(request),
-    )
-    db.commit()
+    #
+    # 2026-09-04 write-path audit fix: the user (and their model
+    # configs) are already real and durably committed by this point --
+    # a failure journaling JUST the user_registered audit row must not
+    # 500 a registration that actually succeeded (the account works
+    # fine; the user could otherwise get a false "registration failed"
+    # and be confused when a retry then 409s as "already registered").
+    # Lower stakes than this pass's other fixes (a missing audit-log
+    # row for a one-time, self-evident action, not a live trading
+    # state), so no alert here -- just don't lie about success.
+    try:
+        write_audit_log(
+            db, "user_registered", "user",
+            actor_id=user.user_id, actor_label=user.email,
+            resource_type="user", resource_id=user.user_id,
+            ip_address=client_ip(request),
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception(
+            "Journaling user_registered failed for user_id=%s (the account itself already "
+            "committed regardless)", user.user_id,
+        )
 
     logger.info("User registered: user_id=%s", user.user_id)
     return user
