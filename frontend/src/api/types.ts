@@ -27,6 +27,9 @@ export interface TradeOut {
   exit_price: number | null;
   outcome: string | null;
   realized_r: number | null;
+  // % of equity actually risked on THIS trade -- distinct from
+  // ModelConfigOut.risk_pct below (the model's current setting).
+  risk_pct_used: number;
   entry_time_utc: string;
   entry_time_ny: string;
   exit_time_utc: string | null;

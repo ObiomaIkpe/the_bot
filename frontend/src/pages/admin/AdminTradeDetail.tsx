@@ -58,6 +58,8 @@ export function AdminTradeDetail() {
                 <dd className="m-0 font-mono">{trade.stop_price}</dd>
                 <dt className="text-text-muted">Target</dt>
                 <dd className="m-0 font-mono">{trade.target_price}</dd>
+                <dt className="text-text-muted">Risk</dt>
+                <dd className="m-0 font-mono">{(trade.risk_pct_used * 100).toFixed(1)}%</dd>
                 <dt className="text-text-muted">Exit</dt>
                 <dd className="m-0 font-mono">{trade.exit_price ?? "-"}</dd>
                 <dt className="text-text-muted">Outcome</dt>

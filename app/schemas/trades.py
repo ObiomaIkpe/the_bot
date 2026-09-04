@@ -18,6 +18,10 @@ class TradeOut(BaseModel):
     exit_price: float | None
     outcome: str | None
     realized_r: float | None
+    # % of equity actually risked on THIS trade -- distinct from
+    # ModelConfigOut.risk_pct, which is the model's current configured
+    # setting and can drift from what a past trade actually used.
+    risk_pct_used: float
 
     entry_time_utc: datetime.datetime
     entry_time_ny: datetime.datetime

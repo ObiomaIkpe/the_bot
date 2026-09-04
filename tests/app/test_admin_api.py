@@ -123,6 +123,29 @@ def test_admin_trades_shows_rows_from_multiple_users(client, db_session):
     assert emails == {"admin_trade_a@example.com", "admin_trade_b@example.com"}
 
 
+def test_admin_trades_includes_risk_pct_used(client, db_session):
+    """2026-09-04: AdminTradeOut.from_model() hand-picks fields off
+    Trade -- risk_pct_used must be explicitly wired through, same gap
+    as the trader-facing TradeOut."""
+    token = _register_and_login(client, "admin_trade_risk@example.com")
+    user = db_session.query(User).filter(User.email == "admin_trade_risk@example.com").first()
+    _promote(db_session, "admin_trade_risk@example.com")
+
+    now = datetime.datetime.utcnow()
+    db_session.add(
+        Trade(
+            user_id=user.user_id, model="fvg", is_shadow=True, direction="long",
+            entry_price=1.1, stop_price=1.0, target_price=1.3,
+            entry_time_utc=now, entry_time_ny=now, risk_pct_used=0.0225, equity_before=1000.0,
+        )
+    )
+    db_session.commit()
+
+    resp = client.get("/admin/trades", headers=_auth_header(token))
+    assert resp.status_code == 200
+    assert resp.json()[0]["risk_pct_used"] == 0.0225
+
+
 def test_admin_trades_includes_ownerless_shadow_row(client, db_session):
     """Multi-user fan-out, piece 2: /admin/trades must use an OUTER
     join -- the model's ownerless shadow row (Trade.user_id IS NULL,

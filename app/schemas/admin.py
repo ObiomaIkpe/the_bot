@@ -69,6 +69,10 @@ class AdminTradeOut(BaseModel):
     exit_price: float | None
     outcome: str | None
     realized_r: float | None
+    # % of equity actually risked on THIS trade -- see TradeOut's own
+    # comment on the same field for why this differs from the model's
+    # current configured risk_pct.
+    risk_pct_used: float
 
     entry_time_utc: datetime.datetime
     entry_time_ny: datetime.datetime
@@ -94,6 +98,7 @@ class AdminTradeOut(BaseModel):
             exit_price=trade.exit_price,
             outcome=trade.outcome,
             realized_r=trade.realized_r,
+            risk_pct_used=trade.risk_pct_used,
             entry_time_utc=trade.entry_time_utc,
             entry_time_ny=trade.entry_time_ny,
             exit_time_utc=trade.exit_time_utc,

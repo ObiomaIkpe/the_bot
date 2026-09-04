@@ -46,6 +46,21 @@ def test_list_trades_requires_auth(client):
     assert resp.status_code == 401
 
 
+def test_list_trades_includes_risk_pct_used(client, db_session):
+    """2026-09-04: risk_pct_used was on the Trade model and stored
+    correctly all along, but TradeOut never exposed it -- the frontend
+    had no way to show what was actually risked on a given trade."""
+    token = _register_and_login(client, "risk_pct_check@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+
+    db_session.add(_make_trade(user_id, risk_pct_used=0.0175))
+    db_session.commit()
+
+    resp = client.get("/trades", headers=_auth_header(token))
+    assert resp.status_code == 200
+    assert resp.json()[0]["risk_pct_used"] == 0.0175
+
+
 def test_list_trades_filters_by_outcome_and_shadow(client, db_session):
     token = _register_and_login(client, "tc@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
