@@ -555,6 +555,80 @@ def write_trade(
     return row
 
 
+def write_orphan_trade(
+    db: Session,
+    position: dict,
+    target_price: float,
+    entry_time_utc,
+    entry_time_ny,
+    user_id: str,
+    model: str,
+    risk_pct: float,
+    equity_before: float,
+) -> Trade:
+    """
+    Multi-user fan-out follow-up (2026-09-04) -- closes a real gap found
+    after this month's incident: `shadow_runner/orphan_recovery.py`
+    could find and even successfully heal (attach a take-profit to) a
+    genuinely orphaned position, but never gave it a permanent record --
+    so once it eventually closed, it vanished from trade history
+    forever, exactly like it never happened. This is what actually
+    fixes that: writes a real Trade row the moment an orphan is found,
+    using its ACTUAL current broker state, and hands it real_status
+    ='open' so it feeds into the exact same ongoing tracking (5pm
+    partial-close, eventual real close recording) a normally-caught
+    fill already gets.
+
+    Deliberately NOT built on top of write_trade() -- that function
+    unconditionally calls compute_realized_r(), which assumes a fully-
+    resolved simulated outcome (a real exit_price) already exists.
+    There genuinely isn't one for an orphan: it was never simulated by
+    DayOrchestrator on its own (it's the unmanaged "loser" side of a
+    race, or similar), so calling write_trade() here would crash
+    subtracting a real number from None. outcome/exit_price/realized_r/
+    exit_time_utc/equity_after all stay null instead -- confirmed
+    before building this that every trade-list page already renders
+    these gracefully as "still open" (frontend/src/lib/pnl.ts treats a
+    null outcome as open, not a crash or a miscount; every TradeHistory-
+    style page already falls back to "open"/"-" for a null outcome/
+    exit_price/realized_r -- this was already true for the ordinary
+    "real fill happened today, hasn't closed yet" case, just never
+    exercised for an orphan-originated row until now).
+    """
+    row = Trade(
+        trade_id=uuid.uuid4(),
+        user_id=user_id,
+        model=model,
+        is_shadow=False,
+        direction=position["direction"],
+        entry_price=position["open_price"],
+        stop_price=position["stop_loss"],
+        target_price=target_price,
+        exit_price=None,
+        outcome=None,
+        realized_r=None,
+        entry_time_utc=entry_time_utc,
+        entry_time_ny=entry_time_ny,
+        exit_time_utc=None,
+        risk_pct_used=risk_pct,
+        equity_before=equity_before,
+        equity_after=None,
+        setup_context={"source": "orphan_recovery"},
+        real_position_ticket=position["ticket"],
+        real_fill_price=position["open_price"],
+        real_fill_time_utc=entry_time_utc,
+        real_fill_time_ny=entry_time_ny,
+        real_close_price=None,
+        real_close_time_utc=None,
+        real_close_time_ny=None,
+        real_profit=None,
+        real_close_reason=None,
+        real_status="open",
+    )
+    db.add(row)
+    return row
+
+
 def get_open_real_trades(db: Session, user_id: str, model: str) -> list[dict]:
     """
     Phase 4 overnight-position handling. Returns every trade still

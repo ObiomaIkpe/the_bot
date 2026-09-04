@@ -128,6 +128,13 @@ def _narrate(event_type: str, details: dict) -> str:
             f"if caught live."
         )
 
+    if event_type == "orphan_trade_recorded":
+        return (
+            f"A permanent trade record was created for an orphaned position "
+            f"(ticket {details['ticket']}) the moment it was found, so it won't "
+            f"disappear from trade history once it eventually closes."
+        )
+
     if event_type == "daily_loss_threshold_crossed":
         return (
             f"Today's realized loss ({_fmt(details['realized_loss_pct'])}%) crossed the "

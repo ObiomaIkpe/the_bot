@@ -140,8 +140,8 @@ class FakeDB:
         pass
 
 
-def make_model_config(magic=900001):
-    return {"model_name": "fvg", "status": "active", "magic_number": magic}
+def make_model_config(magic=900001, risk_pct=0.01):
+    return {"model_name": "fvg", "status": "active", "magic_number": magic, "risk_pct": risk_pct}
 
 
 def test_register_new_position_tracks_it():
@@ -345,7 +345,7 @@ def test_check_for_orphans_runs_even_when_nothing_is_tracked():
     blind to the exact case it exists to catch."""
     calls = []
 
-    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink, risk_pct):
         calls.append((symbol, magic, user_id, model))
         return []
 
@@ -367,7 +367,7 @@ def test_check_for_orphans_runs_even_when_nothing_is_tracked():
 def test_check_for_orphans_throttles_within_the_interval():
     calls = []
 
-    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink, risk_pct):
         calls.append(now_ny)
         return []
 
@@ -388,7 +388,7 @@ def test_check_for_orphans_throttles_within_the_interval():
 def test_check_for_orphans_runs_again_after_the_interval_elapses():
     calls = []
 
-    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink, risk_pct):
         calls.append(now_ny)
         return []
 
@@ -411,9 +411,9 @@ def test_check_for_orphans_runs_again_after_the_interval_elapses():
 
 
 def test_check_for_orphans_journals_found_events_and_commits():
-    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink, risk_pct):
         event_sink({"event_type": "orphan_position_recovered", "timestamp": now_ny, "ticket": 999})
-        return [{"ticket": 999, "healed": True}]
+        return [{"ticket": 999, "healed": True, "trade_id": None, "entry_time_ny": None}]
 
     patch, unpatch = _patch_check_for_orphaned_positions(fake_check)
     bridge = FakePositionBridge()
@@ -445,7 +445,7 @@ def test_check_for_orphans_failure_is_journaled_not_just_logged():
         written_events.append(event)
         return original_write_event(db, event, user_id, model)
 
-    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink, risk_pct):
         raise Exception("simulated DB failure")
 
     check_patch, check_unpatch = _patch_check_for_orphaned_positions(fake_check)

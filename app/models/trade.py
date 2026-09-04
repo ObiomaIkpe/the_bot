@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import BigInteger, Boolean, CheckConstraint, Column, DateTime, Float, ForeignKey, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 
@@ -71,7 +71,13 @@ class Trade(Base):
     # only populate once OrderManager's real fill/close detection has
     # actually happened (see shadow_runner/order_manager.py's
     # get_real_outcome()).
-    real_position_ticket = Column(Integer, nullable=True)
+    # BigInteger since migration 0022 -- was a plain 32-bit Integer
+    # (max 2,147,483,647), which every real MT5 ticket actually observed
+    # 2026-09-04 already exceeded, silently failing every real trade
+    # write that reached this column (discarding the whole row, not just
+    # this field, since it's one INSERT) -- confirmed live: zero rows
+    # ever had this populated, despite weeks of real trading.
+    real_position_ticket = Column(BigInteger, nullable=True)
     real_fill_price = Column(Float, nullable=True)
     real_fill_time_utc = Column(DateTime(timezone=True), nullable=True)
     real_fill_time_ny = Column(DateTime(timezone=True), nullable=True)

@@ -131,6 +131,19 @@ VALID_EVENT_TYPES = (
     # Journals that one was found and had its take-profit target
     # attached, same as a live-caught fill would have gotten --
     "orphan_position_recovered",
+    # -- added 2026-09-04, continuous orphan-check follow-up: an orphan
+    # being found and even successfully healed (target attached) still
+    # had NO permanent trade record -- so once it eventually closed, it
+    # vanished from trade history forever, exactly as if it never
+    # happened (confirmed: this is exactly what happened to the two
+    # positions that prompted this fix, once the user closed them
+    # manually). shadow_runner/orphan_recovery.py now writes a real
+    # `trades` row (persistence.write_orphan_trade()) the moment an
+    # orphan is found, independent of whether healing (the take-profit
+    # attach) itself succeeds -- these are two separate protections, one
+    # failing must never silently cost the other. Journals that the
+    # record was created --
+    "orphan_trade_recorded",
 )
 
 # Fixes a real, stale bug: write_event() used to hardcode is_shadow=True
@@ -169,6 +182,7 @@ REAL_ACTION_EVENT_TYPES = frozenset(
         "manual_cancel_requested",
         "duplicate_fill_closed",
         "orphan_position_recovered",
+        "orphan_trade_recorded",
     }
 )
 

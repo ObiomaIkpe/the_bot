@@ -836,12 +836,20 @@ class ShadowRunner:
                             pt.bridge, self.config.symbol, pt.model_config["magic_number"],
                             db, user_id, self.config.model, now_ny,
                             event_sink=self._make_tagging_sink(collected_events, user_id),
+                            risk_pct=pt.model_config["risk_pct"],
                         )
                         if orphan_results:
                             log.warning(
                                 "Recovery: orphan check for user_id=%s found %d position(s): %s",
                                 user_id, len(orphan_results), orphan_results,
                             )
+                            # 2026-09-04 fix: hand off every orphan that got
+                            # a real trade record to THIS subscriber's own
+                            # tracker, same reasoning as
+                            # PositionTracker.check_for_orphans().
+                            for r in orphan_results:
+                                if r["trade_id"] is not None:
+                                    pt.register_new_position(r["ticket"], r["trade_id"], r["entry_time_ny"])
                     except Exception:
                         log.exception(
                             "Orphan check failed for user_id=%s -- continuing to the "

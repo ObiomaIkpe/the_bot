@@ -151,7 +151,7 @@ def test_no_orphans_when_every_open_position_is_known(db_session):
     events = []
     results = check_for_orphaned_positions(
         bridge, "EURUSDm", 900001, db_session, str(user.user_id), "fvg",
-        datetime.datetime(2026, 9, 2, 8, 0), events.append,
+        datetime.datetime(2026, 9, 2, 8, 0), events.append, risk_pct=0.01,
     )
     assert results == []
     assert events == []
@@ -183,15 +183,39 @@ def test_orphan_found_and_healed_attaches_target(db_session):
     events = []
     results = check_for_orphaned_positions(
         bridge, "EURUSDm", 900001, db_session, str(user.user_id), "fvg",
-        datetime.datetime(2026, 8, 28, 12, 0), events.append,
+        datetime.datetime(2026, 8, 28, 12, 0), events.append, risk_pct=0.01,
     )
 
-    assert results == [{"ticket": 3147397683, "healed": True}]
+    assert len(results) == 1
+    assert results[0]["ticket"] == 3147397683
+    assert results[0]["healed"] is True
+    assert results[0]["trade_id"] is not None
     assert bridge.modified == [(3147397683, (1.1680 + 1.1652) / 2)]
     recovered = [e for e in events if e["event_type"] == "orphan_position_recovered"]
     assert len(recovered) == 1
     assert recovered[0]["ticket"] == 3147397683
     assert recovered[0]["target"] == (1.1680 + 1.1652) / 2
+
+    # 2026-09-04 fix: a real, permanent Trade record for this orphan --
+    # NOT just a healed take-profit -- so it never disappears from trade
+    # history once it eventually closes.
+    recorded = [e for e in events if e["event_type"] == "orphan_trade_recorded"]
+    assert len(recorded) == 1
+    from app.models import Trade
+    row = db_session.query(Trade).filter(Trade.trade_id == results[0]["trade_id"]).one()
+    assert row.user_id == user.user_id
+    assert row.direction == "long"
+    assert row.entry_price == 1.16460
+    assert row.stop_price == 1.16395
+    assert row.target_price == (1.1680 + 1.1652) / 2
+    assert row.real_position_ticket == 3147397683
+    assert row.real_status == "open"
+    assert row.is_shadow is False
+    # No simulated outcome exists for an orphan -- genuinely open,
+    # genuinely unresolved, not a fabricated value.
+    assert row.outcome is None
+    assert row.exit_price is None
+    assert row.realized_r is None
 
 
 def test_orphan_heal_failure_emits_distinct_check_name(db_session):
@@ -213,13 +237,32 @@ def test_orphan_heal_failure_emits_distinct_check_name(db_session):
     events = []
     results = check_for_orphaned_positions(
         bridge, "EURUSDm", 900001, db_session, str(user.user_id), "fvg",
-        datetime.datetime(2026, 8, 28, 12, 0), events.append,
+        datetime.datetime(2026, 8, 28, 12, 0), events.append, risk_pct=0.01,
     )
 
-    assert results == [{"ticket": 999, "healed": False}]
+    assert len(results) == 1
+    assert results[0]["ticket"] == 999
+    assert results[0]["healed"] is False
+    # 2026-09-04 fix, the whole point of this test: healing (the
+    # take-profit attach) and recording (the permanent Trade row) are
+    # deliberately INDEPENDENT protections -- one failing must never
+    # cost the other. The heal failed above; the record must still exist.
+    assert results[0]["trade_id"] is not None
     check_failures = [e for e in events if e["event_type"] == "safety_check_failed"]
     assert len(check_failures) == 1
     assert check_failures[0]["check_name"] == "orphan_position_heal_failed"
+    recorded = [e for e in events if e["event_type"] == "orphan_trade_recorded"]
+    assert len(recorded) == 1
+
+    from app.models import Trade
+    row = db_session.query(Trade).filter(Trade.trade_id == results[0]["trade_id"]).one()
+    assert row.real_position_ticket == 999
+    assert row.real_status == "open"
+    # Heal failed before a target was ever attached on the broker side --
+    # target_price still needs a real (NOT NULL) value, so it falls back
+    # to the computed target (still computed successfully here; only the
+    # broker-side modify_position() call itself failed).
+    assert row.target_price == (1.1060 + 1.1040) / 2
 
 
 def test_positions_fetch_failure_returns_empty_and_logs_check_failure(db_session):
@@ -233,12 +276,121 @@ def test_positions_fetch_failure_returns_empty_and_logs_check_failure(db_session
     events = []
     results = check_for_orphaned_positions(
         bridge, "EURUSDm", 900001, db_session, str(user.user_id), "fvg",
-        datetime.datetime(2026, 8, 28, 12, 0), events.append,
+        datetime.datetime(2026, 8, 28, 12, 0), events.append, risk_pct=0.01,
     )
     assert results == []
     check_failures = [e for e in events if e["event_type"] == "safety_check_failed"]
     assert len(check_failures) == 1
     assert check_failures[0]["check_name"] == "orphan_position_check_bridge_call"
+
+
+def test_orphan_ticket_beyond_32bit_integer_range_still_writes(db_session):
+    """Real bug found 2026-09-04 while building the fix below: MT5
+    ticket numbers already exceed Postgres's 32-bit INTEGER range
+    (max 2,147,483,647) -- every real ticket observed this session did
+    (3147397683, 3173996588, 3173996701). Confirmed live: zero rows in
+    the production `trades` table ever had real_position_ticket
+    populated, despite weeks of real trading -- consistent with EVERY
+    real trade write silently failing at the database level the
+    instant it tried to store a ticket this large (migration 0022 fixed
+    the column type). This test uses a ticket in that exact range,
+    deliberately, so a regression back to a 32-bit column fails loudly
+    here instead of silently in production again."""
+    user = _make_user(db_session, "orphan_bigint@example.com")
+    bridge = OrphanFakeBridge()
+    fill_time = datetime.datetime(2026, 9, 2, 13, 11, 4)
+    big_ticket = 3173996588  # exceeds 2**31 - 1 (2147483647)
+    bridge._positions[big_ticket] = {
+        "ticket": big_ticket, "symbol": "EURUSDm", "direction": "long", "volume": 5.86,
+        "open_price": 1.1586, "current_price": 1.1586, "stop_loss": 1.15776, "take_profit": 0.0,
+        "profit": 0.0, "magic": 900001, "time_utc": fill_time.isoformat(), "time_ny": fill_time.isoformat(),
+    }
+    bridge.candles_response = [
+        _make_bar(fill_time - datetime.timedelta(minutes=m), 1.1600, 1.1580) for m in (30, 25, 20, 15, 10, 5)
+    ]
+
+    events = []
+    results = check_for_orphaned_positions(
+        bridge, "EURUSDm", 900001, db_session, str(user.user_id), "fvg",
+        datetime.datetime(2026, 9, 4, 8, 0), events.append, risk_pct=0.01,
+    )
+
+    assert len(results) == 1
+    assert results[0]["trade_id"] is not None, "the write must succeed, not silently fail"
+
+    from app.models import Trade
+    row = db_session.query(Trade).filter(Trade.trade_id == results[0]["trade_id"]).one()
+    assert row.real_position_ticket == big_ticket
+
+
+def test_orphan_full_lifecycle_recorded_and_tracked_to_natural_close(db_session):
+    """The single most important test in this file, alongside
+    test_historical_replay_never_places_a_real_order above -- proves
+    the COMPLETE 2026-09-04 fix end to end, not just its individual
+    pieces: an orphan is found -> gets a real, permanent Trade record
+    -> gets handed off to ongoing tracking -> its eventual natural
+    close gets properly recorded on that SAME row. Before this fix, an
+    orphan could be found and even successfully healed (target
+    attached) and STILL permanently vanish from trade history the
+    moment it closed, since nothing ever created a record for it or
+    watched for its close -- confirmed to have actually happened to the
+    two positions that prompted this fix."""
+    from shadow_runner.position_tracker import PositionTracker
+
+    user = _make_user(db_session, "orphan_lifecycle@example.com")
+    bridge = OrphanFakeBridge()
+    fill_time = datetime.datetime(2026, 9, 2, 13, 11, 4)
+    ticket = 3173996588
+    bridge._positions[ticket] = {
+        "ticket": ticket, "symbol": "EURUSDm", "direction": "long", "volume": 5.86,
+        "open_price": 1.1586, "current_price": 1.16242, "stop_loss": 1.15776, "take_profit": 0.0,
+        "profit": 2238.52, "magic": 900001, "time_utc": fill_time.isoformat(), "time_ny": fill_time.isoformat(),
+    }
+    bridge.candles_response = [
+        _make_bar(fill_time - datetime.timedelta(minutes=m), 1.1600, 1.1580) for m in (30, 25, 20, 15, 10, 5)
+    ]
+
+    # Step 1: the orphan check finds it, heals it, and (the 2026-09-04
+    # fix) records it.
+    events = []
+    results = check_for_orphaned_positions(
+        bridge, "EURUSDm", 900001, db_session, str(user.user_id), "fvg",
+        datetime.datetime(2026, 9, 4, 8, 0), events.append, risk_pct=0.01,
+    )
+    assert len(results) == 1
+    assert results[0]["healed"] is True
+    trade_id = results[0]["trade_id"]
+    assert trade_id is not None
+
+    # Step 2: the caller (runner.py/_recover_cross_day_gap or
+    # PositionTracker.check_for_orphans, both do this identically) hands
+    # off ongoing tracking, exactly like a normally-caught fill would get.
+    model_config = {"model_name": "fvg", "status": "active", "risk_pct": 0.01, "magic_number": 900001}
+    tracker = PositionTracker(bridge, lambda: db_session, str(user.user_id), model_config)
+    tracker.register_new_position(ticket, trade_id, results[0]["entry_time_ny"])
+    assert ticket in tracker._tracked
+
+    # Step 3: the position closes naturally on the broker, days later --
+    # ordinary check_positions() polling must catch it, same as any
+    # other tracked position.
+    bridge._positions.pop(ticket)
+    bridge._closed_history[ticket] = {
+        "ticket": ticket, "is_closed": True, "close_price": 1.1650,
+        "close_time_utc": "2026-09-05T10:00:00+00:00", "close_time_ny": "2026-09-05T06:00:00-04:00",
+        "profit": 3745.0, "close_reason": "take_profit",
+    }
+    tracker.check_positions()
+
+    # Step 4: the SAME row -- not a new one -- now shows the real,
+    # final outcome. This is the whole point: nothing about this trade
+    # is lost, from the moment it's found through to its actual close.
+    from app.models import Trade
+    row = db_session.query(Trade).filter(Trade.trade_id == trade_id).one()
+    assert row.real_status == "closed"
+    assert row.real_close_price == 1.1650
+    assert row.real_profit == 3745.0
+    assert row.real_close_reason == "take_profit"
+    assert ticket not in tracker._tracked
 
 
 # ---------- piece 3: _replay_historical_day() / _decide_day(historical=True) ----------

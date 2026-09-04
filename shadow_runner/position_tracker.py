@@ -209,7 +209,7 @@ class PositionTracker:
             results = check_for_orphaned_positions(
                 self.bridge, symbol, self.model_config["magic_number"],
                 db, self.user_id, self.model_config["model_name"], now,
-                event_sink=collected_events.append,
+                event_sink=collected_events.append, risk_pct=self.model_config["risk_pct"],
             )
             for e in collected_events:
                 write_event(db, e, self.user_id, self.model_config["model_name"])
@@ -219,6 +219,14 @@ class PositionTracker:
                     "Continuous orphan check for user_id=%s found %d position(s): %s",
                     self.user_id, len(results), results,
                 )
+                # 2026-09-04 fix: hand off every orphan that got a real
+                # trade record (see check_for_orphaned_positions()'s own
+                # docstring) to THIS SAME tracker's ongoing management --
+                # otherwise the record exists but nothing ever watches
+                # for its natural close, defeating half the point.
+                for r in results:
+                    if r["trade_id"] is not None:
+                        self.register_new_position(r["ticket"], r["trade_id"], r["entry_time_ny"])
         except Exception as e:
             # Belt-and-suspenders on top of check_for_orphaned_positions()'s
             # own internal bridge-call handling -- get_open_real_trades()
