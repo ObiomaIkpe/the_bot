@@ -72,7 +72,66 @@ these two are the same incident, two separate root causes.
       87836bf`, the last commit independently confirmed deployed).
       Full historical reconciliation of already-closed trades (the
       bridge-endpoint version) remains a known, documented, deliberate
-      gap -- revisit separately if it still matters now that this is live.
+      gap -- revisit separately if it still matters now that this is
+      live. **Update 2026-09-04**: the user asked to actually recover
+      the wider Aug 10 -> Sept 4 window (not just this incident's two
+      days), which turned into a full new plan (see below) -- Piece A
+      of it is now done.
+- [x] **Historical reconciliation, Piece A: deep narrative-only replay
+      back to Aug 10, 2026.** DONE and deployed 2026-09-04. Plan:
+      `misty-seeking-crescent.md`'s "Historical reconciliation -- Aug
+      10 through Sept 4, 2026" section. `_replay_historical_day()`'s
+      existing bar-fetch was capped at one 5000-bar `/candles` call
+      (~17 trading days back from whenever it runs) -- not enough to
+      reach a 25-day-old gap. Added an optional `start_pos` param to
+      `/candles` (`bridge/app/main.py` + `mt5_client.py` -- MT5's real
+      `copy_rates_from_pos` already supports this, the bridge just
+      hardcoded 0) plus client-side pagination
+      (`BridgeClient.get_candles_paginated()`), then a new one-off
+      script (`shadow_runner/scripts/backfill_narrative_aug10_sept4_2026.py`,
+      same precedent as `heal_orphans_2026_09_04.py`) reusing the
+      already-tested, unmodified `_replay_historical_day()`/
+      `_decide_day(historical=True)` guard -- structurally incapable of
+      placing a real order or writing a `trades` row, narrative only.
+      12 new tests. Full suite: 10 pre-existing failures (unchanged),
+      434 passed.
+
+      **Deploy hit real, separate problems along the way, all
+      resolved**: (1) the bridge box's git checkout (`C:\bridge`, sparse
+      to `bridge/`) had a stuck, uncommitted, years-stale tracked file
+      (`app/main.py`, the backend's real entrypoint, never meant to be
+      tracked on this box at all) blocking `git pull` outright --
+      resolved via `git rm --sparse` + a local-only merge-resolution
+      commit (never pushed, this box only pulls). (2) The Hetzner
+      `.env`'s `BRIDGE_URL` (port 8002) turned out to be a legitimate,
+      deliberately-provisioned dedicated reference account
+      (`476781537`) the user had already set up separately -- NOT the
+      real trading account (`476123801`, port 8001, `MT5Bridge-Tony`)
+      -- initially misdiagnosed as a misconfiguration, corrected once
+      the user clarified. (3) Two separate NSSM services
+      (`MT5Bridge-Tony` port 8001, `bridge-6cf5919a` port 8002) both run
+      from the same `C:\bridge\bridge` checkout -- both needed their
+      own explicit restart to pick up the code change; only restarting
+      one left the other silently still running the old code (caught
+      via a live smoke-check showing identical `start_pos=0` and
+      `start_pos=5000` results, not assumed).
+
+      **Backfill run result, verified against the live DB directly, not
+      just the script's own claim**: 18 days replayed (3 correctly
+      identified as weekend gaps -- Aug 15/22/29, all Saturdays), 7
+      already covered by ordinary live polling. `SELECT COUNT(*) FROM
+      trades WHERE ... AND is_shadow = false` for the window returned
+      0 (confirms no real trade was ever created, structurally
+      impossible either way). 566 real narrative events landed,
+      spanning exactly 2026-08-10 05:15 UTC -> 2026-08-28 14:00 UTC;
+      sampled content directly (real swing-high/low prices, correct
+      chronological order) rather than trusting row counts alone.
+
+      **Piece B (real trade reconciliation -- actual fills/exits/
+      profit against the broker for this same window) is NOT done** --
+      needs a new bridge date-range deals endpoint, its own dedicated
+      live-VPS validation session, deliberately not started this pass.
+      See the plan doc for the full design.
 
 ## Quick cleanup (low effort, low risk)
 
@@ -84,7 +143,14 @@ these two are the same incident, two separate root causes.
       skews `_next_free_port` to 8003+, otherwise harmless.
 - [ ] Delete the now-unused old `C:\bridge\app\`/`C:\bridge\scripts\`/
       `C:\bridge\venv` once the new `C:\bridge\bridge` checkout has run
-      stable for a few days.
+      stable for a few days. **Partially forced 2026-09-04**: this old
+      `app/` directory turned out to still be a genuinely (if stalely)
+      git-tracked path at the repo root, blocking `git pull` outright
+      on the bridge box -- `app/main.py` specifically was removed (via
+      `git rm --sparse` + a local merge-resolution commit) to unblock
+      a deploy. The rest (`config.py`/`models.py`/`mt5_client.py`/
+      `config.json`/`scripts/`/`accounts/`/`logs/`) is untouched,
+      still untracked, still pending this same cleanup.
 
 ## Blocked externally
 
