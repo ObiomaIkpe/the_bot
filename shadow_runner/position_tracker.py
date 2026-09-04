@@ -43,9 +43,10 @@ re-litigated here, just enforced:
      falls on, including into a weekend -- no special weekend handling.
 """
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from shadow_runner.orphan_recovery import check_for_orphaned_positions
 from shadow_runner.persistence import (
     get_open_real_trades,
     update_trade_final_close,
@@ -57,6 +58,19 @@ log = logging.getLogger("shadow_runner.position_tracker")
 
 NY_TZ = ZoneInfo("America/New_York")
 PARTIAL_CLOSE_HOUR = 17  # 5pm NY, matches day_end everywhere else in this project
+
+# Continuous orphan-check, added 2026-09-04 after a real incident: a
+# genuinely orphaned position (see check_for_orphans() below) sat
+# undetected for two days because the only existing orphan check ran
+# solely at startup, after a detected cross-day gap -- not something
+# that happens on an ordinary day with no restart. Throttled rather
+# than run every poll (default 60s) -- a full "list every broker
+# position, compare against the database" check is real, ongoing
+# bridge/DB load for a condition that should now be rare (the ONE
+# confirmed cause, a sibling-fill race, was fixed the same night this
+# was added) -- 5 minutes balances catching a real orphan quickly
+# against not hammering the bridge forever for no reason.
+ORPHAN_CHECK_INTERVAL = timedelta(minutes=5)
 
 
 def now_ny() -> datetime:
@@ -71,6 +85,10 @@ class PositionTracker:
         self.model_config = model_config  # for magic_number and model_name
         # ticket -> {"trade_id", "entry_time_ny", "partial_closed": bool}
         self._tracked: dict[int, dict] = {}
+        # Continuous orphan-check throttle -- None until the first check
+        # actually runs, so the very first poll after startup/construction
+        # always checks immediately rather than waiting a full interval.
+        self._last_orphan_check: datetime | None = None
 
     def _emit_check_failure(self, check_name: str, error: Exception, **extra) -> None:
         """Same reliability fix as OrderManager._emit_check_failure() --
@@ -168,6 +186,48 @@ class PositionTracker:
 
             if not info["partial_closed"] and now >= self._partial_close_threshold(info["entry_time_ny"]):
                 self._do_partial_close(ticket, info, position)
+
+    def check_for_orphans(self, symbol: str) -> None:
+        """Call every poll cycle, unconditionally -- see
+        ORPHAN_CHECK_INTERVAL's comment for why this is throttled rather
+        than a no-op skip. Deliberately does NOT gate on self._tracked
+        being non-empty the way check_positions() does above -- an
+        orphan is, by definition, not yet in self._tracked; gating on
+        that would make this permanently blind to the exact case it
+        exists to catch. Reuses check_for_orphaned_positions() (the same
+        function recover_on_startup() already calls after a detected
+        cross-day gap) -- this is that same safety net, just running on
+        a regular cadence instead of only at a rare startup."""
+        now = now_ny()
+        if self._last_orphan_check is not None and (now - self._last_orphan_check) < ORPHAN_CHECK_INTERVAL:
+            return
+        self._last_orphan_check = now
+
+        db = self.session_factory()
+        try:
+            collected_events = []
+            results = check_for_orphaned_positions(
+                self.bridge, symbol, self.model_config["magic_number"],
+                db, self.user_id, self.model_config["model_name"], now,
+                event_sink=collected_events.append,
+            )
+            for e in collected_events:
+                write_event(db, e, self.user_id, self.model_config["model_name"])
+            db.commit()
+            if results:
+                log.warning(
+                    "Continuous orphan check for user_id=%s found %d position(s): %s",
+                    self.user_id, len(results), results,
+                )
+        except Exception as e:
+            # Belt-and-suspenders on top of check_for_orphaned_positions()'s
+            # own internal bridge-call handling -- get_open_real_trades()
+            # (a DB call) is NOT wrapped there, so a DB error here would
+            # otherwise propagate up and could crash this subscriber's
+            # whole poll cycle.
+            self._emit_check_failure("continuous_orphan_check", e)
+        finally:
+            db.close()
 
     def _do_partial_close(self, ticket: int, info: dict, position: dict) -> None:
         current_volume = position["volume"]

@@ -208,6 +208,17 @@ class ShadowRunner:
                     "PositionTracker.check_positions() failed for user_id=%s -- "
                     "continuing to the next subscriber", user_id,
                 )
+            # Continuous orphan-check (added 2026-09-04 after a real
+            # incident -- see PositionTracker.check_for_orphans()'s own
+            # docstring): self-throttles to ORPHAN_CHECK_INTERVAL, so
+            # this call is cheap on every poll it doesn't actually act on.
+            try:
+                pt.check_for_orphans(self.config.symbol)
+            except Exception:
+                log.exception(
+                    "PositionTracker.check_for_orphans() failed for user_id=%s -- "
+                    "continuing to the next subscriber", user_id,
+                )
 
     def _check_daily_loss_threshold(self) -> None:
         """Phase 4 step 4 Part 2. Visibility only -- see

@@ -310,3 +310,158 @@ def test_check_positions_failure_is_journaled_not_just_logged():
     failure_events = [e for e in written_events if e.get("event_type") == "safety_check_failed"]
     assert len(failure_events) == 1
     assert failure_events[0]["check_name"] == "position_tracker_check_positions"
+
+
+# ---------- check_for_orphans() -- continuous orphan-check, added 2026-09-04 ----------
+#
+# Real incident: a genuine orphan (a sibling-fill race from 2026-09-02)
+# sat undetected for two days because the only existing orphan check ran
+# solely at startup, after a detected cross-day gap -- never on an
+# ordinary running day. check_for_orphaned_positions() itself already
+# has thorough coverage in tests/shadow_runner/test_cross_day_recovery.py;
+# these tests are specifically about the NEW behavior this method adds:
+# throttling, and running even when self._tracked is empty.
+
+def _patch_check_for_orphaned_positions(fake_fn):
+    """Returns (patch, unpatch) for shadow_runner.position_tracker's
+    imported reference -- same technique as this file's other tests
+    patching pt_module.get_open_real_trades/write_event."""
+    import shadow_runner.position_tracker as pt_module
+    original = pt_module.check_for_orphaned_positions
+
+    def patch():
+        pt_module.check_for_orphaned_positions = fake_fn
+
+    def unpatch():
+        pt_module.check_for_orphaned_positions = original
+
+    return patch, unpatch
+
+
+def test_check_for_orphans_runs_even_when_nothing_is_tracked():
+    """The single most important guarantee here: an orphan is, by
+    definition, not yet in self._tracked -- gating this the same way
+    check_positions() gates on self._tracked would make it permanently
+    blind to the exact case it exists to catch."""
+    calls = []
+
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+        calls.append((symbol, magic, user_id, model))
+        return []
+
+    patch, unpatch = _patch_check_for_orphaned_positions(fake_check)
+    bridge = FakePositionBridge()
+    tracker = PositionTracker(bridge, lambda: FakeDB(), "user1", make_model_config())
+    assert tracker._tracked == {}  # sanity check -- nothing tracked
+
+    patch()
+    try:
+        tracker.check_for_orphans("EURUSDm")
+    finally:
+        unpatch()
+
+    assert len(calls) == 1
+    assert calls[0] == ("EURUSDm", 900001, "user1", "fvg")
+
+
+def test_check_for_orphans_throttles_within_the_interval():
+    calls = []
+
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+        calls.append(now_ny)
+        return []
+
+    patch, unpatch = _patch_check_for_orphaned_positions(fake_check)
+    bridge = FakePositionBridge()
+    tracker = PositionTracker(bridge, lambda: FakeDB(), "user1", make_model_config())
+
+    patch()
+    try:
+        tracker.check_for_orphans("EURUSDm")
+        tracker.check_for_orphans("EURUSDm")  # immediately again -- must be a no-op
+    finally:
+        unpatch()
+
+    assert len(calls) == 1
+
+
+def test_check_for_orphans_runs_again_after_the_interval_elapses():
+    calls = []
+
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+        calls.append(now_ny)
+        return []
+
+    patch, unpatch = _patch_check_for_orphaned_positions(fake_check)
+    bridge = FakePositionBridge()
+    tracker = PositionTracker(bridge, lambda: FakeDB(), "user1", make_model_config())
+
+    patch()
+    try:
+        tracker.check_for_orphans("EURUSDm")
+        # Simulate enough real time having passed, rather than sleeping
+        # in a test -- same technique as backdating timestamps elsewhere
+        # in this file.
+        tracker._last_orphan_check -= datetime.timedelta(minutes=6)
+        tracker.check_for_orphans("EURUSDm")
+    finally:
+        unpatch()
+
+    assert len(calls) == 2
+
+
+def test_check_for_orphans_journals_found_events_and_commits():
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+        event_sink({"event_type": "orphan_position_recovered", "timestamp": now_ny, "ticket": 999})
+        return [{"ticket": 999, "healed": True}]
+
+    patch, unpatch = _patch_check_for_orphaned_positions(fake_check)
+    bridge = FakePositionBridge()
+    db = FakeDB()
+    tracker = PositionTracker(bridge, lambda: db, "user1", make_model_config())
+
+    patch()
+    try:
+        tracker.check_for_orphans("EURUSDm")
+    finally:
+        unpatch()
+
+    assert db.committed is True
+    recovered = [e for e in db.added_events if e.event_type == "orphan_position_recovered"]
+    assert len(recovered) == 1
+
+
+def test_check_for_orphans_failure_is_journaled_not_just_logged():
+    """DB errors from get_open_real_trades() inside
+    check_for_orphaned_positions() aren't caught there -- this proves
+    the belt-and-suspenders wrapper here catches them too, same
+    reliability discipline as check_positions()'s own failure handling."""
+    import shadow_runner.persistence as persistence_module
+
+    written_events = []
+    original_write_event = persistence_module.write_event
+
+    def spy_write_event(db, event, user_id, model):
+        written_events.append(event)
+        return original_write_event(db, event, user_id, model)
+
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink):
+        raise Exception("simulated DB failure")
+
+    check_patch, check_unpatch = _patch_check_for_orphaned_positions(fake_check)
+    bridge = FakePositionBridge()
+    db = FakeDB()
+    tracker = PositionTracker(bridge, lambda: db, "user1", make_model_config())
+
+    import shadow_runner.position_tracker as pt_module
+    pt_module.write_event = spy_write_event
+    check_patch()
+    try:
+        tracker.check_for_orphans("EURUSDm")  # must not raise
+    finally:
+        check_unpatch()
+        pt_module.write_event = original_write_event
+
+    failure_events = [e for e in written_events if e.get("event_type") == "safety_check_failed"]
+    assert len(failure_events) == 1
+    assert failure_events[0]["check_name"] == "continuous_orphan_check"
