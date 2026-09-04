@@ -49,7 +49,7 @@ from zoneinfo import ZoneInfo
 from phase1.streaming.day_orchestrator import DayOrchestrator
 from phase1.streaming.day_selection_gate import DaySelectionGate
 from app.core.healthchecks import HeartbeatPinger
-from app.core.telegram import send_telegram_alert
+from app.core.telegram import alert_for_event, send_telegram_alert
 from shadow_runner.bridge_client import BridgeClient, BridgeError
 from shadow_runner.config import ShadowRunnerConfig
 from shadow_runner.day_state import CurrentDay
@@ -576,35 +576,30 @@ class ShadowRunner:
         # Monitoring/alerting (logging/audit review part 3): fires only
         # AFTER the commit above succeeds -- an alert about something
         # that failed to even get journaled would be worse than no alert
-        # (nothing to look at when someone checks). send_telegram_alert()
-        # itself no-ops safely if unconfigured, and never raises, so this
-        # is safe to leave unconditional here. order_skipped_paused is
-        # deliberately NOT alerted on -- that's an intentional, expected
+        # (nothing to look at when someone checks). alert_for_event()
+        # itself no-ops safely for any event type it doesn't recognize
+        # (and send_telegram_alert() beneath it no-ops if unconfigured),
+        # so this is safe to leave unconditional here. order_skipped_paused
+        # is deliberately NOT alerted on -- that's an intentional, expected
         # skip (the model is paused), not a failure.
         #
+        # 2026-09-04: which event types alert, and how the message
+        # reads, now lives in ONE place (app.core.telegram.alert_for_event())
+        # instead of being duplicated inline here -- see that function's
+        # own docstring for why (this was the only alerting call site
+        # for a while, which is exactly how PositionTracker's own
+        # writes ended up silently bypassing it entirely).
+        #
         # Multi-user fan-out, piece 2: identifies the real subscriber via
-        # `_origin_user_id` (always present for these two event types --
-        # both are REAL_ACTION_EVENT_TYPES, always emitted by a specific
-        # subscriber's OrderManager). self.config.user_id is kept only as
-        # a harmless fallback for the case that tag is somehow missing --
-        # should never actually happen for these two types, but a fallback
-        # costs nothing and keeps the alert readable either way.
+        # `_origin_user_id` (always present for every currently-alerted
+        # event type -- all are REAL_ACTION_EVENT_TYPES, always emitted
+        # by a specific subscriber's OrderManager). self.config.user_id
+        # is kept only as a harmless fallback for the case that tag is
+        # somehow missing -- should never actually happen for these
+        # types, but a fallback costs nothing and keeps the alert
+        # readable either way.
         for e in events:
-            event_type = e.get("event_type")
-            origin_user_id = e.get("_origin_user_id", self.config.user_id)
-            if event_type == "safety_check_failed":
-                send_telegram_alert(
-                    f"⚠️ safety_check_failed: {e.get('check_name')} "
-                    f"(user={origin_user_id}, model={self.config.model})\n"
-                    f"{e.get('error')}"
-                )
-            elif event_type == "order_placement_failed":
-                send_telegram_alert(
-                    f"🔴 order_placement_failed "
-                    f"(user={origin_user_id}, model={self.config.model}, "
-                    f"candidate={e.get('candidate_key')})\n"
-                    f"{e.get('error')}"
-                )
+            alert_for_event(e, e.get("_origin_user_id", self.config.user_id), self.config.model)
 
     # ---------- Phase 3 step 6: restart recovery ----------
 
@@ -1059,7 +1054,11 @@ class ShadowRunner:
                 # -- now also journaled as a real safety_check_failed
                 # event (own try/except: if even journaling this
                 # failure fails, don't let that suppress the original
-                # exception either).
+                # exception either), AND alerted directly (see this
+                # edit's own note further down for why "journaled" alone
+                # doesn't already mean "alerted" here -- this write
+                # doesn't go through _write_events_now(), the only place
+                # that currently sends Telegram alerts).
                 db.rollback()
                 log.exception(
                     "%s: writing/linking the shadow trade failed -- this day will be "
@@ -1083,6 +1082,21 @@ class ShadowRunner:
                         cd.date,
                     )
                     db.rollback()
+                else:
+                    # 2026-09-04 write-path audit fix: this write goes
+                    # through this function's own db.commit(), not
+                    # _write_events_now() -- the only OTHER place that
+                    # calls alert_for_event(). Without this, the failure
+                    # was journaled (visible in /events) but never
+                    # actually paged anyone, the same gap found and
+                    # fixed in PositionTracker._emit_check_failure() the
+                    # same pass. Only fires once the commit above
+                    # actually succeeded (try/except/else), matching
+                    # _write_events_now()'s own discipline.
+                    alert_for_event(
+                        {"event_type": "safety_check_failed", "check_name": "write_shadow_trade_failed", "error": str(e)},
+                        None, self.config.model,
+                    )
                 raise
 
             for user_id, om in cd.order_managers.items():
@@ -1178,5 +1192,19 @@ class ShadowRunner:
                             user_id,
                         )
                         db.rollback()
+                    else:
+                        # 2026-09-04 write-path audit fix: same gap as
+                        # write_shadow_trade_failed above -- this commit
+                        # doesn't go through _write_events_now(), so
+                        # without this the failure was journaled but
+                        # never actually paged anyone. A REAL trade
+                        # write silently not happening for a specific
+                        # user is exactly the class of thing that should
+                        # alert, not just sit in /events waiting to be
+                        # noticed.
+                        alert_for_event(
+                            {"event_type": "safety_check_failed", "check_name": "write_real_outcome_trade_failed", "error": str(e)},
+                            user_id, self.config.model,
+                        )
         finally:
             db.close()

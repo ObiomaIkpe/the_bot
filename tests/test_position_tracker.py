@@ -350,6 +350,34 @@ def test_check_positions_failure_is_journaled_not_just_logged():
     assert failure_events[0]["check_name"] == "position_tracker_check_positions"
 
 
+def test_emit_check_failure_alerts_after_a_successful_commit():
+    """2026-09-04 write-path audit: _emit_check_failure() (used by
+    ~7 call sites across this file, and indirectly by every one of
+    OrderManager's ~14 via its own copy) previously journaled to the DB
+    only -- confirmed to never reach a Telegram alert, unlike
+    OrderManager's own version (routed through _write_events_now()).
+    Proves the fix: alert_for_event() gets called, with the right
+    event_type, only once the commit actually succeeds."""
+    import shadow_runner.position_tracker as pt_module
+
+    alerted = []
+    original_alert = pt_module.alert_for_event
+    pt_module.alert_for_event = lambda event, user_id, model: alerted.append((event, user_id, model))
+
+    db = FakeDB()
+    tracker = PositionTracker(FakePositionBridge(), lambda: db, "user1", make_model_config())
+    try:
+        tracker._emit_check_failure("some_check", Exception("boom"), ticket=123)
+    finally:
+        pt_module.alert_for_event = original_alert
+
+    assert len(alerted) == 1
+    event, user_id, model = alerted[0]
+    assert event["event_type"] == "safety_check_failed"
+    assert event["check_name"] == "some_check"
+    assert user_id == "user1" and model == "fvg"
+
+
 # ---------- write-path audit, 2026-09-04: DB-commit-level failures ----------
 #
 # Prompted by "every trade activity per user per model per account has
@@ -585,6 +613,46 @@ def test_check_for_orphans_journals_found_events_and_commits():
     assert db.committed is True
     recovered = [e for e in db.added_events if e.event_type == "orphan_position_recovered"]
     assert len(recovered) == 1
+
+
+def test_check_for_orphans_found_event_actually_alerts():
+    """2026-09-04 write-path audit: the single most important alert-
+    wiring gap found this pass. check_for_orphans() writes its events
+    (orphan_position_recovered, orphan_trade_recorded, any embedded
+    safety_check_failed) via its OWN db session, bypassing runner.py's
+    _write_events_now() -- the only place that used to send Telegram
+    alerts. Before this fix, this continuous, every-5-minute check --
+    built specifically because two real orphaned positions sat
+    unnoticed for two days -- could find (and even successfully record)
+    an orphan and still never actually page anyone, journaled but
+    silent, the exact same failure mode as the original incident, one
+    level down. Proves it now alerts."""
+    import shadow_runner.position_tracker as pt_module
+
+    def fake_check(bridge, symbol, magic, db, user_id, model, now_ny, event_sink, risk_pct):
+        event_sink({"event_type": "orphan_position_recovered", "timestamp": now_ny, "ticket": 999, "target": 1.105})
+        event_sink({"event_type": "orphan_trade_recorded", "timestamp": now_ny, "ticket": 999, "trade_id": "abc"})
+        return [{"ticket": 999, "healed": True, "trade_id": "abc", "entry_time_ny": now_ny}]
+
+    patch, unpatch = _patch_check_for_orphaned_positions(fake_check)
+    bridge = FakePositionBridge()
+    db = FakeDB()
+    tracker = PositionTracker(bridge, lambda: db, "user1", make_model_config())
+
+    alerted = []
+    original_alert = pt_module.alert_for_event
+    pt_module.alert_for_event = lambda event, user_id, model: alerted.append((event["event_type"], user_id, model))
+
+    patch()
+    try:
+        tracker.check_for_orphans("EURUSDm")
+    finally:
+        unpatch()
+        pt_module.alert_for_event = original_alert
+
+    alerted_types = {a[0] for a in alerted}
+    assert alerted_types == {"orphan_position_recovered", "orphan_trade_recorded"}
+    assert all(a[1] == "user1" and a[2] == "fvg" for a in alerted)
 
 
 def test_check_for_orphans_failure_is_journaled_not_just_logged():

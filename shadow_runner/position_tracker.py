@@ -46,6 +46,7 @@ import logging
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from app.core.telegram import alert_for_event
 from shadow_runner.orphan_recovery import check_for_orphaned_positions
 from shadow_runner.persistence import (
     get_open_real_trades,
@@ -96,21 +97,39 @@ class PositionTracker:
         shared event_sink to append to (unlike OrderManager, which
         piggybacks on DayOrchestrator's day-scoped one), so this opens
         its own short DB session directly, matching how every other
-        write in this class already works."""
+        write in this class already works.
+
+        2026-09-04 write-path audit fix: previously journaled to the DB
+        only, unlike OrderManager's own _emit_check_failure() (which
+        DOES reach a live Telegram alert -- its event_sink ultimately
+        flushes through runner.py's _write_events_now(), the one place
+        that used to send alerts). Confirmed by tracing the actual
+        code, not assumed: PositionTracker writes its own events
+        directly, via its own session, bypassing _write_events_now()
+        entirely -- so every one of THIS class's safety checks (check_
+        positions, the continuous orphan check, partial-close,
+        final-close, and everything else routed through this method)
+        was silently DB-only, journaled but never paging anyone,
+        despite this project's Telegram alerting having gone live the
+        same night specifically to close that exact gap for
+        OrderManager's failures. Fixed by alerting here too, via the
+        now-centralized app.core.telegram.alert_for_event() (see its
+        own docstring), right after a successful commit -- matching
+        _write_events_now()'s own "only alert once actually journaled"
+        discipline (using try/except/else, not just appending after the
+        try block, so a failure IN the commit itself still correctly
+        skips the alert)."""
         log.error("%s failed: %s", check_name, error)
+        event = {
+            "event_type": "safety_check_failed",
+            "timestamp": now_ny(),
+            "check_name": check_name,
+            "error": str(error),
+            **extra,
+        }
         db = self.session_factory()
         try:
-            write_event(
-                db,
-                {
-                    "event_type": "safety_check_failed",
-                    "timestamp": now_ny(),
-                    "check_name": check_name,
-                    "error": str(error),
-                    **extra,
-                },
-                self.user_id, self.model_config["model_name"],
-            )
+            write_event(db, event, self.user_id, self.model_config["model_name"])
             db.commit()
         except Exception as inner_e:
             # If even journaling the failure fails, don't let THAT crash
@@ -118,6 +137,8 @@ class PositionTracker:
             # happened, so the failure isn't completely invisible even
             # in this worst case.
             log.error("Additionally failed to journal the above failure: %s", inner_e)
+        else:
+            alert_for_event(event, self.user_id, self.model_config["model_name"])
         finally:
             db.close()
 
@@ -214,6 +235,20 @@ class PositionTracker:
             for e in collected_events:
                 write_event(db, e, self.user_id, self.model_config["model_name"])
             db.commit()
+            # 2026-09-04 write-path audit fix: this is the single most
+            # important alert-wiring gap found in this whole audit --
+            # this IS the continuous, every-5-minutes safety net built
+            # earlier tonight specifically because the two real orphaned
+            # positions that started this whole session's work sat
+            # unnoticed for two days. Every event it finds
+            # (orphan_position_recovered, orphan_trade_recorded, and any
+            # embedded safety_check_failed from a heal/record failure)
+            # was, until this fix, journaled and then silently invisible
+            # -- exactly the same failure mode the incident itself was,
+            # just moved one level down the stack. Only fires once the
+            # commit above actually succeeded.
+            for e in collected_events:
+                alert_for_event(e, self.user_id, self.model_config["model_name"])
             if results:
                 log.warning(
                     "Continuous orphan check for user_id=%s found %d position(s): %s",

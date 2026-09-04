@@ -6,7 +6,17 @@ monkeypatched -- these tests only verify the hook fires for the right
 event types, with the commit already having happened, not that
 Telegram actually receives anything (see tests/app/test_telegram.py
 for that).
+
+2026-09-04 write-path audit: "which event types alert, and how" moved
+out of _write_events_now() into the shared, centralized
+app.core.telegram.alert_for_event() (see its own docstring for why --
+this was the only alerting call site for a while, which is exactly how
+PositionTracker's own writes ended up silently bypassing it entirely).
+send_telegram_alert() itself is patched on app.core.telegram now, not
+shadow_runner.runner -- that's where alert_for_event() actually calls
+it from.
 """
+import app.core.telegram as telegram_module
 import shadow_runner.runner as runner_module
 from shadow_runner.runner import ShadowRunner
 from tests.shadow_runner.test_runner_orchestration import FakeDB, make_config
@@ -23,7 +33,7 @@ def _make_runner(shared_writes):
 
 def test_safety_check_failed_event_triggers_alert(monkeypatch):
     alerts = []
-    monkeypatch.setattr(runner_module, "send_telegram_alert", lambda text: alerts.append(text))
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", lambda text: alerts.append(text))
 
     runner = _make_runner([])
     runner._write_events_now([
@@ -40,7 +50,7 @@ def test_safety_check_failed_event_triggers_alert(monkeypatch):
 
 def test_order_placement_failed_event_triggers_alert(monkeypatch):
     alerts = []
-    monkeypatch.setattr(runner_module, "send_telegram_alert", lambda text: alerts.append(text))
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", lambda text: alerts.append(text))
 
     runner = _make_runner([])
     runner._write_events_now([
@@ -54,9 +64,32 @@ def test_order_placement_failed_event_triggers_alert(monkeypatch):
     assert "bridge returned 503" in alerts[0]
 
 
+def test_orphan_events_now_also_trigger_alert(monkeypatch):
+    """2026-09-04: added alongside centralizing alert_for_event() --
+    before this, an orphan being found (even successfully healed and
+    recorded) never alerted on EITHER of the two paths that write these
+    events (this one, the rare startup/cross-day-gap path; or
+    PositionTracker.check_for_orphans(), the common continuous one,
+    fixed separately the same pass). Worth paging on regardless of
+    whether the heal itself also failed -- finding an unmanaged real
+    position at all is exactly what tonight's original incident was."""
+    alerts = []
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", lambda text: alerts.append(text))
+
+    runner = _make_runner([])
+    runner._write_events_now([
+        {"event_type": "orphan_position_recovered", "timestamp": "t", "ticket": 123, "target": 1.105},
+        {"event_type": "orphan_trade_recorded", "timestamp": "t", "ticket": 123, "trade_id": "abc"},
+    ])
+
+    assert len(alerts) == 2
+    assert "123" in alerts[0]
+    assert "123" in alerts[1]
+
+
 def test_other_event_types_do_not_trigger_alert(monkeypatch):
     alerts = []
-    monkeypatch.setattr(runner_module, "send_telegram_alert", lambda text: alerts.append(text))
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", lambda text: alerts.append(text))
 
     runner = _make_runner([])
     runner._write_events_now([
@@ -84,7 +117,7 @@ def test_alert_fires_after_events_are_committed(monkeypatch):
         assert any(getattr(w, "event_type", None) == "safety_check_failed" for w in written)
         alerts.append(text)
 
-    monkeypatch.setattr(runner_module, "send_telegram_alert", fake_alert)
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", fake_alert)
 
     runner = _make_runner(written)
     runner._write_events_now([
