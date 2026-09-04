@@ -17,6 +17,7 @@ global setting. Each MT5 account has its own bridge worker/port; a
 global BRIDGE_URL only ever worked for exactly one account.
 """
 import datetime
+import logging
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.deps import get_current_user
+from app.core.telegram import alert_for_event
 from app.models.broker_credential import BrokerCredential
 from app.models.model_config import ModelConfig
 from app.models.trade import Trade
@@ -35,6 +37,8 @@ from shadow_runner.persistence import write_event
 router = APIRouter(prefix="/trading", tags=["trading"])
 
 _NY_TZ = ZoneInfo("America/New_York")
+
+log = logging.getLogger("app.routers.trading")
 
 
 def get_bridge_client(
@@ -156,32 +160,71 @@ def close_position(
         # off -- surface as a conflict, not a generic 500.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
-    write_event(
-        db,
-        {
-            "event_type": "manual_close_requested",
-            "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
-            "ticket": ticket,
-            "result": result,
-        },
-        current_user.user_id,
-        model_name,
-    )
+    # 2026-09-04 write-path audit fix: this block used to have no
+    # try/except at all, despite the comment right below already
+    # PROMISING "never blocks the close itself" -- a real gap between
+    # stated intent and actual behavior. The broker action above has
+    # ALREADY succeeded (real money already moved) by the time this
+    # runs; without a try/except, a failure here (the journal write, the
+    # Trade lookup, or the commit itself) would propagate straight out
+    # of this endpoint as a 500 -- misleadingly telling the user their
+    # close FAILED when it actually succeeded, and losing the specific
+    # manual_close_requested audit trail + real_close_reason tag (the
+    # background reconciliation in position_tracker.py is a safety net
+    # for the Trade row itself, but not for this distinct "a human did
+    # this via the UI" event).
+    try:
+        write_event(
+            db,
+            {
+                "event_type": "manual_close_requested",
+                "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
+                "ticket": ticket,
+                "result": result,
+            },
+            current_user.user_id,
+            model_name,
+        )
 
-    # Best-effort: tag the matching Trade row's real_close_reason, if one
-    # exists and hasn't already been set (e.g. by the background
-    # reconciliation flow in position_tracker.py). Never blocks the
-    # close itself -- the action already succeeded against the broker
-    # by this point regardless of what happens here.
-    trade = (
-        db.query(Trade)
-        .filter(Trade.user_id == current_user.user_id, Trade.real_position_ticket == ticket)
-        .first()
-    )
-    if trade is not None and trade.real_close_reason is None:
-        trade.real_close_reason = "manual"
+        # Best-effort: tag the matching Trade row's real_close_reason, if
+        # one exists and hasn't already been set (e.g. by the background
+        # reconciliation flow in position_tracker.py).
+        trade = (
+            db.query(Trade)
+            .filter(Trade.user_id == current_user.user_id, Trade.real_position_ticket == ticket)
+            .first()
+        )
+        if trade is not None and trade.real_close_reason is None:
+            trade.real_close_reason = "manual"
 
-    db.commit()
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        log.exception(
+            "Journaling manual close for ticket=%s failed (the broker-side close already "
+            "succeeded regardless) -- attempting to journal the failure itself", ticket,
+        )
+        try:
+            write_event(
+                db,
+                {
+                    "event_type": "safety_check_failed",
+                    "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
+                    "check_name": "manual_close_journal_failed",
+                    "error": str(e),
+                    "ticket": ticket,
+                },
+                current_user.user_id, model_name,
+            )
+            db.commit()
+        except Exception:
+            log.exception("Additionally failed to journal the above manual-close journaling failure")
+            db.rollback()
+        else:
+            alert_for_event(
+                {"event_type": "safety_check_failed", "check_name": "manual_close_journal_failed", "error": str(e)},
+                current_user.user_id, model_name,
+            )
     return result
 
 
@@ -205,16 +248,48 @@ def cancel_pending_order(
     except BridgeError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
 
-    write_event(
-        db,
-        {
-            "event_type": "manual_cancel_requested",
-            "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
-            "order_ticket": order_ticket,
-            "result": result,
-        },
-        current_user.user_id,
-        model_name,
-    )
-    db.commit()
+    # 2026-09-04 write-path audit fix: same gap as close_position() above
+    # -- the broker-side cancel already succeeded by this point; a
+    # journal-write failure here must not turn into a misleading 500 for
+    # an action that actually worked.
+    try:
+        write_event(
+            db,
+            {
+                "event_type": "manual_cancel_requested",
+                "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
+                "order_ticket": order_ticket,
+                "result": result,
+            },
+            current_user.user_id,
+            model_name,
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        log.exception(
+            "Journaling manual cancel for order_ticket=%s failed (the broker-side cancel "
+            "already succeeded regardless) -- attempting to journal the failure itself", order_ticket,
+        )
+        try:
+            write_event(
+                db,
+                {
+                    "event_type": "safety_check_failed",
+                    "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
+                    "check_name": "manual_cancel_journal_failed",
+                    "error": str(e),
+                    "order_ticket": order_ticket,
+                },
+                current_user.user_id, model_name,
+            )
+            db.commit()
+        except Exception:
+            log.exception("Additionally failed to journal the above manual-cancel journaling failure")
+            db.rollback()
+        else:
+            alert_for_event(
+                {"event_type": "safety_check_failed", "check_name": "manual_cancel_journal_failed", "error": str(e)},
+                current_user.user_id, model_name,
+            )
     return result

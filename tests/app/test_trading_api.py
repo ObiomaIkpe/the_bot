@@ -319,6 +319,34 @@ def test_close_position_tags_matching_trade_real_close_reason(client, db_session
     assert trade.real_close_reason == "manual"
 
 
+def test_close_position_journal_failure_does_not_turn_a_real_success_into_a_500(client, db_session, bridge_client, monkeypatch):
+    """2026-09-04 write-path audit fix: this block used to have no
+    try/except at all, despite the surrounding comment already
+    claiming "never blocks the close itself" -- the broker action has
+    ALREADY succeeded by the time journaling runs. Forces a failure in
+    write_event() to prove the endpoint still returns 200 with the real
+    result, not a misleading 500 for an action that actually worked."""
+    token = _register_and_login(client, "trad_journal_fail@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+    magic = next(_magic_counter)
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
+    db_session.commit()
+
+    fake = bridge_client(FakeBridge(positions=[_make_position(777, magic)]))
+
+    def broken_write_event(db, event, user_id, model):
+        raise Exception("simulated journal write failure")
+
+    monkeypatch.setattr(trading, "write_event", broken_write_event)
+
+    resp = client.post("/trading/positions/777/close", headers=_auth_header(token))
+    assert resp.status_code == 200, "the broker-side close already succeeded -- must not report failure"
+    assert resp.json()["ticket"] == 777
+    assert fake.closed == [777], "the real broker action must still have happened"
+
+
 def test_cancel_pending_order_succeeds_for_owned_ticket_and_journals(client, db_session, bridge_client):
     token = _register_and_login(client, "trad_g@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
@@ -354,3 +382,25 @@ def test_cancel_pending_order_404_when_not_owned(client, db_session, bridge_clie
     resp = client.delete("/trading/pending-orders/888", headers=_auth_header(token))
     assert resp.status_code == 404
     assert fake.cancelled == []
+
+
+def test_cancel_pending_order_journal_failure_does_not_turn_a_real_success_into_a_500(client, db_session, bridge_client, monkeypatch):
+    """Same fix, same reasoning as close_position()'s own version above."""
+    token = _register_and_login(client, "trad_cancel_journal_fail@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+    magic = next(_magic_counter)
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
+    db_session.commit()
+
+    fake = bridge_client(FakeBridge(pending_orders=[_make_pending_order(999, magic)]))
+
+    def broken_write_event(db, event, user_id, model):
+        raise Exception("simulated journal write failure")
+
+    monkeypatch.setattr(trading, "write_event", broken_write_event)
+
+    resp = client.delete("/trading/pending-orders/999", headers=_auth_header(token))
+    assert resp.status_code == 200, "the broker-side cancel already succeeded -- must not report failure"
+    assert fake.cancelled == [999], "the real broker action must still have happened"
