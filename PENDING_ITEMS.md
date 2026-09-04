@@ -36,8 +36,10 @@ these two are the same incident, two separate root causes.
       `duplicate_fill_closed` event journals it; a distinct
       `duplicate_fill_close_failed` check name if even the close fails,
       so a human knows to act. 5 new tests. 356 passed / 1 skipped / 10
-      pre-existing unrelated failures, 0 regressions. **Not yet deployed
-      to the live VPS.**
+      pre-existing unrelated failures, 0 regressions. **Confirmed
+      deployed and live as of 2026-09-04** (verified via
+      `git merge-base --is-ancestor 6cb5591 87836bf`, the last commit
+      independently confirmed deployed).
 - [x] **Cross-day restart recovery gap, confirmed to have happened for
       real.** DONE 2026-09-02. `PHASE3_RESTART_RECOVERY.md`/
       `PHASE3_VALIDATION.md` both already documented that the runner
@@ -65,10 +67,12 @@ these two are the same incident, two separate root causes.
       adding a new conditional). 18 new tests, including a proof that a
       real candidate firing during historical replay cannot reach a
       real order. 370 passed / 1 skipped / 10 pre-existing unrelated
-      failures, 0 regressions. **Not yet deployed to the live VPS.**
+      failures, 0 regressions. **Confirmed deployed and live as of
+      2026-09-04** (verified via `git merge-base --is-ancestor 86c76f5
+      87836bf`, the last commit independently confirmed deployed).
       Full historical reconciliation of already-closed trades (the
       bridge-endpoint version) remains a known, documented, deliberate
-      gap -- revisit separately if it still matters once this is live.
+      gap -- revisit separately if it still matters now that this is live.
 
 ## Quick cleanup (low effort, low risk)
 
