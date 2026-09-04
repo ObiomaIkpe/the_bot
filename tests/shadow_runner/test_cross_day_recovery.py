@@ -126,8 +126,15 @@ def test_no_orphans_when_every_open_position_is_known(db_session):
     bridge._positions[555] = {
         "ticket": 555, "symbol": "EURUSDm", "direction": "long", "volume": 0.1,
         "open_price": 1.1050, "current_price": 1.1050, "stop_loss": 1.1040, "take_profit": 0.0,
-        "profit": 0.0, "magic": 900001, "time_utc": datetime.datetime(2026, 9, 1, 10, 0),
-        "time_ny": datetime.datetime(2026, 9, 1, 6, 0),
+        # Real bug found 2026-09-04: BridgeClient.get_positions() returns
+        # time_utc/time_ny as raw ISO strings off the wire, never parsed
+        # into datetimes (unlike get_candles(), which does parse them) --
+        # a prior version of this fixture used real datetime objects here,
+        # which is exactly why check_for_orphaned_positions()'s type-
+        # mismatch bug (comparing a parsed bar datetime against this raw
+        # string) went uncaught until it hit a real orphan in production.
+        "profit": 0.0, "magic": 900001, "time_utc": datetime.datetime(2026, 9, 1, 10, 0).isoformat(),
+        "time_ny": datetime.datetime(2026, 9, 1, 6, 0).isoformat(),
     }
     from app.models import Trade
     known = Trade(
@@ -158,7 +165,10 @@ def test_orphan_found_and_healed_attaches_target(db_session):
     bridge._positions[3147397683] = {
         "ticket": 3147397683, "symbol": "EURUSDm", "direction": "long", "volume": 7.55,
         "open_price": 1.16460, "current_price": 1.16460, "stop_loss": 1.16395, "take_profit": 0.0,
-        "profit": 0.0, "magic": 900001, "time_utc": fill_time, "time_ny": fill_time,
+        # Raw ISO string, matching BridgeClient.get_positions()'s real
+        # (unparsed) return shape -- see the comment on the position
+        # fixture above for why this matters.
+        "profit": 0.0, "magic": 900001, "time_utc": fill_time.isoformat(), "time_ny": fill_time.isoformat(),
     }
     # 6 bars strictly before the fill -- highest high is the 3rd one.
     bridge.candles_response = [
@@ -191,7 +201,7 @@ def test_orphan_heal_failure_emits_distinct_check_name(db_session):
     bridge._positions[999] = {
         "ticket": 999, "symbol": "EURUSDm", "direction": "long", "volume": 1.0,
         "open_price": 1.1050, "current_price": 1.1050, "stop_loss": 1.1040, "take_profit": 0.0,
-        "profit": 0.0, "magic": 900001, "time_utc": fill_time, "time_ny": fill_time,
+        "profit": 0.0, "magic": 900001, "time_utc": fill_time.isoformat(), "time_ny": fill_time.isoformat(),
     }
     bridge.candles_response = [
         _make_bar(fill_time - datetime.timedelta(minutes=m), 1.1060, 1.1040) for m in (30, 25, 20, 15, 10, 5)

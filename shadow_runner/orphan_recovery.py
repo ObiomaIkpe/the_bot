@@ -28,6 +28,7 @@ live risk. See the plan doc (misty-seeking-crescent.md in this
 session's history) for the full reasoning.
 """
 import logging
+from datetime import datetime
 
 from shadow_runner.order_manager import TARGET_LOOKBACK_BARS, compute_target
 from shadow_runner.persistence import get_open_real_trades
@@ -85,7 +86,20 @@ def _heal_orphan(bridge, symbol: str, position: dict, now_ny, event_sink) -> boo
     day, so there's no instance to call attach_target() on)."""
     ticket = position["ticket"]
     direction = position["direction"]
-    fill_time_utc = position["time_utc"]
+    # Real bug found 2026-09-04 (first time this ever ran against a real
+    # orphan in production): BridgeClient.get_positions() returns
+    # time_utc/time_ny as raw strings straight off the wire -- unlike
+    # get_candles(), which parses them into real datetimes (see
+    # bridge_client.py's own docstrings for each). Comparing a bar's
+    # parsed datetime against this position dict's raw string below
+    # raised "'<' not supported between instances of 'datetime.datetime'
+    # and 'str'" every time, silently defeating every orphan heal.
+    # Deliberately parsed HERE, not fixed in BridgeClient.get_positions()
+    # itself -- that method's return value also feeds straight into
+    # app/routers/trading.py's live /trading/positions response, whose
+    # Position/PendingOrder models are typed str; parsing there would
+    # break that endpoint instead.
+    fill_time_utc = datetime.fromisoformat(position["time_utc"])
 
     try:
         candles = bridge.get_candles(symbol, "M5", 500)
