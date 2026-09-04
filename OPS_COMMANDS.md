@@ -346,6 +346,163 @@ always, even when confident the migrations are safe.
 
 ---
 
+### Check who currently qualifies as a fan-out subscriber for a model
+
+```bash
+docker compose exec -T db psql -U bot_user -d trading_bot -c "
+SELECT u.email, mc.model_name, mc.status, mc.magic_number, bc.bridge_url, bc.is_active AS bridge_active
+FROM model_configs mc
+JOIN users u ON u.user_id = mc.user_id
+JOIN broker_credentials bc ON bc.user_id = mc.user_id
+WHERE mc.model_name = 'fvg' AND mc.status = 'active' AND u.is_active = true
+  AND bc.is_active = true AND bc.bridge_url IS NOT NULL;
+"
+```
+
+**Purpose:** the exact same three conditions `get_active_subscribers()`
+checks (`shadow_runner/persistence.py`) -- run this as a plain
+read-only query BEFORE ever deploying/restarting `shadow_runner` with
+the multi-user fan-out engine live, to confirm exactly who would
+become a real subscriber the moment it starts. Used before the
+2026-09-04 fan-out cutover specifically to confirm only the real
+trading account would qualify (the reference-only account correctly
+excluded, since its `status` stays `disabled`) -- no surprises going in.
+
+---
+
+### Check the database's current Alembic migration version directly
+
+```bash
+docker compose exec -T db psql -U bot_user -d trading_bot -c "SELECT version_num FROM alembic_version;"
+```
+
+**Purpose:** simpler and more direct than comparing `alembic current`
+vs `alembic heads` through the app container -- just reads the one row
+Alembic itself tracks state in. Run this before AND after
+`alembic upgrade head` when applying migrations that matter (e.g. real
+schema changes ahead of a live-money deploy), to confirm the exact
+starting point and the exact landing point, not just trust the
+migration output's own log lines.
+
+---
+
+### Apply pending migrations via a one-off container, not `exec`
+
+```bash
+docker compose run --rm api alembic upgrade head
+```
+
+**Purpose:** an alternative to this file's earlier "rebuild the api
+container and apply migrations" recipe (`docker compose up -d api` +
+`exec`) -- `run --rm` spins up a temporary container from the
+already-built image and removes itself afterward, without touching
+whatever `api` container is currently running. Useful when you want to
+apply migrations as a distinct, isolated step (e.g. right before a
+larger deploy) without needing `api` itself freshly recreated first.
+
+---
+
+### Rebuild and redeploy `shadow_runner` specifically
+
+```bash
+docker compose build shadow_runner
+docker compose up -d shadow_runner
+docker compose logs shadow_runner --tail 30
+```
+
+**Purpose:** `api` and `shadow_runner` are separate built images from
+the same source tree -- rebuilding one never touches the other.
+**Standing caution as of 2026-09-04**: `main` currently has the entire
+multi-user fan-out engine merged in, with no feature flag gating it --
+running this command deploys ALL of it, not just whatever specific fix
+prompted the rebuild. Always check what's actually on `main` before
+running this, not just what you meant to deploy. (This exact command
+is also how the fan-out engine's real cutover was actually done, once
+that was the deliberate intent -- see `SEPT_4_DEPLOY_AND_INCIDENT.md`.)
+
+---
+
+### Check exactly which env vars a running container actually has
+
+```bash
+docker inspect <container-name> --format '{{range .Config.Env}}{{println .}}{{end}}' | grep <VAR_NAME>
+```
+
+**Purpose:** more targeted than this file's earlier "inspect a running
+container's actual config" entry (`{{json .Config}}`, which dumps
+everything) -- greps down to one specific variable's real, live value.
+Used to confirm `BRIDGE_URL` had genuinely changed inside the running
+`shadow_runner` container after a cutover, rather than just trusting
+the deploy logs said it worked.
+
+---
+
+### Check a real broker position's exact current state, bypassing the app entirely
+
+```bash
+curl -s "<bridge_url>/positions?only_ours=false" | python3 -m json.tool
+```
+
+**Purpose:** the most direct way to see ground truth about a real MT5
+position -- `take_profit`, `stop_loss`, current `profit` -- straight
+from the bridge, with nothing in between. Used during the 2026-09-04
+incident to confirm two specific tickets genuinely had no take-profit
+attached, before trusting anything the app's own logs claimed.
+`only_ours=false` matters: the bridge's default (`true`) silently
+filters to just its own configured magic number, which would hide a
+position placed under a different one.
+
+---
+
+### Look up the real error behind a `safety_check_failed` event for a specific ticket
+
+```bash
+docker compose exec -T db psql -U bot_user -d trading_bot -c "
+SELECT event_type, timestamp, details
+FROM events
+WHERE event_type = 'safety_check_failed'
+  AND details->>'ticket' = '<ticket>'
+ORDER BY timestamp DESC
+LIMIT 5;
+"
+```
+
+**Purpose:** every safety-check failure this project's fail-safe error
+handling catches gets journaled with a real `error` string in
+`details` (JSONB) -- this is how the 2026-09-04 orphan-heal bug's exact
+root cause (`'<' not supported between instances of 'datetime.datetime'
+and 'str'`) got found, rather than guessing from a one-line log
+summary alone. `details->>'ticket'` extracts a JSONB field as text for
+the `WHERE` comparison -- match the type of whatever's actually in
+`details` (a string here, since event dicts pass tickets as ints but
+JSON round-trips them fine either way for equality on `->>'ticket'`).
+
+---
+
+### Run a one-off script against production when the terminal won't paste multi-line content reliably
+
+```bash
+# 1. Write the script as a real file, add tests if it's non-trivial, commit+push locally.
+# 2. On the server:
+git pull
+docker compose build shadow_runner   # only if the image needs the new file
+docker compose run --rm shadow_runner python -m shadow_runner.scripts.<script_name>
+```
+
+**Purpose:** the actual fix for a real, repeated failure mode hit
+2026-09-04 -- a multi-line heredoc got stuck (the terminal silently
+corrupted the closing marker, leaving the shell hung waiting forever),
+and a single-line base64-encoded fallback *also* got corrupted
+mid-paste. Long or multi-line pasted content is not reliably safe on
+this terminal, no matter how it's packaged. `git pull` transfers a
+file byte-perfect over the network, with nothing for a terminal to
+corrupt -- the most robust fix wasn't a cleverer paste trick, it was
+avoiding the paste entirely. See `shadow_runner/scripts/heal_orphans_2026_09_04.py`
+for a real example of this pattern, and `shadow_runner/scripts/prove_trade_lifecycle.py`
+for an earlier one.
+
+---
+
 ### Set up a disposable test job end-to-end (no real user/account involved)
 
 ```bash
