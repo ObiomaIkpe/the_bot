@@ -323,6 +323,21 @@ these two are the same incident, two separate root causes.
       not open-ended strategy research from scratch. No OB-related code
       exists anywhere in this repo yet (confirmed by search), so this
       genuinely starts from zero once the specs arrive.
+      **2026-09-05: this groundwork was actually already done once**
+      (2026-08-31, `NEW_MODEL_GUIDE.md`, not committed to git) --
+      exactly "check how `fvg` was wired + how to prepare/integrate
+      other models," already written up in detail: what's universal
+      regardless of a new model's nature (output contract, registration,
+      one-process-per-unit, shadow-mode proving period, some form of
+      pre-live validation) versus what was specific to `fvg`'s own
+      shape (a locked reference implementation + golden-master
+      bit-for-bit reproduction -- only applies if a future model is the
+      *same kind* of thing). **Re-verify it's still accurate before
+      relying on it** -- a lot has changed since Aug 31 (the whole
+      multi-user fan-out engine didn't exist yet); the core points look
+      still-correct on a re-read, but weren't re-checked line-by-line
+      against the current codebase for this pass. Still genuinely
+      blocked on the same thing: real model specs from the user.
 - [x] **Logging/audit review, part 1: instrument the security gap.**
       DONE 2026-08-30. Audited what was actually in place (the `events`
       table has excellent, disciplined trading-pipeline coverage --
