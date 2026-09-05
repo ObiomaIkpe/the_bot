@@ -438,6 +438,29 @@ these two are the same incident, two separate root causes.
               2026-09-05
         - [x] `order_placement_failed` events -> Telegram alert
               (2026-08-31)
+        - [x] `orphan_position_recovered`/`orphan_trade_recorded` ->
+              Telegram alert (2026-09-04)
+        - [x] Real trade ACTIVITY, not just failures, added 2026-09-05
+              on user request: `pending_order_placed`, `candidate_filled`,
+              `real_trade_closed` (💰/📉), `daily_loss_threshold_crossed`,
+              `manual_close_requested`/`manual_cancel_requested`. Found
+              and fixed two more real gaps while wiring these in --
+              same class as the write-path audit, just missed spots:
+              a real trade closing naturally (position_tracker.py's
+              `_handle_vanished()`) and the manual close/cancel API
+              endpoints both journaled successfully but never actually
+              called `alert_for_event()` on the success path, only on
+              a journal-failure fallback. 16 new/updated tests.
+        - [ ] **Alerts show the raw user_id UUID, not a human-readable
+              label.** Found 2026-09-05 while verifying multi-account
+              correctness (confirmed every alert message DOES include
+              `user={user_id}`, so multiple simultaneous accounts would
+              never produce an ambiguous message -- just not a readable
+              one). Fine with one real account; would get confusing to
+              read at a glance once a second real account (the pending
+              friend's account, still blocked on their credentials)
+              goes live. Fix: look up and show the user's email instead
+              of/alongside the raw UUID in `alert_for_event()`.
       Not yet built, deliberately skipped 2026-08-31: **missed-trading-
       day alert**. Design tradeoff discussed: this project only tracks
       FOMC dates as known non-trading days, not general market
