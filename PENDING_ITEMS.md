@@ -383,15 +383,23 @@ these two are the same incident, two separate root causes.
       motivation for finally doing this: the 2026-09-04 incident (see
       `SEPT_4_DEPLOY_AND_INCIDENT.md`) where every relevant failure got
       journaled to the database but nothing paged anyone, since this
-      was still dormant at the time. **healthchecks.io half: still not
-      done** -- needs two checks created (one per service: api,
-      shadow_runner), their ping URLs set in `.env`, and uncommented in
-      `docker-compose.yml`. Covered so far, built incrementally:
+      was still dormant at the time. **healthchecks.io half: DONE,
+      live 2026-09-05.** Two checks created ("the bot - api" 8min
+      period/6min grace, "bot-shadow-runner" 10min/5min -- tightened
+      down from an initial 1-hour grace that would have delayed a real
+      alert by over an hour). `docker-compose.yml` reworked to
+      interpolate each service's URL from `.env`
+      (`HEALTHCHECKS_PING_URL_API`/`HEALTHCHECKS_PING_URL_SHADOW_RUNNER`)
+      rather than hardcoding the real URL into the tracked file --
+      matches the `${POSTGRES_PASSWORD}` pattern already used
+      elsewhere in that file. Both checks confirmed green with real
+      pings landing after deploy. Covered so far, built incrementally:
         - [x] `safety_check_failed` events -> Telegram alert
         - [x] process/service down -> healthchecks.io dead-man's-switch
               (api: 60s heartbeat via lifespan background task;
               shadow_runner: pinged once per run_forever() loop
-              iteration) -- built, not yet wired to real check URLs
+              iteration) -- wired to real check URLs and verified live
+              2026-09-05
         - [x] `order_placement_failed` events -> Telegram alert
               (2026-08-31)
       Not yet built, deliberately skipped 2026-08-31: **missed-trading-
