@@ -27,7 +27,7 @@ import argparse
 import datetime
 
 from app.core.database import SessionLocal
-from app.models import ModelConfig
+from app.models import BrokerCredential, ModelConfig
 from shadow_runner.bridge_client import BridgeClient
 from shadow_runner.config import ShadowRunnerConfig
 from shadow_runner.historical_reconciliation import reconcile_deals
@@ -40,14 +40,25 @@ DATE_TO = datetime.datetime(2026, 9, 4, 23, 59, 59)
 
 def main(commit: bool):
     config = ShadowRunnerConfig()
-    bridge = BridgeClient(config.bridge_url)
     db = SessionLocal()
     try:
+        # Deliberately NOT config.bridge_url -- that's the shared
+        # REFERENCE bridge (detection's price feed only, see
+        # runner.py's own comment on self.bridge: "Never used for a
+        # subscriber's own orders"). Piece B needs THIS account's own
+        # real deal history, candles, and balance -- all three must
+        # come from the account that actually traded, not the
+        # reference account. Caught before ever running this live:
+        # using config.bridge_url here would have queried the wrong
+        # account's (mostly empty, since it never trades) deal history.
+        cred = db.query(BrokerCredential).filter_by(user_id=USER_ID, is_active=True).one()
+        bridge = BridgeClient(cred.bridge_url)
+
         model_config = db.query(ModelConfig).filter_by(user_id=USER_ID, model_name=config.model).one()
         magic = model_config.magic_number
         risk_pct = model_config.risk_pct
 
-        print(f"Fetching deals {DATE_FROM} -> {DATE_TO} ({config.symbol}, magic={magic})...")
+        print(f"Fetching deals {DATE_FROM} -> {DATE_TO} ({config.symbol}, magic={magic}, bridge={cred.bridge_url})...")
         deals = bridge.get_deals_history(DATE_FROM, DATE_TO)
         print(f"Bridge returned {len(deals)} raw deals (all symbols/magics on this account).")
 
