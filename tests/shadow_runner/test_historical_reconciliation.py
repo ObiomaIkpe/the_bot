@@ -263,3 +263,26 @@ def test_trade_exists_for_ticket_direct(db_session):
 
     assert trade_exists_for_ticket(db_session, user_id, "fvg", 999) is True
     assert trade_exists_for_ticket(db_session, user_id, "ob", 999) is False, "must be scoped to the right model"
+
+
+def test_closing_deal_reporting_magic_zero_is_still_matched_via_the_opening_deals_magic(db_session):
+    """2026-09-05, caught live during Stage 2 validation against the
+    real account: a well-known MT5 quirk means the CLOSING deal of a
+    position (a stop-loss/take-profit hit, or a manual close --
+    confirmed both, live) is very often reported with magic=0, even
+    though the position itself was opened by this EA with the real
+    magic number. Only the opening deal reliably carries it. Proves
+    the fix: a real magic=0 closing deal must NOT make a genuinely
+    fully-closed position look "still open" and get silently skipped."""
+    entry_time = datetime.datetime(2026, 8, 19, 9, 5, 0)
+    entry_deal = _deal(562, "in", magic=900001, time_ny=entry_time)  # real magic, as MT5 actually reports it
+    close_deal = _deal(562, "out", magic=0, price=1.1010, profit=10.0,  # real magic=0, as MT5 actually reports it
+                        time_ny=entry_time + datetime.timedelta(hours=1))
+
+    events = reconcile_deals(
+        db_session, _StubBridge(), [entry_deal, close_deal], magic=900001,
+        user_id=str(uuid.uuid4()), model="fvg", risk_pct=0.01, symbol="EURUSDm",
+    )
+
+    assert len(events) == 1, "must still find and reconcile this deal, not silently drop it"
+    assert events[0]["event_type"] == "historical_trade_reconciled"

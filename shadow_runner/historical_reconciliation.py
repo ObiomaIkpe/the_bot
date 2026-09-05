@@ -113,13 +113,29 @@ def reconcile_deals(
       a real position, but never crashes on it -- silently skipped).
     """
     collected_events = []
-    by_position = _group_deals_by_position([d for d in deals if d["magic"] == magic])
+    # 2026-09-05, caught live during Stage 2 validation: a well-known
+    # MT5 quirk means the CLOSING deal of a position (a stop-loss/
+    # take-profit hit, OR a manual close -- confirmed both, live,
+    # against this exact account) is very often reported with magic=0,
+    # even though the position itself was opened by this EA with the
+    # real magic number. Only the OPENING ("in") deal reliably carries
+    # it. Filtering the raw deal list by magic BEFORE grouping (the
+    # original, wrong design) would silently drop every closing deal
+    # like this, making a genuinely fully-closed real trade look
+    # "still open" and skip it entirely. Fix: group everything first,
+    # then decide "is this position ours" from the in-deal's magic
+    # only -- the out-deal's own magic is never checked.
+    by_position = _group_deals_by_position(deals)
 
     for position_id, position_deals in sorted(by_position.items()):
         in_deals = [d for d in position_deals if d["entry"] == "in"]
         out_deals = [d for d in position_deals if d["entry"] == "out"]
-        if not in_deals or not out_deals:
-            continue  # no open deal (shouldn't happen), or still open -- not this piece's job
+        if not in_deals:
+            continue  # not a position this magic ever opened
+        if in_deals[0]["magic"] != magic:
+            continue  # someone else's position (a different model/EA on the same account)
+        if not out_deals:
+            continue  # still open -- not this piece's job
 
         if len(out_deals) > 1:
             collected_events.append({
