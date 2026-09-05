@@ -378,6 +378,39 @@ def test_emit_check_failure_alerts_after_a_successful_commit():
     assert user_id == "user1" and model == "fvg"
 
 
+def test_handle_vanished_success_alerts_real_trade_closed():
+    """2026-09-05: found while adding real_trade_closed to
+    alert_for_event() -- _handle_vanished()'s success path committed the
+    event but never actually called alert_for_event() at all, unlike its
+    own failure path (_emit_check_failure(), already fixed 2026-09-04).
+    A real trade closing naturally (SL/TP hit) had zero Telegram
+    visibility, win or loss, until this fix."""
+    import shadow_runner.position_tracker as pt_module
+
+    alerted = []
+    original_alert = pt_module.alert_for_event
+    pt_module.alert_for_event = lambda event, user_id, model: alerted.append(event)
+
+    bridge = FakePositionBridge()
+    bridge.add_open_position(3001, magic=900001)
+    bridge.simulate_vanish(3001, close_price=1.1050, profit=42.5, close_reason="take_profit")
+    entry_time = datetime.datetime.now() - datetime.timedelta(hours=3)
+    db = FakeDB(rows=[FakeTradeRow("trade-xyz", 3001, "open", entry_time)])
+    tracker = PositionTracker(bridge, lambda: db, "user1", make_model_config())
+    tracker.register_new_position(3001, "trade-xyz", entry_time)
+
+    try:
+        tracker.check_positions()
+    finally:
+        pt_module.alert_for_event = original_alert
+
+    assert len(alerted) == 1
+    assert alerted[0]["event_type"] == "real_trade_closed"
+    assert alerted[0]["ticket"] == 3001
+    assert alerted[0]["profit"] == 42.5
+    assert alerted[0]["close_reason"] == "take_profit"
+
+
 # ---------- write-path audit, 2026-09-04: DB-commit-level failures ----------
 #
 # Prompted by "every trade activity per user per model per account has

@@ -174,17 +174,13 @@ def close_position(
     # for the Trade row itself, but not for this distinct "a human did
     # this via the UI" event).
     try:
-        write_event(
-            db,
-            {
-                "event_type": "manual_close_requested",
-                "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
-                "ticket": ticket,
-                "result": result,
-            },
-            current_user.user_id,
-            model_name,
-        )
+        close_event = {
+            "event_type": "manual_close_requested",
+            "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
+            "ticket": ticket,
+            "result": result,
+        }
+        write_event(db, close_event, current_user.user_id, model_name)
 
         # Best-effort: tag the matching Trade row's real_close_reason, if
         # one exists and hasn't already been set (e.g. by the background
@@ -198,6 +194,11 @@ def close_position(
             trade.real_close_reason = "manual"
 
         db.commit()
+        # 2026-09-05: found while adding manual_close_requested to
+        # alert_for_event() -- this success path never actually called
+        # it, only the failure fallback below did. Same class of gap as
+        # position_tracker.py's _handle_vanished() fix the same night.
+        alert_for_event(close_event, current_user.user_id, model_name)
     except Exception as e:
         db.rollback()
         log.exception(
@@ -253,18 +254,17 @@ def cancel_pending_order(
     # journal-write failure here must not turn into a misleading 500 for
     # an action that actually worked.
     try:
-        write_event(
-            db,
-            {
-                "event_type": "manual_cancel_requested",
-                "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
-                "order_ticket": order_ticket,
-                "result": result,
-            },
-            current_user.user_id,
-            model_name,
-        )
+        cancel_event = {
+            "event_type": "manual_cancel_requested",
+            "timestamp": datetime.datetime.now(_NY_TZ).replace(tzinfo=None),
+            "order_ticket": order_ticket,
+            "result": result,
+        }
+        write_event(db, cancel_event, current_user.user_id, model_name)
         db.commit()
+        # 2026-09-05: same fix as manual_close_requested above -- this
+        # success path never called alert_for_event() either.
+        alert_for_event(cancel_event, current_user.user_id, model_name)
     except Exception as e:
         db.rollback()
         log.exception(

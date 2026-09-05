@@ -382,19 +382,25 @@ class PositionTracker:
                 profit=history["profit"],
                 close_reason=history["close_reason"],
             )
-            write_event(
-                db,
-                {
-                    "event_type": "real_trade_closed",
-                    "timestamp": now_ny(),
-                    "ticket": ticket,
-                    "close_price": history["close_price"],
-                    "profit": history["profit"],
-                    "close_reason": history["close_reason"],
-                },
-                self.user_id, self.model_config["model_name"],
-            )
+            close_event = {
+                "event_type": "real_trade_closed",
+                "timestamp": now_ny(),
+                "ticket": ticket,
+                "close_price": history["close_price"],
+                "profit": history["profit"],
+                "close_reason": history["close_reason"],
+            }
+            write_event(db, close_event, self.user_id, self.model_config["model_name"])
             db.commit()
+            # 2026-09-05: found while adding real_trade_closed to
+            # alert_for_event() -- this is the exact same class of gap
+            # the 2026-09-04 write-path audit was about (a PositionTracker
+            # write committing successfully but never reaching
+            # alert_for_event() at all), just in a spot that audit missed.
+            # A real trade closing naturally (SL/TP hit, not caught by
+            # _do_partial_close()) had zero Telegram visibility, win or
+            # loss, until now.
+            alert_for_event(close_event, self.user_id, self.model_config["model_name"])
         except Exception as e:
             # 2026-09-04 fix: same class of gap as _do_partial_close()'s
             # own comment -- previously no except clause at all here, so

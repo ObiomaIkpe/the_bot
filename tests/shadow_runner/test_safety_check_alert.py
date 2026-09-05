@@ -103,6 +103,83 @@ def test_other_event_types_do_not_trigger_alert(monkeypatch):
     assert alerts == []
 
 
+def test_pending_order_placed_triggers_alert(monkeypatch):
+    """2026-09-05: added on request -- Telegram previously only ever
+    spoke up when something went wrong. A real order going live had no
+    notification at all."""
+    alerts = []
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", lambda text: alerts.append(text))
+
+    runner = _make_runner([])
+    runner._write_events_now([
+        {"event_type": "pending_order_placed", "timestamp": "t", "order_ticket": 111,
+         "direction": "long", "entry": 1.1000, "stop": 1.0990},
+    ])
+
+    assert len(alerts) == 1
+    assert "long" in alerts[0] and "1.1" in alerts[0] and "111" in alerts[0]
+
+
+def test_candidate_filled_triggers_alert(monkeypatch):
+    alerts = []
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", lambda text: alerts.append(text))
+
+    runner = _make_runner([])
+    runner._write_events_now([
+        {"event_type": "candidate_filled", "timestamp": "t", "order_ticket": 111,
+         "direction": "long", "fill_price": 1.1005},
+    ])
+
+    assert len(alerts) == 1
+    assert "1.1005" in alerts[0] and "111" in alerts[0]
+
+
+def test_real_trade_closed_triggers_alert_for_both_win_and_loss(monkeypatch):
+    alerts = []
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", lambda text: alerts.append(text))
+
+    runner = _make_runner([])
+    runner._write_events_now([
+        {"event_type": "real_trade_closed", "timestamp": "t", "ticket": 111,
+         "close_price": 1.1050, "profit": 42.50, "close_reason": "take_profit"},
+        {"event_type": "real_trade_closed", "timestamp": "t", "ticket": 222,
+         "close_price": 1.0990, "profit": -15.00, "close_reason": "stop_loss"},
+    ])
+
+    assert len(alerts) == 2
+    assert "💰" in alerts[0] and "42.5" in alerts[0] and "take_profit" in alerts[0]
+    assert "📉" in alerts[1] and "-15" in alerts[1] and "stop_loss" in alerts[1]
+
+
+def test_daily_loss_threshold_crossed_triggers_alert(monkeypatch):
+    alerts = []
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", lambda text: alerts.append(text))
+
+    runner = _make_runner([])
+    runner._write_events_now([
+        {"event_type": "daily_loss_threshold_crossed", "timestamp": "t",
+         "realized_pnl": -300.0, "realized_loss_pct": 3.2, "max_daily_loss_pct": 3.0},
+    ])
+
+    assert len(alerts) == 1
+    assert "-300" in alerts[0] and "3.2" in alerts[0] and "3.0" in alerts[0]
+
+
+def test_manual_close_and_cancel_trigger_alerts(monkeypatch):
+    alerts = []
+    monkeypatch.setattr(telegram_module, "send_telegram_alert", lambda text: alerts.append(text))
+
+    runner = _make_runner([])
+    runner._write_events_now([
+        {"event_type": "manual_close_requested", "timestamp": "t", "ticket": 111, "result": {}},
+        {"event_type": "manual_cancel_requested", "timestamp": "t", "order_ticket": 222, "result": {}},
+    ])
+
+    assert len(alerts) == 2
+    assert "111" in alerts[0]
+    assert "222" in alerts[1]
+
+
 def test_alert_fires_after_events_are_committed(monkeypatch):
     """The events must actually be journaled before the alert fires --
     an alert about something that failed to even get written would be

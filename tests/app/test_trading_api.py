@@ -260,6 +260,30 @@ def test_close_position_succeeds_for_owned_ticket_and_journals(client, db_sessio
     assert journaled[0]["is_shadow"] is False, "a real manual broker action must not be marked shadow"
 
 
+def test_close_position_success_triggers_telegram_alert(client, db_session, bridge_client, monkeypatch):
+    """2026-09-05: found while adding manual_close_requested to
+    app.core.telegram.alert_for_event() -- this success path never
+    actually called it, only the journal-failure fallback did."""
+    alerts = []
+    monkeypatch.setattr(trading, "alert_for_event", lambda event, user_id, model: alerts.append(event))
+
+    token = _register_and_login(client, "trad_alert_close@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+    magic = next(_magic_counter)
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
+    db_session.commit()
+
+    bridge_client(FakeBridge(positions=[_make_position(444, magic)]))
+
+    resp = client.post("/trading/positions/444/close", headers=_auth_header(token))
+    assert resp.status_code == 200
+    assert len(alerts) == 1
+    assert alerts[0]["event_type"] == "manual_close_requested"
+    assert alerts[0]["ticket"] == 444
+
+
 def test_close_position_404_when_ticket_not_owned(client, db_session, bridge_client):
     token = _register_and_login(client, "trad_d@example.com")
     user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
@@ -365,6 +389,28 @@ def test_cancel_pending_order_succeeds_for_owned_ticket_and_journals(client, db_
     events = client.get("/events", headers=_auth_header(token)).json()
     journaled = [e for e in events if e["event_type"] == "manual_cancel_requested"]
     assert len(journaled) == 1
+
+
+def test_cancel_pending_order_success_triggers_telegram_alert(client, db_session, bridge_client, monkeypatch):
+    """2026-09-05: same fix as manual_close_requested's own alert test above."""
+    alerts = []
+    monkeypatch.setattr(trading, "alert_for_event", lambda event, user_id, model: alerts.append(event))
+
+    token = _register_and_login(client, "trad_alert_cancel@example.com")
+    user_id = client.get("/auth/me", headers=_auth_header(token)).json()["user_id"]
+    magic = next(_magic_counter)
+    mc = db_session.query(ModelConfig).filter_by(user_id=user_id, model_name="fvg").one()
+    mc.status = "active"
+    mc.magic_number = magic
+    db_session.commit()
+
+    bridge_client(FakeBridge(pending_orders=[_make_pending_order(999, magic)]))
+
+    resp = client.delete("/trading/pending-orders/999", headers=_auth_header(token))
+    assert resp.status_code == 200
+    assert len(alerts) == 1
+    assert alerts[0]["event_type"] == "manual_cancel_requested"
+    assert alerts[0]["order_ticket"] == 999
 
 
 def test_cancel_pending_order_404_when_not_owned(client, db_session, bridge_client):

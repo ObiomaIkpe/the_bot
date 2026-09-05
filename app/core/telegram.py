@@ -89,3 +89,44 @@ def alert_for_event(event: dict, user_id, model: str) -> None:
             f"🚨 orphan_trade_recorded: permanent trade record created for ticket "
             f"{event.get('ticket')} (user={user_id}, model={model})"
         )
+    # 2026-09-05: the four below, added on request -- everything above
+    # this point only ever spoke up when something went wrong. Real
+    # trade activity (a real order going live, filling, and eventually
+    # closing) previously had NO Telegram visibility at all, win or
+    # loss, unless a failure happened alongside it.
+    elif event_type == "pending_order_placed":
+        send_telegram_alert(
+            f"📝 pending_order_placed: {event.get('direction')} at {event.get('entry')} "
+            f"(stop {event.get('stop')}, order #{event.get('order_ticket')}) "
+            f"(user={user_id}, model={model})"
+        )
+    elif event_type == "candidate_filled":
+        send_telegram_alert(
+            f"✅ candidate_filled: {event.get('direction')} filled at {event.get('fill_price')} "
+            f"(order #{event.get('order_ticket')}) (user={user_id}, model={model})"
+        )
+    elif event_type == "real_trade_closed":
+        profit = event.get("profit")
+        emoji = "💰" if (profit or 0) >= 0 else "📉"
+        send_telegram_alert(
+            f"{emoji} real_trade_closed: ticket {event.get('ticket')} closed at "
+            f"{event.get('close_price')}, profit {profit} ({event.get('close_reason')}) "
+            f"(user={user_id}, model={model})"
+        )
+    elif event_type == "daily_loss_threshold_crossed":
+        send_telegram_alert(
+            f"🛑 daily_loss_threshold_crossed: realized P&L {event.get('realized_pnl')} "
+            f"({event.get('realized_loss_pct')}% of equity, max allowed "
+            f"{event.get('max_daily_loss_pct')}%) -- no new trades today "
+            f"(user={user_id}, model={model})"
+        )
+    elif event_type == "manual_close_requested":
+        send_telegram_alert(
+            f"✋ manual_close_requested: position #{event.get('ticket')} closed by hand "
+            f"(user={user_id}, model={model})"
+        )
+    elif event_type == "manual_cancel_requested":
+        send_telegram_alert(
+            f"✋ manual_cancel_requested: pending order #{event.get('order_ticket')} "
+            f"cancelled by hand (user={user_id}, model={model})"
+        )
