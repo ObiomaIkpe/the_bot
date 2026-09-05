@@ -127,11 +127,55 @@ these two are the same incident, two separate root causes.
       sampled content directly (real swing-high/low prices, correct
       chronological order) rather than trusting row counts alone.
 
-      **Piece B (real trade reconciliation -- actual fills/exits/
-      profit against the broker for this same window) is NOT done** --
-      needs a new bridge date-range deals endpoint, its own dedicated
-      live-VPS validation session, deliberately not started this pass.
-      See the plan doc for the full design.
+- [x] **Historical reconciliation, Piece B: real trade reconciliation
+      against the broker.** DONE, deployed, and verified live
+      2026-09-05. New `GET /history/deals` bridge endpoint (MT5's real
+      `history_deals_get(date_from, date_to)`, not exposed before now
+      -- only per-ticket lookup existed). New
+      `shadow_runner/historical_reconciliation.py` correlates each
+      closed deal against Piece A's replayed narrative -- a match gets
+      a full `trades` row (candidate's own simulated entry/stop, real
+      numbers in `real_*` columns -- never fabricated), a non-match is
+      journaled honestly with no invented row (`stop_price`/
+      `target_price` are NOT NULL with no honest value for an unmatched
+      deal). Driver script (`shadow_runner/scripts/reconcile_deals_aug10_sept4_2026.py`)
+      is dry-run by default.
+
+      **Result, run live 2026-09-05**: 15 raw deals fetched (Aug 10 ->
+      Sept 4), 4 real closed positions reconciled -- including BOTH
+      known Aug 27/28 sibling-race incident trades (ticket 3147397442,
+      +498.30; 3147397683, -490.75) plus two Sept 4 trades (+2039.28,
+      +2027.56). Verified directly against the DB after commit, not
+      just the script's own claim: `entry_price` correctly holds the
+      simulated candidate number (not the real fill price -- this is
+      what makes `build_trade_chain()` able to resolve these trades'
+      stories at all), real profit/close values match exactly what the
+      user confirmed against their own MT5 account.
+
+      **Two real bugs found and fixed during live validation** (a dry
+      run reported "0 matched" for trades known to be real -- not
+      accepted, investigated with a diagnostic script querying the
+      real DB directly): (1) closing deals (a stop-loss/take-profit
+      hit OR a manual close -- confirmed both, live) very often report
+      `magic: 0` even though the position itself was opened by the EA
+      with the real magic number -- only the opening deal reliably
+      carries it; the original design filtered the whole deal list by
+      magic before pairing, silently dropping every real closing deal
+      like this. (2) `trade_candidate_ready` events from BEFORE the
+      multi-user fan-out convention change (e.g. the actual Aug 27
+      sibling-race candidates) carry a real `user_id`, not NULL --
+      filtering on `Event.user_id.is_(None)` excluded exactly the
+      historical rows this tool exists to reconcile against. Both
+      fixed with regression tests. Full suite (pytest -n auto): 10
+      pre-existing failures (unchanged), 444 passed, 1 skipped.
+
+      A third real issue was caught and fixed BEFORE ever running live:
+      the driver script's first draft used `config.bridge_url` (the
+      shared REFERENCE bridge, detection's price feed only) instead of
+      the real trading account's own bridge -- would have silently
+      queried the wrong account's (empty) deal history and looked like
+      a clean "nothing to reconcile" result instead of an obviously
+      wrong query target.
 
 ## Quick cleanup (low effort, low risk)
 
