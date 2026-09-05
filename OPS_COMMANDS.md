@@ -529,6 +529,113 @@ code path, which raw SQL can't do correctly.
 
 ---
 
+### Run the historical narrative backfill (Piece A, one-off)
+
+```bash
+docker compose run --rm shadow_runner python -m shadow_runner.scripts.backfill_narrative_aug10_sept4_2026
+```
+
+**Purpose:** reconstructs the raid/MSS/FVG/candidate journal for a
+fully-missed historical window (built 2026-09-04 for Aug 10 -> Sept 4,
+but the date range is just constants at the top of the script -- copy
+it for a different window rather than editing this one). Structurally
+incapable of placing a real order or writing a `trades` row --
+narrative only, reuses the exact same `_replay_historical_day()` the
+live restart-recovery path already uses. Idempotent: safe to re-run,
+skips any date that already has journaled events. Requires the
+bridge's `/candles` endpoint to support `start_pos` (paginated fetch,
+also 2026-09-04) -- deploy and live-smoke-check that FIRST (see the
+Windows section's "Verify a deployed file actually has the fix you
+think it has," then call `/candles?start_pos=5000&count=5` and confirm
+it returns older bars than `count=5000` alone) before trusting this
+script's fetch to actually reach back far enough.
+
+---
+
+### Run the real-trade reconciliation against the broker (Piece B, one-off)
+
+```bash
+# Dry run FIRST -- always. Prints matched/unmatched deals, writes nothing.
+docker compose run --rm shadow_runner python -m shadow_runner.scripts.reconcile_deals_aug10_sept4_2026
+
+# Only after reviewing the dry-run output line by line:
+docker compose run --rm shadow_runner python -m shadow_runner.scripts.reconcile_deals_aug10_sept4_2026 --commit
+```
+
+**Purpose:** correlates real broker deals (via the bridge's
+`/history/deals` endpoint) against Piece A's replayed narrative -- a
+match gets a full `trades` row using the candidate's own simulated
+numbers, a non-match gets journaled honestly with no fabricated row.
+**Do not skip the dry run.** Two real, live-caught bugs already hit
+this exact script: closing deals routinely report `magic: 0` (only the
+opening deal reliably carries the real magic number -- true for both a
+stop-loss/take-profit hit AND a manual close), and historical
+candidates from before the multi-user fan-out change carry a real
+`user_id`, not NULL. Both are fixed in the code now, but the general
+lesson -- don't accept an unexpected "0 matched" as "nothing to
+reconcile," investigate it -- applies to any future run of this
+pattern. Uses the real trading account's OWN bridge
+(`BrokerCredential.bridge_url`), never `config.bridge_url` (the shared
+reference/candle-feed bridge) -- using the wrong one here silently
+queries an account that never places real trades and looks exactly
+like a clean "nothing to reconcile" result.
+
+---
+
+### Diagnose an unexpected "no match" from a deal-correlation script
+
+```bash
+# Write the diagnostic as a real script under shadow_runner/scripts/
+# (see diagnose_candidate_match_2026_09_05.py for the exact pattern),
+# commit+push locally, then on the server:
+git pull
+docker compose build shadow_runner
+docker compose run --rm shadow_runner python -m shadow_runner.scripts.<your_diagnostic_script>
+```
+
+**Purpose:** when a correlation/reconciliation script reports fewer
+matches than you expect, don't guess from reading code -- query the
+real production DB directly and print exactly what the matching
+function sees (the actual stored value, its type, and whether the
+comparison you think should pass actually does). This is how both
+Piece B bugs above were found: a `_find_matching_candidate_event()`
+call returning `None` against a candidate a raw `psql` query had
+already proven exists. `docker compose run --rm shadow_runner python
+-c "..."` also works for a quick one-off check via a heredoc (`python
+<< 'PYEOF' ... PYEOF`, needs `-T` on `docker compose run` to disable
+TTY allocation for piped stdin) -- a real committed script file is
+worth it once you're iterating on the diagnostic itself.
+
+---
+
+### Set up healthchecks.io ping URLs for `api`/`shadow_runner`
+
+```bash
+cd /app4/the-bot
+echo 'HEALTHCHECKS_PING_URL_API=<api check ping URL>' >> .env
+echo 'HEALTHCHECKS_PING_URL_SHADOW_RUNNER=<shadow_runner check ping URL>' >> .env
+git pull   # picks up docker-compose.yml's ${VAR} interpolation, added 2026-09-05
+docker compose up -d api shadow_runner
+docker compose logs api --tail 10
+docker compose logs shadow_runner --tail 10
+```
+
+**Purpose:** each service pings its OWN check on healthchecks.io
+(external dead-man's-switch -- fires even if the whole VPS dies, unlike
+a same-box watcher). `docker-compose.yml` interpolates each service's
+`HEALTHCHECKS_PING_URL` from these two distinct `.env` variables
+(matching the `${POSTGRES_PASSWORD}` pattern already used for `db`) --
+never hardcode a real check URL directly into the tracked
+`docker-compose.yml`. Both log tails should stop showing "
+HEALTHCHECKS_PING_URL not set" once this lands, but that only proves
+the URL is *set* -- check the healthchecks.io dashboard directly after
+a minute or two; both checks should flip from grey/"Last Ping: Never"
+to green with a recent timestamp. When creating the checks themselves,
+set Grace Time short (~5-10 min, not the 1-hour default) -- a long
+grace defeats the point of fast detection.
+
+---
+
 ## Windows VPS (`C:\bridge`)
 
 ### Deploying a provisioning poller change (current, post-sync-gap-fix)
@@ -925,6 +1032,162 @@ it mid-run or let a fresh attempt create it before running this.
 
 ---
 
+### Find a bridge account's REAL config file (not the stale/orphan one)
+
+```powershell
+# The account label alone isn't enough -- confirm the actual path an
+# NSSM service uses before trusting any C:\bridge\accounts\<label>\ path:
+C:\nssm\nssm.exe get <service-name> AppEnvironmentExtra
+# Then read whatever BRIDGE_CONFIG_PATH that prints, e.g.:
+Get-Content C:\bridge\bridge\accounts\<label>\config.json
+```
+
+**Purpose:** `C:\bridge\accounts\` (old checkout root) and
+`C:\bridge\bridge\accounts\` (new checkout, under the actual git repo)
+can BOTH contain a `config.json` for very similarly-named accounts --
+confirmed live 2026-09-05: `C:\bridge\accounts\05315ccf\config.json`
+is the already-known orphan file (`PENDING_ITEMS.md`'s cleanup item),
+completely unrelated to whichever service you're actually
+investigating. Don't guess the path from folder-naming convention --
+ask the actual running NSSM service what `BRIDGE_CONFIG_PATH` it was
+given, then read that exact file. The config's own
+`mt5_terminal_path` field is also the authoritative source for which
+`C:\MT5-<label>\` folder a given account's terminal actually runs
+from -- don't assume from a desktop shortcut, which may not exist or
+may point somewhere stale.
+
+---
+
+### Fix a `git pull` stuck on sparse-checkout drift
+
+```powershell
+cd C:\bridge
+git status   # look for "Changes to be committed: deleted: <path>"
+             # alongside that SAME path under "Untracked files"
+git sparse-checkout list   # confirm the declared cone (e.g. "bridge")
+git sparse-checkout reapply
+# If reapply warns "directory contains untracked files, but is not
+# in the sparse-checkout cone" for a specific file, remove just that
+# file (not the whole directory), then reapply again:
+del <the one blocking file>
+git sparse-checkout reapply
+git pull
+# If pull now shows a real "CONFLICT (modify/delete)" for that same
+# path (meaning upstream has genuinely continued evolving it):
+git rm --sparse <path>
+git commit -m "Merge: keep <path> excluded from this box's sparse-checkout"
+```
+
+**Purpose:** hit live 2026-09-05 -- this box's git checkout had a
+years-stale tracked file (`app/main.py`, the BACKEND's real entrypoint,
+never meant to be tracked here at all, outside the declared `bridge`
+sparse-checkout cone) stuck half-removed in the index, blocking `git
+pull` outright with no obviously-related error message. The `git rm`
+step needs `--sparse` specifically -- a plain `git rm` refuses with
+"paths... exist outside of your sparse-checkout definition" (the error
+tells you the flag directly). The resulting merge-resolution commit is
+local-only and never needs pushing -- this box only ever pulls, never
+pushes to the shared repo.
+
+---
+
+### Restart ALL bridge services after a code change, not just the one you expect
+
+```powershell
+Get-Service | Where-Object { $_.DisplayName -like "*bridge*" }
+# Restart EVERY one that shares the checkout you just updated, e.g.:
+C:\nssm\nssm.exe restart MT5Bridge-Tony
+C:\nssm\nssm.exe restart bridge-6cf5919a
+```
+
+**Purpose:** caught live 2026-09-04 -- `MT5Bridge-Tony` (port 8001) and
+`bridge-6cf5919a` (port 8002) both run from the exact same
+`C:\bridge\bridge` checkout, via separate NSSM services with separate
+`--port` args. Restarting only one after a `git pull` leaves the other
+silently running the OLD code in memory (a code file being updated on
+disk does nothing to an already-running process). Confirmed via a live
+smoke-check that showed identical results for `start_pos=0` and
+`start_pos=5000` on the un-restarted service -- don't assume one
+restart covers everything just because the first one's health check
+looks fine.
+
+---
+
+### Confirm which account is actually the real trading account before touching config
+
+```powershell
+curl "http://localhost:<port>/health"
+```
+
+**Purpose:** the `login` field in the response is ground truth --
+confirmed live 2026-09-04 that the Hetzner `.env`'s `BRIDGE_URL` (used
+for the shared detection reference feed) pointed at a DIFFERENT,
+deliberately-provisioned account than the one actually placing real
+trades, and this was almost mis-fixed as a "bug" before the user
+clarified it was intentional. Before assuming any bridge URL/port is
+"the real account," hit its `/health` and check `login` against
+whatever account number is confirmed as actually trading real money --
+never assume from a port number, a service name, or which one a
+script's constants happen to reference.
+
+---
+
+### Set up Windows auto-logon + MT5 auto-launch survival (reboot resilience)
+
+```powershell
+# 1. Download+run Sysinternals Autologon (NOT the raw registry method --
+#    that stores the password in plaintext; Autologon encrypts it via
+#    LSA secrets): https://learn.microsoft.com/sysinternals/downloads/autologon
+#    Run as administrator, fill in Username/Domain/Password, click Enable.
+
+# 2. Confirm MT5 terminals actually auto-launch on that login -- check
+#    the Startup folder (works even when Win+R doesn't pass through a
+#    remote session -- use the taskbar search box instead):
+Get-ChildItem ([Environment]::GetFolderPath('Startup'))
+
+# 3. If empty, create one shortcut per terminal (get the exact real
+#    path from each account's own config.json, not a guess):
+$startup = [Environment]::GetFolderPath('Startup')
+$sh = New-Object -COM WScript.Shell
+$s = $sh.CreateShortcut("$startup\MT5-<label>.lnk")
+$s.TargetPath = "C:\MT5-<label>\terminal64.exe"
+$s.Arguments = "/portable"
+$s.WorkingDirectory = "C:\MT5-<label>"
+$s.Save()
+
+# 4. Confirm both NSSM bridge services are set to auto-start (not manual):
+C:\nssm\nssm.exe get <service-name> Start   # expect SERVICE_AUTO_START
+
+# 5. Only THEN trigger a real reboot to verify (a pending Windows
+#    Update install is a natural, already-needed trigger) -- afterward,
+#    confirm: no login prompt, both MT5 windows open and logged in
+#    (not sitting at a login screen), and both bridge health checks
+#    show connected:true again with no manual intervention:
+curl "http://localhost:8001/health"
+curl "http://localhost:8002/health"
+```
+
+**Purpose:** built 2026-09-05. The real gap this closes: NSSM services
+alone start fine without anyone logged in, but MT5's terminal is a GUI
+application that needs a real interactive desktop session to run at
+all (the same class of "Session 0 isolation" issue already fixed once
+for the provisioning poller) -- a service "running" proves nothing if
+the GUI app it depends on never got a desktop to run in. Real,
+non-obvious steps along the way: finding a `terminal64.exe` process
+that Task Manager's process list makes easy to miss at a glance (there
+were genuinely two running, not one -- `Get-Process terminal64 |
+ForEach-Object { $_.Path }` lists real paths directly, don't rely on
+counting rows by eye), and finding a given account's TRUE launch
+arguments from its own `config.json`'s `mt5_terminal_path` rather than
+guessing whether `/portable` applies. Security tradeoff worth stating
+plainly, not hiding: auto-logon means anyone with console/RDP access
+to this box gets an already-logged-in desktop, no password prompt --
+acceptable here given the alternative (a stranded, non-recovering
+bridge after any reboot) but a real, deliberate tradeoff, not a free
+fix.
+
+---
+
 ## Local development (this checkout)
 
 ---
@@ -932,18 +1195,26 @@ it mid-run or let a fresh attempt create it before running this.
 ### Run the full test suite and compare against the known baseline
 
 ```bash
-venv/bin/python -m pytest -q 2>&1 | tail -14
+venv/bin/python -m pytest -n auto -q 2>&1 | tail -20
 ```
 
 **Purpose:** the standard "did I break anything" check after any code
-change. This project has **10 pre-existing, unrelated failures**
+change. `-n auto` (pytest-xdist, added 2026-09-04) parallelizes across
+this machine's CPU cores -- ~65s instead of ~123s serial, same results,
+confirmed identical pass/fail sets side-by-side before adopting it.
+Requires `tests/conftest.py`'s `engine` fixture to suffix the throwaway
+DB name with `PYTEST_XDIST_WORKER` (already done) -- without that,
+parallel workers race to DROP/CREATE the same database. This project
+has **10 pre-existing, unrelated failures**
 (`test_migrations.py::test_migrations_match_models`, 3x
 `test_user_settings_constraints.py`, 4x `tests/shadow_runner/*`, 2x
 `test_shadow_runner_recovery.py`) -- the bar is "same 10, zero new,"
 never "all green." To see exactly which ones are currently failing:
 ```bash
-venv/bin/python -m pytest -q 2>&1 | grep "^FAILED"
+venv/bin/python -m pytest -n auto -q 2>&1 | grep "^FAILED"
 ```
+Drop `-n auto` (plain serial) if you ever need to debug a flake that
+might be parallelism-related itself, or don't have xdist installed.
 
 ---
 
