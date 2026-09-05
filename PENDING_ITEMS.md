@@ -203,17 +203,33 @@ these two are the same incident, two separate root causes.
       architecture already supports it (new `config.json`, new port,
       second `uvicorn` process).
 
-## Deliberately deferred -- now more urgent than before
+## Formerly "deliberately deferred," now done
 
-- [ ] **Windows auto-logon / reboot survival for the VPS.** The
-      provisioning poller runs as a Scheduled Task tied to an
-      interactive login, not a real boot-time service -- a VPS reboot
-      with nobody logged in means it doesn't come back automatically.
-      Was a "test accounts get blocked" inconvenience before; now that
-      `fvg` is live-trading real orders, it's a live-trading
-      availability risk. Needs Sysinternals `Autologon.exe` (not the
-      raw registry method) plus a real reboot to verify -- schedule
-      deliberately, this VPS also hosts Tony's live bridge.
+- [x] **Windows auto-logon / reboot survival for the VPS.** DONE and
+      verified live 2026-09-05 with a REAL reboot (a pending Windows
+      Update install, not a synthetic test). Sysinternals `Autologon.exe`
+      configured for the `Administrator` account (encrypted via LSA
+      secrets, not the raw registry method's plaintext password).
+      Startup-folder shortcuts added for BOTH MT5 terminals (`MT5-Tony`
+      and `MT5-6cf5919a`, the reference account) -- neither had one
+      before, confirmed via an empty Startup folder. Both NSSM bridge
+      services already had `SERVICE_AUTO_START`. **Confirmed end to
+      end**: box came back with no login prompt at all, both MT5
+      terminals open and already logged into their accounts, both
+      bridge health checks (`/health` on 8001 and 8002) showed
+      `connected: true` immediately, all without anyone touching the
+      keyboard. Real snag hit along the way: the reference account's
+      actual config lived at `C:\bridge\bridge\accounts\6cf5919a\
+      config.json` (the NEW checkout), not `C:\bridge\accounts\...`
+      (the old one, which turned out to hold the already-known orphan
+      `05315ccf` config instead) -- found via
+      `nssm get bridge-6cf5919a AppEnvironmentExtra`'s own
+      `BRIDGE_CONFIG_PATH`, not guessed from folder-naming convention.
+      **Security tradeoff, stated plainly**: auto-logon means anyone
+      with console/RDP access to this box now gets an already-logged-
+      in desktop, no password prompt -- accepted given the alternative
+      (a stranded, non-recovering bridge after any reboot) but a real
+      tradeoff, not a free fix. Full setup recipe in `OPS_COMMANDS.md`.
 
 ## Real work, unblocked and ready
 
