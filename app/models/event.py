@@ -144,6 +144,16 @@ VALID_EVENT_TYPES = (
     # failing must never silently cost the other. Journals that the
     # record was created --
     "orphan_trade_recorded",
+    # -- added 2026-09-05, historical reconciliation Piece B: a real
+    # broker deal from the Aug 10 -> Sept 4 backfill window has been
+    # matched against the broker's own date-range deal history
+    # (shadow_runner/historical_reconciliation.py). `details["matched"]`
+    # distinguishes a deal that also matched a Piece A-replayed
+    # detection candidate (a full Trade row was written) from one that
+    # didn't (recorded here as a raw fact only -- see this module's
+    # "no fabricated why" discipline, same as orphan_trade_recorded's
+    # own honesty rule).
+    "historical_trade_reconciled",
 )
 
 # Fixes a real, stale bug: write_event() used to hardcode is_shadow=True
@@ -183,6 +193,7 @@ REAL_ACTION_EVENT_TYPES = frozenset(
         "duplicate_fill_closed",
         "orphan_position_recovered",
         "orphan_trade_recorded",
+        "historical_trade_reconciled",
     }
 )
 

@@ -243,3 +243,27 @@ class PositionHistoryResponse(BaseModel):
     close_time_ny: str | None = None
     profit: float | None = None
     close_reason: str | None = None  # "stop_loss" | "take_profit" | "manual" | "expert" | "unknown"
+
+
+# 2026-09-04, historical reconciliation Piece B -- date-range deal
+# history, distinct from PositionHistoryResponse above (a known ticket
+# only). Same list[X] wrapper pattern as CandlesResponse/
+# PendingOrdersResponse.
+class Deal(BaseModel):
+    ticket: int
+    position_id: int
+    symbol: str
+    magic: int
+    entry: str  # "in" | "out" | "inout" | "unknown"
+    type: str  # "buy" | "sell" | "other"
+    volume: float
+    price: float
+    profit: float
+    time_utc: str
+    time_ny: str
+    reason: str  # "stop_loss" | "take_profit" | "manual" | "expert" | "unknown"
+
+
+class DealsHistoryResponse(BaseModel):
+    count: int
+    deals: list[Deal]

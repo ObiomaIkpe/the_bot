@@ -629,6 +629,95 @@ def write_orphan_trade(
     return row
 
 
+def write_reconciled_historical_trade(
+    db: Session,
+    direction: str,
+    entry_price: float,
+    stop_price: float,
+    target_price: float,
+    entry_deal: dict,
+    close_deal: dict,
+    user_id: str,
+    model: str,
+    risk_pct: float,
+    equity_before: float,
+) -> Trade:
+    """
+    2026-09-05, historical reconciliation Piece B
+    (shadow_runner/historical_reconciliation.py). The mirror case of
+    write_orphan_trade() above: that function catches a real fill
+    that's still genuinely open (close fields null, still pending).
+    This one is for a deal ALREADY fully resolved by the time
+    reconciliation runs -- every field below is a known, real fact,
+    nothing is pending.
+
+    ONLY called once a broker deal has been matched to a Piece A-
+    replayed detection candidate (see historical_reconciliation.py) --
+    entry_price/stop_price/target_price are the SIMULATION's own
+    numbers (the candidate's real detected setup, stop from its own
+    event, target freshly computed via order_manager.compute_target()
+    the same way orphan_recovery.py already does for a live catch), NOT
+    fabricated. A deal with no matching candidate never reaches this
+    function at all -- see historical_reconciliation.py's own docstring
+    on why writing a Trade row without a real stop_price/target_price
+    would mean putting fabricated numbers in place of genuinely-unknown
+    ones (both columns are NOT NULL, with no honest value to put there
+    for an unmatched deal).
+
+    exit_price/outcome/realized_r (the SIMULATED result) are
+    deliberately left null here, same as write_orphan_trade() -- this
+    function only reconciles the REAL side; wiring up whether the
+    candidate's OWN simulated result also resolved during Piece A's
+    replay is a separate, not-yet-built refinement (flagged in the
+    plan, not assumed done by this function).
+
+    equity_after deliberately left null too -- a real, documented
+    limitation, not an oversight: equity_before/equity_after form a
+    chronological chain, and retroactively inserting a trade into the
+    middle of an already-populated chain would make every later trade's
+    OWN equity_before technically stale unless the whole chain gets
+    recomputed from this point forward, which this pass does not
+    attempt (real, risky surgery across every Trade row in the account,
+    correctly judged out of scope for this pass rather than done
+    partially/silently). equity_before is a best-effort snapshot
+    (get_current_equity(), same function every other write path uses),
+    not a guarantee of chronological correctness once trades get
+    backfilled out of order.
+    """
+    row = Trade(
+        trade_id=uuid.uuid4(),
+        user_id=user_id,
+        model=model,
+        is_shadow=False,
+        direction=direction,
+        entry_price=entry_price,
+        stop_price=stop_price,
+        target_price=target_price,
+        exit_price=None,
+        outcome=None,
+        realized_r=None,
+        entry_time_utc=entry_deal["time_utc"],
+        entry_time_ny=entry_deal["time_ny"],
+        exit_time_utc=close_deal["time_utc"],
+        risk_pct_used=risk_pct,
+        equity_before=equity_before,
+        equity_after=None,
+        setup_context={"source": "historical_reconciliation"},
+        real_position_ticket=entry_deal["position_id"],
+        real_fill_price=entry_deal["price"],
+        real_fill_time_utc=entry_deal["time_utc"],
+        real_fill_time_ny=entry_deal["time_ny"],
+        real_close_price=close_deal["price"],
+        real_close_time_utc=close_deal["time_utc"],
+        real_close_time_ny=close_deal["time_ny"],
+        real_profit=close_deal["profit"],
+        real_close_reason=close_deal["reason"],
+        real_status="closed",
+    )
+    db.add(row)
+    return row
+
+
 def get_open_real_trades(db: Session, user_id: str, model: str) -> list[dict]:
     """
     Phase 4 overnight-position handling. Returns every trade still
@@ -655,6 +744,27 @@ def get_open_real_trades(db: Session, user_id: str, model: str) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def trade_exists_for_ticket(db: Session, user_id: str, model: str, position_ticket: int) -> bool:
+    """
+    2026-09-04, historical reconciliation Piece B. Unlike
+    get_open_real_trades() above (still-open only, used for
+    PositionTracker's own live rebuild), this checks ANY status --
+    open, partial_closed, or closed. Used to skip a deal the
+    reconciliation pass has either already recorded on a prior run
+    (idempotency, same discipline as Piece A's backfill script) or that
+    ordinary live tracking already caught and closed normally.
+    """
+    return (
+        db.query(Trade.trade_id)
+        .filter(
+            Trade.user_id == user_id, Trade.model == model,
+            Trade.real_position_ticket == position_ticket,
+        )
+        .first()
+        is not None
+    )
 
 
 def update_trade_partial_close(

@@ -18,6 +18,7 @@ against a different config file and port.
 """
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, Query
 
@@ -28,6 +29,7 @@ from app.models import (
     CancelResult,
     CandlesResponse,
     CloseResult,
+    DealsHistoryResponse,
     HealthResponse,
     ModifyPositionRequest,
     ModifyResult,
@@ -156,6 +158,33 @@ def get_position_history(ticket: int):
     except mt5_client.MT5Error as e:
         raise HTTPException(status_code=502, detail=str(e))
     return PositionHistoryResponse(**data)
+
+
+@app.get("/history/deals", response_model=DealsHistoryResponse)
+def get_deals_history(
+    date_from: str = Query(description="ISO date or datetime, e.g. 2026-08-10 or 2026-08-10T00:00:00"),
+    date_to: str = Query(description="ISO date or datetime -- see mt5_client.py's module comment on this "
+                                       "endpoint for what is and isn't confirmed about the boundary being "
+                                       "inclusive or exclusive"),
+):
+    """
+    2026-09-04, historical reconciliation Piece B. Read-only, no
+    orders_enabled gate -- same as /account_info, /candles,
+    /symbol_info, /history/position/{ticket}. Unlike that ticket-scoped
+    endpoint, this returns EVERY deal in the date range regardless of
+    symbol/magic/position -- deliberately unfiltered, see
+    mt5_client.py's _do_get_deals_history() for why.
+    """
+    try:
+        parsed_from = datetime.fromisoformat(date_from)
+        parsed_to = datetime.fromisoformat(date_to)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Malformed date_from/date_to: {e}")
+    try:
+        rows = mt5_client.get_deals_history(parsed_from, parsed_to)
+    except mt5_client.MT5Error as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    return DealsHistoryResponse(count=len(rows), deals=rows)
 
 
 # ---------------------------------------------------------------------------

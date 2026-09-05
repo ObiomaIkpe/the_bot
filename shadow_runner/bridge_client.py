@@ -253,6 +253,38 @@ class BridgeClient:
         except requests.RequestException as e:
             raise BridgeError(f"GET /history/position/{ticket} failed: {e}") from e
 
+    def get_deals_history(self, date_from: datetime, date_to: datetime) -> list[dict]:
+        """
+        2026-09-04, historical reconciliation Piece B. Every deal across
+        the account in [date_from, date_to] -- unlike get_position_history()
+        above, not scoped to one known ticket. Deliberately unfiltered by
+        symbol/magic (the bridge's own philosophy, see mt5_client.py) --
+        the caller filters. Same isoformat()-on-the-way-in,
+        fromisoformat()-on-the-way-out pattern as get_candles().
+        """
+        try:
+            resp = requests.get(
+                f"{self.base_url}/history/deals",
+                params={"date_from": date_from.isoformat(), "date_to": date_to.isoformat()},
+                timeout=self.timeout_seconds,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.RequestException as e:
+            raise BridgeError(f"GET /history/deals failed: {e}") from e
+
+        deals = []
+        for d in data.get("deals", []):
+            try:
+                deals.append({
+                    **d,
+                    "time_utc": datetime.fromisoformat(d["time_utc"]),
+                    "time_ny": datetime.fromisoformat(d["time_ny"]),
+                })
+            except (KeyError, ValueError) as e:
+                raise BridgeError(f"Malformed deal in bridge response: {d!r} ({e})") from e
+        return deals
+
     def close_position_partial(self, ticket: int, volume: float) -> dict:
         try:
             resp = requests.post(

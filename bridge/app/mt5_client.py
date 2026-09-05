@@ -789,6 +789,20 @@ def get_symbol_info(symbol: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
+# Shared by _do_get_position_history and _do_get_deals_history --
+# extracted 2026-09-04 (was a local var inside _do_get_position_history
+# only) so the date-range deals endpoint can reuse the exact same
+# reason translation instead of a second, potentially-drifting copy.
+_REASON_MAP = {
+    mt5.DEAL_REASON_SL: "stop_loss",
+    mt5.DEAL_REASON_TP: "take_profit",
+    mt5.DEAL_REASON_CLIENT: "manual",
+    mt5.DEAL_REASON_EXPERT: "expert",
+    mt5.DEAL_REASON_MOBILE: "manual",
+    mt5.DEAL_REASON_WEB: "manual",
+}
+
+
 def _do_get_position_history(ticket: int) -> dict:
     _ensure_connected()
     # NOTE: earlier version of this function called mt5.history_select()
@@ -815,15 +829,7 @@ def _do_get_position_history(ticket: int) -> dict:
         return {"ticket": ticket, "is_closed": False}
 
     close_deal = closing_deals[-1]  # most recent, in case of a partial-close sequence
-    reason_map = {
-        mt5.DEAL_REASON_SL: "stop_loss",
-        mt5.DEAL_REASON_TP: "take_profit",
-        mt5.DEAL_REASON_CLIENT: "manual",
-        mt5.DEAL_REASON_EXPERT: "expert",
-        mt5.DEAL_REASON_MOBILE: "manual",
-        mt5.DEAL_REASON_WEB: "manual",
-    }
-    close_reason = reason_map.get(close_deal.reason, "unknown")
+    close_reason = _REASON_MAP.get(close_deal.reason, "unknown")
 
     time_utc, time_ny = _to_ny(close_deal.time)
     return {
@@ -839,3 +845,70 @@ def _do_get_position_history(ticket: int) -> dict:
 
 def get_position_history(ticket: int) -> dict:
     return _run(_do_get_position_history, ticket)
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-04, historical reconciliation Piece B: date-range deal history.
+# Distinct from _do_get_position_history above (a KNOWN ticket only) --
+# this returns every deal across the account in a date range, regardless
+# of which position/symbol/magic placed it. Read-only, no orders_enabled
+# gate (same reasoning as every other read-only endpoint in this file).
+# Deliberately returns the raw, unfiltered list -- symbol/magic
+# filtering is the caller's job (see this file's own module docstring on
+# why: this file's job is narrow and mechanical, that judgment belongs
+# to the caller). Confirmed live against MT5's real docs (no local
+# MetaTrader5 stub exists on the dev machine that wrote this) --
+# inclusive/exclusive date boundaries and the empty-range return shape
+# were NOT documented, so both get defensive handling below rather than
+# assumed.
+# ---------------------------------------------------------------------------
+
+
+def _deal_type_str(deal) -> str:
+    if deal.type == mt5.DEAL_TYPE_BUY:
+        return "buy"
+    if deal.type == mt5.DEAL_TYPE_SELL:
+        return "sell"
+    return "other"  # balance/credit/correction deals etc. -- real, just not a trade direction
+
+
+def _deal_entry_str(deal) -> str:
+    if deal.entry == mt5.DEAL_ENTRY_IN:
+        return "in"
+    if deal.entry == mt5.DEAL_ENTRY_OUT:
+        return "out"
+    if deal.entry == mt5.DEAL_ENTRY_INOUT:
+        return "inout"  # a reversal deal -- rare, real, must not be silently misread as either in or out
+    return "unknown"
+
+
+def _do_get_deals_history(date_from, date_to) -> list[dict]:
+    _ensure_connected()
+    deals = mt5.history_deals_get(date_from, date_to)
+    if deals is None:
+        _fail(f"mt5.history_deals_get(date_from={date_from}, date_to={date_to})")
+    if not deals:
+        return []
+
+    out = []
+    for d in deals:
+        time_utc, time_ny = _to_ny(d.time)
+        out.append({
+            "ticket": d.ticket,
+            "position_id": d.position_id,
+            "symbol": d.symbol,
+            "magic": d.magic,
+            "entry": _deal_entry_str(d),
+            "type": _deal_type_str(d),
+            "volume": float(d.volume),
+            "price": float(d.price),
+            "profit": float(d.profit),
+            "time_utc": time_utc,
+            "time_ny": time_ny,
+            "reason": _REASON_MAP.get(d.reason, "unknown"),
+        })
+    return out
+
+
+def get_deals_history(date_from, date_to) -> list[dict]:
+    return _run(_do_get_deals_history, date_from, date_to)

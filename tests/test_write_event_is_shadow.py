@@ -45,7 +45,7 @@ def test_order_manager_events_are_not_shadow():
         "pending_order_placed", "pending_order_cancelled", "candidate_filled",
         "target_attached", "order_placement_failed", "order_skipped_paused",
         "real_trade_closed", "partial_close_executed", "duplicate_fill_closed",
-        "orphan_position_recovered",
+        "orphan_position_recovered", "historical_trade_reconciled",
     ]:
         write_event(db, {"event_type": event_type, "timestamp": "t"}, "user1", "fvg")
 
@@ -93,6 +93,7 @@ def test_real_action_events_keep_the_real_user_id():
     for event_type in [
         "pending_order_placed", "candidate_filled", "real_trade_closed",
         "safety_check_failed", "duplicate_fill_closed", "orphan_position_recovered",
+        "historical_trade_reconciled",
     ]:
         write_event(db, {"event_type": event_type, "timestamp": "t"}, "a-real-user-id", "fvg")
 
