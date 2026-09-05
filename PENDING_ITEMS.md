@@ -409,7 +409,27 @@ these two are the same incident, two separate root causes.
       rather than hardcoding the real URL into the tracked file --
       matches the `${POSTGRES_PASSWORD}` pattern already used
       elsewhere in that file. Both checks confirmed green with real
-      pings landing after deploy. Covered so far, built incrementally:
+      pings landing after deploy.
+
+      **Self-caused outage, same day, caught and fixed within
+      minutes**: this setup added `HEALTHCHECKS_PING_URL_API`/
+      `HEALTHCHECKS_PING_URL_SHADOW_RUNNER` to `.env.example`/`.env`
+      without declaring either on `app.core.config.Settings` --
+      `env_file: ./.env` loads `.env` wholesale into every service, and
+      `Settings` rejects any var it doesn't know about. Both `api` and
+      `shadow_runner` crashed on the next full restart (two deploys
+      later, not immediately -- never fully root-caused why the first
+      restart didn't also crash). Fixed by declaring both as optional
+      fields, matching the existing `postgres_password`/`bridge_url`
+      pattern. New regression test (`tests/app/test_config.py`) catches
+      this whole class of bug for any future `.env.example` addition --
+      verified the test genuinely fails against the broken code, not
+      just passes against the fix. See
+      `settings_extra_forbidden_outage_2026_09_05` memory for the full
+      writeup, including a false-positive mistake in the test's own
+      first draft.
+
+      Covered so far, built incrementally:
         - [x] `safety_check_failed` events -> Telegram alert
         - [x] process/service down -> healthchecks.io dead-man's-switch
               (api: 60s heartbeat via lifespan background task;
