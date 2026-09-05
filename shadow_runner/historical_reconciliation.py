@@ -63,12 +63,23 @@ def _find_matching_candidate_event(db, model: str, direction: str, entry_price: 
     deal's entry date, matching direction + a real-world price
     tolerance (see _PRICE_MATCH_TOLERANCE's own comment on why this is
     NOT trade_story.py's tight simulated-vs-simulated tolerance).
-    trade_candidate_ready is always ownerless (user_id IS NULL) --
-    shared detection narrative, never personal to one subscriber.
+
+    2026-09-05, caught live: deliberately NOT filtering on
+    Event.user_id.is_(None) here. trade_candidate_ready is ownerless
+    (shared detection narrative) under the CURRENT convention -- but
+    this piece exists specifically to reconcile HISTORY, including
+    Aug 27, which predates the multi-user fan-out change that started
+    nulling user_id on narrative events. Confirmed live against the
+    real DB: the Aug 27 candidates that match this exact incident's
+    real deals still carry the real user_id from before that
+    convention existed. Filtering on model + event_type only is safe
+    either way -- "fvg" only ever had one real subscriber this whole
+    window, so there's no risk of matching a DIFFERENT user's
+    candidate for the same model.
     """
     candidates = (
         db.query(Event)
-        .filter(Event.event_type == "trade_candidate_ready", Event.model == model, Event.user_id.is_(None))
+        .filter(Event.event_type == "trade_candidate_ready", Event.model == model)
         .all()
     )
     for e in candidates:

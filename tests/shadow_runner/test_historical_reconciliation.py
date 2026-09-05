@@ -37,12 +37,13 @@ def _deal(position_id, entry, symbol="EURUSDm", magic=900001, type_="buy", price
     }
 
 
-def _candidate_event(db_session, direction="long", entry=1.1000, stop=1.0990, date=datetime.date(2026, 8, 12)):
+def _candidate_event(db_session, direction="long", entry=1.1000, stop=1.0990, date=datetime.date(2026, 8, 12),
+                      user_id=None):
     e = Event(
         event_type="trade_candidate_ready",
         timestamp=datetime.datetime.combine(date, datetime.time(9, 0)),
         details={"direction": direction, "entry": entry, "stop": stop},
-        user_id=None, model="fvg",
+        user_id=user_id, model="fvg",
     )
     db_session.add(e)
     db_session.commit()
@@ -286,3 +287,32 @@ def test_closing_deal_reporting_magic_zero_is_still_matched_via_the_opening_deal
 
     assert len(events) == 1, "must still find and reconcile this deal, not silently drop it"
     assert events[0]["event_type"] == "historical_trade_reconciled"
+
+
+def test_candidate_with_a_real_pre_fanout_user_id_still_matches(db_session):
+    """2026-09-05, caught live against the real account: the Aug 27
+    sibling-race candidates (this exact known incident -- see
+    two_real_bugs_found_sept2) predate the multi-user fan-out change
+    that started nulling user_id on narrative events, so they still
+    carry the real user_id from before that convention existed.
+    Confirmed live: filtering on Event.user_id.is_(None) made the
+    dry-run report these as matched=False even though a real matching
+    candidate genuinely existed. Must match regardless of which era's
+    convention wrote the row."""
+    entry_time = datetime.datetime(2026, 8, 27, 10, 59, 22)
+    real_user_id = _make_user(db_session, "pre_fanout_user@example.com")
+    _candidate_event(db_session, direction="long", entry=1.1646, stop=1.16395,
+                      date=datetime.date(2026, 8, 27), user_id=real_user_id)
+
+    entry_deal = _deal(3147397683, "in", type_="buy", price=1.1646, time_ny=entry_time)
+    close_deal = _deal(3147397683, "out", type_="sell", price=1.16395, profit=-490.75,
+                        time_ny=entry_time + datetime.timedelta(hours=20))
+    bridge = _StubBridge(candles=_bars_before(entry_time))
+
+    events = reconcile_deals(
+        db_session, bridge, [entry_deal, close_deal], magic=900001,
+        user_id=real_user_id, model="fvg", risk_pct=0.01, symbol="EURUSDm",
+    )
+
+    assert len(events) == 1
+    assert events[0]["matched"] is True, "a pre-fan-out candidate with a real user_id must still be found"
