@@ -52,6 +52,15 @@ class Settings(BaseSettings):
     # shadow_runner), set via docker-compose.yml's per-service
     # `environment:` block, not this shared default.
     healthchecks_ping_url: str | None = None
+    # 2026-09-05: real outage caused by missing these -- docker-compose.yml's
+    # ${VAR} interpolation reads these two from .env at the COMPOSE level,
+    # but env_file: ./.env ALSO loads them wholesale into both containers'
+    # actual OS environment (same reason postgres_password/bridge_url are
+    # declared above), and this class rejects any unknown env var. Neither
+    # is ever read by app code directly -- declared purely so their
+    # presence in .env doesn't crash Settings() at import time.
+    healthchecks_ping_url_api: str | None = None
+    healthchecks_ping_url_shadow_runner: str | None = None
 
     # Comma-separated list of origins the frontend is served from, e.g.
     # "http://localhost:5173,https://admin.example.com". Defaults to the
