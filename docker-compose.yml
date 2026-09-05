@@ -42,11 +42,14 @@ services:
     # Monitoring/alerting (logging/audit review part 3): api and
     # shadow_runner each need their OWN healthchecks.io check, so
     # HEALTHCHECKS_PING_URL is set per-service here rather than shared
-    # via .env. Uncomment once a real check exists for this service --
-    # dormant (no real network calls) until then. TELEGRAM_BOT_TOKEN/
-    # TELEGRAM_CHAT_ID are shared across services, set once in .env.
-    # environment:
-    #   HEALTHCHECKS_PING_URL: https://hc-ping.com/<api's-check-uuid>
+    # via .env. Interpolated from HEALTHCHECKS_PING_URL_API in .env (same
+    # ${VAR} pattern db's own POSTGRES_PASSWORD above already uses) --
+    # never hardcode the real URL directly into this tracked file.
+    # Dormant (no real network calls, resolves to empty/unset) until that
+    # .env entry actually exists. TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID are
+    # shared across services, set once in .env.
+    environment:
+      HEALTHCHECKS_PING_URL: ${HEALTHCHECKS_PING_URL_API:-}
     depends_on:
       db:
         condition: service_healthy
@@ -67,10 +70,10 @@ services:
     # Settings declares both as optional fields for the unrelated reason
     # that api ALSO loads .env wholesale and would otherwise reject them
     # as unknown (same fix already applied for postgres_password).
-    # Same monitoring note as api's block above -- uncomment once a
-    # real check exists for THIS service (a different URL than api's).
-    # environment:
-    #   HEALTHCHECKS_PING_URL: https://hc-ping.com/<shadow_runner's-check-uuid>
+    # Same monitoring note as api's block above -- a DIFFERENT check
+    # than api's, interpolated from its own .env entry.
+    environment:
+      HEALTHCHECKS_PING_URL: ${HEALTHCHECKS_PING_URL_SHADOW_RUNNER:-}
     depends_on:
       db:
         condition: service_healthy
