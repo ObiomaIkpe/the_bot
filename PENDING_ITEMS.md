@@ -366,11 +366,36 @@ it correctly with no further intervention needed.
       in the feature itself.
 
 **Known gaps NOT fixed, still open:**
-- [ ] **Lot size / trade volume.** Confirmed via code search: not
-      persisted anywhere in the schema (not on `Trade`, not in any
-      journaled `Event.details`). Genuinely needs a migration + backend
-      capture change, not a display fix -- explicitly not attempted
-      without a separate go-ahead.
+- [x] **Lot size / trade volume.** Fixed 2026-09-06 (commits `28b69c7`,
+      `9d37c12`), user asked for it backfilled too ("I don't want to
+      worry about this ever again"). The raw data was already
+      available everywhere (bridge/app/mt5_client.py's Position/Deal
+      models both already carry `volume`) -- it just wasn't being
+      captured into the `trades` table. This is durable going forward,
+      not a one-time patch:
+      - Migration 0023: `trades.real_volume` (Float, nullable) --
+        purely a real-broker concept, no simulated counterpart (the
+        simulation works in R-multiples, never had a lot size).
+      - All three trade-write paths now populate it automatically from
+        data they already receive: `OrderManager._on_fill()`/
+        `get_real_outcome()` (live fills), `write_orphan_trade()`
+        (orphan recovery), `write_reconciled_historical_trade()`
+        (historical reconciliation) -- see `shadow_runner/persistence.py`.
+      - Exposed on `TradeOut`/`AdminTradeOut` + frontend types, shown as
+        "Lot size" on both trade-story detail pages and both trade list
+        tables.
+      - **Backfill for pre-existing rows**:
+        `shadow_runner/scripts/backfill_real_volume_2026_09_06.py`,
+        dry-run by default, idempotent (only touches rows where
+        `real_volume IS NULL`). Reuses the already-live `/history/deals`
+        bridge endpoint (Piece B) -- reads each trade's lot size off its
+        own entry ("in") deal, needs only the entry deal so it also
+        catches still-open real trades, not just closed ones.
+      - **Not yet run on the live VPS** -- needs migration 0023 applied
+        first, then:
+        `docker compose run --rm shadow_runner python -m shadow_runner.scripts.backfill_real_volume_2026_09_06`
+        (dry-run, review the printed output), then re-run with
+        `--commit` once satisfied.
 - [x] **`setup_context` (Trend / Risk in pips) only shown on the
       trader-facing `TradeDetail.tsx`, not `AdminTradeDetail.tsx`.**
       Fixed 2026-09-06 (commit `fcd677f`): mirrored the same conditional
