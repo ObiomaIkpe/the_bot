@@ -491,31 +491,54 @@ it correctly with no further intervention needed.
       live running, two real autonomous demo trades (one TP, one SL),
       plus the two cold-start bugs found/fixed on first deployment.
       Phase 3 is now complete, all 9 steps.
-- [x] **Multi-user trade fan-out -- BUILT and tested 2026-09-03,
-      NOT yet deployed to the live VPS.** The intended design was
-      always "one shared detection engine per model, execution fans out
-      to every subscribed user's own account" (`ModelConfig.status`
-      already models per-user opt-out) -- `shadow_runner` was hardcoded
-      to exactly ONE user via env vars. Built across three commits:
-      `get_active_subscribers()` (`5710f87`); `Event.user_id`/
-      `Trade.user_id` both made nullable, migrations 0020/0021
-      (`9ec2a14`) so the shared narrative and the model's own always-on
-      shadow trade record have a genuinely ownerless home; `OrderManager`/
-      `PositionTracker` both widened to one-per-subscriber (`12c151d`)
-      -- the `PositionTracker` widening was a real gap found mid-build,
-      not in the original design (without it, real orders would have
-      fanned out correctly while overnight risk management silently
-      kept working for only one account). 396 passed / 1 skipped, 0
-      regressions. Full design + build notes in
-      `MULTI_USER_FANOUT_PLAN.md`, plain-language explanation in
-      `MULTI_USER_FANOUT_BUILD_EXPLAINED.md` (neither committed).
-      **Important**: no feature flag gates this -- the moment it's
-      deployed, any user with an active `ModelConfig` + working bridge
-      starts receiving real trades automatically. Still ahead before
-      the real account cuts over: the deployment-model shift (one
-      container per model), the 2-week journal-only rollout acceptance
-      criteria, and the admin UI's nested per-subscriber trade story
-      (deliberate fast-follow).
+- [x] **Multi-user trade fan-out -- BUILT 2026-09-03, actually
+      DEPLOYED and LIVE since 2026-09-04.** CORRECTED 2026-09-06: this
+      item previously said "not yet deployed," carried forward
+      unverified for three days. Confirmed live: `shadow_runner/
+      scripts/heal_orphans_2026_09_04.py`'s own docstring (written that
+      night) says "Tonight's fan-out deploy applied migrations
+      0020/0021" -- this engine's own migrations. Also confirmed
+      directly against the running container (`docker exec` + grep
+      shows the per-subscriber `order_managers` dict pattern actually
+      executing, not the old code) and against the live DB
+      (`get_active_subscribers()` currently finds exactly the one real
+      account -- behaviorally identical to the old single-user code
+      with only one subscriber, no issues found).
+
+      The intended design was always "one shared detection engine per
+      model, execution fans out to every subscribed user's own
+      account" (`ModelConfig.status` already models per-user opt-out)
+      -- `shadow_runner` was hardcoded to exactly ONE user via env
+      vars. Built across three commits: `get_active_subscribers()`
+      (`5710f87`); `Event.user_id`/`Trade.user_id` both made nullable,
+      migrations 0020/0021 (`9ec2a14`) so the shared narrative and the
+      model's own always-on shadow trade record have a genuinely
+      ownerless home; `OrderManager`/`PositionTracker` both widened to
+      one-per-subscriber (`12c151d`) -- the `PositionTracker` widening
+      was a real gap found mid-build, not in the original design
+      (without it, real orders would have fanned out correctly while
+      overnight risk management silently kept working for only one
+      account). 396 passed / 1 skipped, 0 regressions at build time.
+      Full design + build notes in `MULTI_USER_FANOUT_PLAN.md`,
+      plain-language explanation in `MULTI_USER_FANOUT_BUILD_EXPLAINED.md`
+      (neither committed -- both now stale on deploy status, don't
+      trust their own "not live yet" wording).
+
+      **Important**: no feature flag gates this -- any user with an
+      active `ModelConfig` + working bridge starts receiving real
+      trades automatically the moment both exist. **Skipped, not just
+      "still ahead"**: the plan's own 2-week journal-only rollout
+      acceptance criteria (proving the engine against 2-3 real accounts
+      for two full weeks, zero real orders, before ever letting the
+      real account near it) never ran -- this got deployed the very
+      next day, bundled into another night's fixes. **User's explicit
+      decision, 2026-09-06**: not doing that rollout retroactively or
+      before a second account connects -- will watch closely once a
+      real second account (e.g. the friend's) actually joins, instead.
+      Still genuinely not built: the deployment-model shift (one
+      container per model, vs. today's still-one-container reality)
+      and the admin UI's nested per-subscriber trade story (fast-
+      follow, only matters once a second real account exists).
 - [x] **Dedicated price-only reference account -- DONE, live
       2026-09-04.** Previously one single real account did double duty:
       supplied detection's price feed (`BRIDGE_URL`) AND placed real
