@@ -38,6 +38,7 @@ export interface TradeOut {
   real_close_price: number | null;
   real_close_reason: string | null;
   real_profit: number | null;
+  real_close_time_ny: string | null;
 }
 
 export interface TradeEventChainOut {

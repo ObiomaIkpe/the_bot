@@ -83,6 +83,7 @@ class AdminTradeOut(BaseModel):
     real_close_price: float | None
     real_close_reason: str | None
     real_profit: float | None
+    real_close_time_ny: datetime.datetime | None
 
     @classmethod
     def from_model(cls, trade: Trade, user: User | None) -> "AdminTradeOut":
@@ -107,6 +108,7 @@ class AdminTradeOut(BaseModel):
             real_close_price=trade.real_close_price,
             real_close_reason=trade.real_close_reason,
             real_profit=trade.real_profit,
+            real_close_time_ny=trade.real_close_time_ny,
         )
 
 

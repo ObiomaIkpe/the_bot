@@ -51,6 +51,45 @@ export function resolveOutcome(trade: TradeOut): ResolvedOutcome {
   return "open";
 }
 
+/** Same exact gap as resolveOutcome() above, reported live by a tester
+ * ("missing exit prices"): the Exit column only ever read `exit_price`
+ * (the SIMULATED close), which is null for the same two classes of
+ * trade discovered after the fact -- an orphan-recovered position, or
+ * a historical-reconciliation backfill row. Both carry a real,
+ * definitive close price in `real_close_price` the moment
+ * `real_status === "closed"`; prefer it the same way. */
+export function resolveExitPrice(trade: TradeOut): number | null {
+  if (trade.exit_price != null) return trade.exit_price;
+  if (trade.real_status === "closed" && trade.real_close_price != null) return trade.real_close_price;
+  return null;
+}
+
+/** Mirrors resolveExitPrice() -- `exit_time_utc` is the SIMULATED
+ * close time (set once, at day-finalize, for a trade that went
+ * through the normal detection pipeline); `real_close_time_ny` is the
+ * real broker close time, only ever populated for a trade with an
+ * actual real order. Reported live: no column showed when a trade
+ * actually closed at all. Prefer the real time when it exists --
+ * it's the more meaningful of the two for a trade the user actually
+ * held real money in -- falling back to the simulated time only for a
+ * trade that never had a real component (e.g. a pure shadow trade). */
+export function resolveCloseTime(trade: TradeOut): string | null {
+  return trade.real_close_time_ny ?? trade.exit_time_utc ?? null;
+}
+
+/** Reported live: "real status of very first trade isn't visible."
+ * That trade predates the real account (06/08/2026, cutover was
+ * 08/28) -- it's a genuine shadow/paper-only row (is_shadow), so a
+ * blank real_status is technically correct: it never had a real
+ * order to have a status. The bug is a bare "-" not saying that --
+ * indistinguishable from "this should have a real status and
+ * doesn't." Say which one it actually is. */
+export function resolveRealStatusLabel(trade: TradeOut): string {
+  if (trade.real_status) return trade.real_status;
+  if (trade.is_shadow) return "shadow (no real order)";
+  return "-";
+}
+
 export function summarizeTrades(trades: TradeOut[]): PnlSummary {
   const now = new Date();
   const todayKey = now.toDateString();

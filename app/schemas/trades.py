@@ -32,6 +32,11 @@ class TradeOut(BaseModel):
     real_close_price: float | None
     real_close_reason: str | None
     real_profit: float | None
+    # The real broker close time -- was never exposed here even though
+    # the column has always existed on Trade. Reported live: the trade
+    # history page had no way to show when a trade actually closed at
+    # all, real or simulated.
+    real_close_time_ny: datetime.datetime | None
 
     class Config:
         from_attributes = True

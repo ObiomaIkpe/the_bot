@@ -5,7 +5,7 @@ import { apiClient } from "../../api/client";
 import type { AdminTradeOut } from "../../api/types";
 import { EmptyState } from "../../components/EmptyState";
 import { Table } from "../../components/Table";
-import { resolveOutcome } from "../../lib/pnl";
+import { resolveExitPrice, resolveOutcome, resolveRealStatusLabel } from "../../lib/pnl";
 import { useModels } from "../../lib/useModels";
 
 const OUTCOMES = ["win", "loss", "scratch"];
@@ -120,9 +120,9 @@ export function AdminTrades() {
                 <td>{t.is_shadow ? "yes" : "no"}</td>
                 <td>{t.direction}</td>
                 <td className="font-mono">{t.entry_price}</td>
-                <td className="font-mono">{t.exit_price ?? "-"}</td>
+                <td className="font-mono">{resolveExitPrice(t) ?? "-"}</td>
                 <td>{resolveOutcome(t)}</td>
-                <td>{t.real_status ?? "-"}</td>
+                <td>{resolveRealStatusLabel(t)}</td>
                 <td className={`font-mono ${(t.real_profit ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
                   {t.real_profit ?? "-"}
                 </td>

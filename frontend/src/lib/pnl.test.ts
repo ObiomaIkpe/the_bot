@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { TradeOut } from "../api/types";
-import { buildCumulativeSeries, resolveOutcome, summarizeTrades } from "./pnl";
+import {
+  buildCumulativeSeries,
+  resolveCloseTime,
+  resolveExitPrice,
+  resolveOutcome,
+  resolveRealStatusLabel,
+  summarizeTrades,
+} from "./pnl";
 
 /** Regression coverage for the bug a tester reported live
  * ("win rate doesn't make sense given the trades we've seen"): a real,
@@ -35,6 +42,7 @@ function trade(overrides: Partial<TradeOut>): TradeOut {
     real_close_price: null,
     real_close_reason: null,
     real_profit: null,
+    real_close_time_ny: null,
     ...overrides,
   };
 }
@@ -112,5 +120,58 @@ describe("buildCumulativeSeries", () => {
     ]);
     expect(series[0]).toMatchObject({ profit: 100, cumulative: 100 });
     expect(series[1]).toMatchObject({ profit: -30, cumulative: 70 });
+  });
+});
+
+// Reported live in the same tester's feedback as the win-rate bug:
+// "missing exit prices," "no metric showing the time the trade was
+// closed," "real status of very first trade isn't visible."
+describe("resolveExitPrice", () => {
+  it("uses the simulated exit price when it's set", () => {
+    expect(resolveExitPrice(trade({ exit_price: 1.109, real_close_price: 1.2 }))).toBe(1.109);
+  });
+
+  it("falls back to the real close price when the simulated one is missing but the real position is closed", () => {
+    expect(resolveExitPrice(trade({ exit_price: null, real_status: "closed", real_close_price: 1.16526 }))).toBe(
+      1.16526,
+    );
+  });
+
+  it("is null when neither exists yet", () => {
+    expect(resolveExitPrice(trade({ exit_price: null, real_status: "open", real_close_price: null }))).toBeNull();
+  });
+});
+
+describe("resolveCloseTime", () => {
+  it("prefers the real close time over the simulated one", () => {
+    expect(
+      resolveCloseTime(
+        trade({ real_close_time_ny: "2026-08-27T12:54:37Z", exit_time_utc: "2026-08-27T12:50:00Z" }),
+      ),
+    ).toBe("2026-08-27T12:54:37Z");
+  });
+
+  it("falls back to the simulated close time for a trade with no real component", () => {
+    expect(resolveCloseTime(trade({ real_close_time_ny: null, exit_time_utc: "2026-08-27T12:50:00Z" }))).toBe(
+      "2026-08-27T12:50:00Z",
+    );
+  });
+
+  it("is null when neither exists", () => {
+    expect(resolveCloseTime(trade({ real_close_time_ny: null, exit_time_utc: null }))).toBeNull();
+  });
+});
+
+describe("resolveRealStatusLabel", () => {
+  it("shows the real status when it's set", () => {
+    expect(resolveRealStatusLabel(trade({ real_status: "closed" }))).toBe("closed");
+  });
+
+  it("labels a shadow trade explicitly instead of a bare blank -- this was the very first trade's actual case (predates the real account)", () => {
+    expect(resolveRealStatusLabel(trade({ real_status: null, is_shadow: true }))).toBe("shadow (no real order)");
+  });
+
+  it("falls back to a plain blank for a real trade with no status yet", () => {
+    expect(resolveRealStatusLabel(trade({ real_status: null, is_shadow: false }))).toBe("-");
   });
 });
