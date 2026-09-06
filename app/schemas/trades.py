@@ -22,6 +22,14 @@ class TradeOut(BaseModel):
     # ModelConfigOut.risk_pct, which is the model's current configured
     # setting and can drift from what a past trade actually used.
     risk_pct_used: float
+    # The equity snapshot this trade's risk was sized against. Was never
+    # exposed here despite always being set on Trade (NOT NULL) -- added
+    # so the frontend can derive a real R-multiple (real_profit /
+    # (equity_before * risk_pct_used)) for a trade whose `realized_r` is
+    # null because it never went through simulated grading (orphan-
+    # recovered / historically-reconciled), the same gap already fixed
+    # for exit price and close time.
+    equity_before: float
 
     entry_time_utc: datetime.datetime
     entry_time_ny: datetime.datetime

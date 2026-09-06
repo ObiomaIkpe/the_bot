@@ -99,6 +99,29 @@ export function resolveRealStatusLabel(trade: TradeOut): string {
   return "-";
 }
 
+/** Same gap as the other resolve* helpers above, found live on the
+ * trade-story detail page: `realized_r` is the SIMULATED R-multiple
+ * (compute_realized_r() in shadow_runner/persistence.py, needs a
+ * simulated exit_price), so it's null forever for an orphan-recovered
+ * or historically-reconciled trade -- same two classes as everywhere
+ * else in this file. Unlike exit price/close time, there's no
+ * `real_realized_r` column to fall back to; it's derived instead from
+ * fields that DO exist on every real, closed trade:
+ *   R = real_profit / (equity_before * risk_pct_used)
+ * -- the same relationship write_trade() uses in reverse to compute
+ * equity_after from a simulated realized_r. equity_before is always
+ * set (NOT NULL on Trade), so this only needs real_status/real_profit
+ * to be present to produce a number. */
+export function resolveRealizedR(trade: TradeOut): number | null {
+  if (trade.realized_r != null) return trade.realized_r;
+  if (trade.real_status === "closed" && trade.real_profit != null) {
+    const riskAmount = trade.equity_before * trade.risk_pct_used;
+    if (riskAmount === 0) return null;
+    return trade.real_profit / riskAmount;
+  }
+  return null;
+}
+
 export function summarizeTrades(trades: TradeOut[]): PnlSummary {
   const now = new Date();
   const todayKey = now.toDateString();

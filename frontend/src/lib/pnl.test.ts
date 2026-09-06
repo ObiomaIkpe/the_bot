@@ -5,6 +5,7 @@ import {
   resolveCloseTime,
   resolveExitPrice,
   resolveOutcome,
+  resolveRealizedR,
   resolveRealStatusLabel,
   summarizeTrades,
 } from "./pnl";
@@ -34,6 +35,7 @@ function trade(overrides: Partial<TradeOut>): TradeOut {
     outcome: null,
     realized_r: null,
     risk_pct_used: 0.01,
+    equity_before: 10000,
     entry_time_utc: "2026-08-27T12:00:00Z",
     entry_time_ny: "2026-08-27T08:00:00-04:00",
     exit_time_utc: null,
@@ -159,6 +161,31 @@ describe("resolveCloseTime", () => {
 
   it("is null when neither exists", () => {
     expect(resolveCloseTime(trade({ real_close_time_ny: null, exit_time_utc: null }))).toBeNull();
+  });
+});
+
+// Reported live on the trade-story detail page: "Outcome: open" shown
+// directly beside "Status: closed, +$2039.28" for the same trade --
+// realized_r has no real_* column to fall back to, so it's derived
+// from real_profit/equity_before/risk_pct_used instead.
+describe("resolveRealizedR", () => {
+  it("uses the simulated realized_r when it's set", () => {
+    expect(resolveRealizedR(trade({ realized_r: 1.5, real_status: "closed", real_profit: 999 }))).toBe(1.5);
+  });
+
+  it("derives a real R-multiple when the simulated one is missing but the real position is closed", () => {
+    // Exactly the live case this was built for: equity_before=10000,
+    // risk_pct_used=0.01 (1%) -> risk amount = 100. real_profit=2039.28
+    // -> R = 2039.28 / 100 = 20.3928.
+    expect(
+      resolveRealizedR(
+        trade({ realized_r: null, real_status: "closed", real_profit: 2039.28, equity_before: 10000, risk_pct_used: 0.01 }),
+      ),
+    ).toBeCloseTo(20.3928);
+  });
+
+  it("is null when neither a simulated nor a real result exists yet", () => {
+    expect(resolveRealizedR(trade({ realized_r: null, real_status: "open", real_profit: null }))).toBeNull();
   });
 });
 

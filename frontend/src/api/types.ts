@@ -30,6 +30,10 @@ export interface TradeOut {
   // % of equity actually risked on THIS trade -- distinct from
   // ModelConfigOut.risk_pct below (the model's current setting).
   risk_pct_used: number;
+  // The equity snapshot this trade's risk was sized against -- lets a
+  // trade with no simulated realized_r (orphan/reconciled) still show a
+  // real R-multiple via resolveRealizedR() in lib/pnl.ts.
+  equity_before: number;
   entry_time_utc: string;
   entry_time_ny: string;
   exit_time_utc: string | null;

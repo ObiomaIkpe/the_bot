@@ -4,6 +4,8 @@ import { apiClient } from "../api/client";
 import type { EventOut, TradeEventChainOut, TradeOut } from "../api/types";
 import { Card } from "../components/Card";
 import { EmptyState } from "../components/EmptyState";
+import { formatPrice } from "../lib/format";
+import { resolveOutcome, resolveRealizedR } from "../lib/pnl";
 
 /** The trader-facing "why was this trade placed" story -- see
  * app.core.trade_story.build_trade_chain()'s module docstring on the
@@ -79,19 +81,19 @@ export function TradeDetail() {
                 <dt className="text-text-muted">Direction</dt>
                 <dd className="m-0">{trade.direction}</dd>
                 <dt className="text-text-muted">Entry</dt>
-                <dd className="m-0 font-mono">{trade.entry_price}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.entry_price)}</dd>
                 <dt className="text-text-muted">Stop</dt>
-                <dd className="m-0 font-mono">{trade.stop_price}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.stop_price)}</dd>
                 <dt className="text-text-muted">Target</dt>
-                <dd className="m-0 font-mono">{trade.target_price}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.target_price)}</dd>
                 <dt className="text-text-muted">Risk</dt>
                 <dd className="m-0 font-mono">{(trade.risk_pct_used * 100).toFixed(1)}%</dd>
                 <dt className="text-text-muted">Exit</dt>
-                <dd className="m-0 font-mono">{trade.exit_price ?? "-"}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.exit_price)}</dd>
                 <dt className="text-text-muted">Outcome</dt>
-                <dd className="m-0">{trade.outcome ?? "open"}</dd>
+                <dd className="m-0">{resolveOutcome(trade)}</dd>
                 <dt className="text-text-muted">Realized R</dt>
-                <dd className="m-0 font-mono">{trade.realized_r ?? "-"}</dd>
+                <dd className="m-0 font-mono">{resolveRealizedR(trade)?.toFixed(2) ?? "-"}</dd>
               </dl>
             </Card>
             <Card>
@@ -102,9 +104,9 @@ export function TradeDetail() {
                 <dt className="text-text-muted">Status</dt>
                 <dd className="m-0">{trade.real_status ?? "-"}</dd>
                 <dt className="text-text-muted">Fill price</dt>
-                <dd className="m-0 font-mono">{trade.real_fill_price ?? "-"}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.real_fill_price)}</dd>
                 <dt className="text-text-muted">Close price</dt>
-                <dd className="m-0 font-mono">{trade.real_close_price ?? "-"}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.real_close_price)}</dd>
                 <dt className="text-text-muted">Close reason</dt>
                 <dd className="m-0">{trade.real_close_reason ?? "-"}</dd>
                 <dt className="text-text-muted">Real profit</dt>

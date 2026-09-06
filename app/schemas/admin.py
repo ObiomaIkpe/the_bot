@@ -73,6 +73,9 @@ class AdminTradeOut(BaseModel):
     # comment on the same field for why this differs from the model's
     # current configured risk_pct.
     risk_pct_used: float
+    # See TradeOut's own comment on this field -- same real-R-multiple
+    # derivation need applies to the admin trade view.
+    equity_before: float
 
     entry_time_utc: datetime.datetime
     entry_time_ny: datetime.datetime
@@ -100,6 +103,7 @@ class AdminTradeOut(BaseModel):
             outcome=trade.outcome,
             realized_r=trade.realized_r,
             risk_pct_used=trade.risk_pct_used,
+            equity_before=trade.equity_before,
             entry_time_utc=trade.entry_time_utc,
             entry_time_ny=trade.entry_time_ny,
             exit_time_utc=trade.exit_time_utc,
