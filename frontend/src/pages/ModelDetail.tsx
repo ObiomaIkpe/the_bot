@@ -111,7 +111,7 @@ export function ModelDetail() {
         <Table>
           <thead>
             <tr>
-              <th>Entry (NY)</th>
+              <th>Entry time</th>
               <th>Direction</th>
               <th>Entry</th>
               <th>Exit</th>

@@ -140,7 +140,7 @@ export function TradeHistory() {
           <thead>
             <tr>
               <th className="cursor-pointer" onClick={() => toggleSort("entry_time_ny")}>
-                Entry (NY){sortIndicator("entry_time_ny")}
+                Entry time{sortIndicator("entry_time_ny")}
               </th>
               <th className="cursor-pointer" onClick={() => toggleSort("model")}>
                 Model{sortIndicator("model")}
@@ -150,7 +150,7 @@ export function TradeHistory() {
               <th>Entry</th>
               <th>Risk %</th>
               <th>Exit</th>
-              <th>Closed (NY)</th>
+              <th>Closed</th>
               <th className="cursor-pointer" onClick={() => toggleSort("outcome")}>
                 Outcome{sortIndicator("outcome")}
               </th>

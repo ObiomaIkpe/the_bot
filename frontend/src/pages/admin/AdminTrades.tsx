@@ -95,7 +95,7 @@ export function AdminTrades() {
         <Table>
           <thead>
             <tr>
-              <th>Entry (NY)</th>
+              <th>Entry time</th>
               <th>User</th>
               <th>Model</th>
               <th>Shadow</th>
