@@ -247,6 +247,135 @@ Docker network, not from outside it). Per the user's own instruction,
 these need to be **rotated** once this investigation is done, same
 discipline as the 2026-09-02 secret rotation above.
 
+## Dashboard data-consistency audit and fixes 2026-09-06
+
+Prompted by a tester's bugsheet ("win rate doesn't make sense," "no
+metric showing time closed/risk %/lot size," "missing exit prices,"
+"incorrect outcome data," "real status of very first trade isn't
+visible"). Full commit range: `72a60e0..4fed27e`.
+
+**Root pattern behind almost every item**: two trade-writing code
+paths -- `write_orphan_trade()` and `write_reconciled_historical_trade()`
+(see the historical-reconciliation entries above) -- deliberately never
+populate the SIMULATED side of a `Trade` row (`exit_price`, `outcome`,
+`realized_r`), since neither ever went through same-day simulated
+grading. Every page that only ever read the simulated field showed a
+blank/wrong value even though the REAL side (`real_close_price`,
+`real_status`, `real_profit`, etc.) was fully populated right next to
+it. Fixed with a set of `resolve*()` helpers in `frontend/src/lib/pnl.ts`
+(`resolveOutcome`, `resolveExitPrice`, `resolveCloseTime`,
+`resolveRealizedR`, `resolveRealStatusLabel`) that prefer the real
+value whenever the simulated one is missing -- applied consistently
+across `TradeHistory.tsx`, `ModelDetail.tsx`, `AdminTrades.tsx`,
+`TradeDetail.tsx`, and `AdminTradeDetail.tsx`.
+
+**Why this is durable going forward, not a one-time patch**: a trade
+caught live by a normally-running bot always gets both sides written
+together by `write_trade()` in one shot -- the gap only ever exists for
+a trade recovered after some abnormality (bot downtime, a missed fill).
+The `resolve*()` helpers are general-purpose, not tied to specific
+historical trades, so if orphan-recovery/historical-reconciliation ever
+writes another such trade in the future, every page already displays
+it correctly with no further intervention needed.
+
+- [x] **Win rate / outcome nonsensical.** Already fixed earlier the
+      same day (`e80a7a8`, `3a009f1`), before this bugsheet arrived --
+      `summarizeTrades()`/`resolveOutcome()` now count a real, closed
+      orphan/reconciled trade correctly instead of excluding it.
+- [x] **Missing exit prices.** `resolveExitPrice()` -- falls back to
+      `real_close_price`. Also caught and fixed a second time
+      (user found it live via screenshot) on `TradeDetail.tsx`
+      specifically -- that page had been deliberately left on the raw
+      field, reasoning the simulated/real split made a fallback
+      unnecessary; wrong in practice; fixed to match every other page.
+- [x] **No close-time metric.** `Trade.real_close_time_ny` existed on
+      the DB model but was never exposed through `TradeOut`/
+      `AdminTradeOut` at all -- added end to end (schema, frontend
+      type, new `resolveCloseTime()`, new "Closed" column).
+- [x] **No risk % metric.** Was already returned by the API
+      (`risk_pct_used`) but never rendered -- added a column.
+- [x] **Real status of the very first trade (06/08/2026, predates the
+      real account) invisible.** First attempt used `is_shadow` to
+      decide when to show "no real order" -- **wrong**, verified live:
+      `is_shadow` only reflects whether the model's config was
+      'active' at decision time, not whether a broker existed to place
+      a real order (this trade has `is_shadow=false` despite never
+      having a real order, since the model was configured active
+      before the account existed). Fixed to key off actual real-order
+      data (`real_fill_price`/`real_close_price` both null) instead.
+- [x] **Outcome contradiction on the trade-story detail pages**
+      ("Outcome: open" shown directly beside "Status: closed,
+      +$2039.28"). Root cause: these two pages read the raw `outcome`
+      field instead of `resolveOutcome()`. Fixed on both trader-facing
+      and admin versions.
+- [x] **Floating-point noise in displayed prices** (`Stop:
+      1.1577600000000001`). New `formatPrice()` helper
+      (`frontend/src/lib/format.ts`, rounds to 6 decimals) applied to
+      every price field on both detail pages and both list tables.
+- [x] **Realized R blank for a reconciled trade.** No `real_realized_r`
+      column exists to fall back to -- derived instead as
+      `real_profit / (equity_before * risk_pct_used)`, the same
+      relationship `write_trade()` uses in reverse. Needed exposing
+      `equity_before` through the API (existed on the model, `NOT
+      NULL`, never returned -- same schema-parity gap as
+      `real_close_time_ny` above).
+- [x] **"(NY)" column-header labels removed** ("Entry (NY)" ->
+      "Entry time", "Closed (NY)" -> "Closed") after the user checked
+      the displayed time against their actual Exness account and found
+      it already matches broker time -- the label was inaccurate, not
+      the underlying value, so only the header text changed.
+- [x] **Full production DB column audit**, prompted by the user asking
+      "what other data am I not seeing." Every column on all 10 real
+      tables checked against what the API actually returns:
+      - Surfaced (real, populated, non-sensitive, previously hidden):
+        `real_position_ticket` (lets a user cross-reference a trade
+        against their own Exness terminal directly), `real_fill_time_ny`,
+        `equity_before`, and on `broker_credentials`:
+        `provisioning_account_label`/`provisioning_claimed_at`.
+      - Checked and found NOT worth building: the `notifications`
+        table has zero rows and nothing in the codebase ever writes to
+        it (the real Telegram alert path bypasses it entirely) --
+        would only ever show permanent emptiness.
+        `provisioning_machines` is pure VPS/ops infrastructure
+        bookkeeping, not trading data.
+      - Checked for a live surprise (partial closes -- a real position
+        still open at 5pm NY should half-close automatically per
+        `position_tracker.py`, invisible on the dashboard if it had
+        ever happened): confirmed via direct query, **zero trades have
+        ever had a partial close.** Nothing hidden there today.
+- [x] **P&L chart redesign** (`72a60e0`, `a2fb11c`) -- diverging
+      per-trade bar chart (win/loss shown individually, not just a
+      blended cumulative line) alongside the existing running-total
+      line; x-axis keyed on trade sequence number instead of raw date
+      so two same-day trades (27/08, 02/09 sibling pairs) never
+      collide/crowd on the axis. Live rendering bug (tallest bars
+      overflowing their fixed-height box, found via screenshot) fixed
+      same night by giving the hidden Y-axis an explicit domain.
+- [x] **Built, then explicitly reverted on request**: a "Running
+      equity" column/field (`4a21c53`) that reconstructed a genuine
+      running account-equity chain per trade (since `equity_after` is
+      only ever populated for a trade that went through the normal
+      pipeline -- every orphan/reconciled trade leaves it null,
+      producing the confusing "current equity shows up on the OLDEST
+      trade's row" bug the user caught live). The user asked to remove
+      it entirely (`96abadb`) rather than keep it -- **worth knowing
+      before rebuilding this**: the derivation logic
+      (`buildRunningEquity()`, deleted) was correct and tested (walks
+      trades in true chronological close-time order, cascades real
+      profit forward), the removal was a product decision, not a bug
+      in the feature itself.
+
+**Known gaps NOT fixed, still open:**
+- [ ] **Lot size / trade volume.** Confirmed via code search: not
+      persisted anywhere in the schema (not on `Trade`, not in any
+      journaled `Event.details`). Genuinely needs a migration + backend
+      capture change, not a display fix -- explicitly not attempted
+      without a separate go-ahead.
+- [ ] **`setup_context` (Trend / Risk in pips) only shown on the
+      trader-facing `TradeDetail.tsx`, not `AdminTradeDetail.tsx`.**
+      Minor/cosmetic inconsistency, not data loss -- flagged, not yet
+      fixed.
+
 ## Quick cleanup (low effort, low risk)
 
 - [ ] **Delete the pre-cutover backup file on the VPS**
