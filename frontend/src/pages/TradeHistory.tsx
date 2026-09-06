@@ -6,14 +6,7 @@ import type { TradeOut } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { Table } from "../components/Table";
 import { formatPrice } from "../lib/format";
-import {
-  buildRunningEquity,
-  resolveCloseTime,
-  resolveExitPrice,
-  resolveOutcome,
-  resolveRealizedR,
-  resolveRealStatusLabel,
-} from "../lib/pnl";
+import { resolveCloseTime, resolveExitPrice, resolveOutcome, resolveRealizedR, resolveRealStatusLabel } from "../lib/pnl";
 import { useModels } from "../lib/useModels";
 
 const OUTCOMES = ["win", "loss", "scratch"];
@@ -73,15 +66,6 @@ export function TradeHistory() {
     });
     return rows;
   }, [tradesQuery.data, sortKey, sortDir]);
-
-  // Computed over the full fetched set, not `sorted` -- this is a
-  // running chain that must be built in true chronological resolution
-  // order regardless of how the table is currently sorted/displayed.
-  // See buildRunningEquity()'s own doc comment for why this exists and
-  // its one real caveat (assumes every real trade affecting equity is
-  // in this fetched set -- true as long as no server-side filter is
-  // narrowing what's loaded).
-  const runningEquity = useMemo(() => buildRunningEquity(tradesQuery.data ?? []), [tradesQuery.data]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -179,9 +163,6 @@ export function TradeHistory() {
               <th>Ticket</th>
               <th>Fill time</th>
               <th>Equity before</th>
-              <th title="A derived reconstruction, not a stored per-trade value -- see the running-equity fix.">
-                Running equity
-              </th>
             </tr>
           </thead>
           <tbody>
@@ -206,7 +187,6 @@ export function TradeHistory() {
                 <td className="font-mono">{t.real_position_ticket ?? "-"}</td>
                 <td>{t.real_fill_time_ny ? new Date(t.real_fill_time_ny).toLocaleString() : "-"}</td>
                 <td className="font-mono">{t.equity_before.toFixed(2)}</td>
-                <td className="font-mono">{runningEquity.get(t.trade_id)?.toFixed(2) ?? "-"}</td>
               </tr>
             ))}
           </tbody>

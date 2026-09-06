@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { TradeOut } from "../api/types";
 import {
   buildCumulativeSeries,
-  buildRunningEquity,
   resolveCloseTime,
   resolveExitPrice,
   resolveOutcome,
@@ -191,99 +190,6 @@ describe("resolveRealizedR", () => {
 
   it("is null when neither a simulated nor a real result exists yet", () => {
     expect(resolveRealizedR(trade({ realized_r: null, real_status: "open", real_profit: null }))).toBeNull();
-  });
-});
-
-// Reported live: "Equity after" showed a real number on the FIRST
-// trade's row and nothing on every real trade after it -- backwards
-// from what a running balance should look like. Reproduces the exact
-// live 5-trade scenario.
-describe("buildRunningEquity", () => {
-  it("reconstructs the exact live scenario: one simulated-pipeline trade, then four reconciled real trades", () => {
-    const firstTrade = trade({
-      trade_id: "first",
-      entry_time_ny: "2026-08-06T10:15:00Z",
-      exit_time_utc: "2026-08-06T15:15:00Z",
-      equity_before: 50000.75,
-      equity_after: 50321.893028455204,
-      real_status: null,
-      real_profit: null,
-    });
-    const win1 = trade({
-      trade_id: "win1",
-      entry_time_ny: "2026-08-27T14:59:22Z",
-      real_close_time_ny: "2026-08-27T15:54:22Z",
-      equity_before: 50321.893028455204,
-      equity_after: null,
-      real_status: "closed",
-      real_profit: 498.3,
-    });
-    const loss1 = trade({
-      trade_id: "loss1",
-      entry_time_ny: "2026-08-27T14:59:22Z",
-      real_close_time_ny: "2026-08-28T09:57:53Z",
-      equity_before: 50321.893028455204,
-      equity_after: null,
-      real_status: "closed",
-      real_profit: -490.75,
-    });
-    const win2 = trade({
-      trade_id: "win2",
-      entry_time_ny: "2026-09-02T17:11:04Z",
-      real_close_time_ny: "2026-09-04T10:53:29Z",
-      equity_before: 50321.893028455204,
-      equity_after: null,
-      real_status: "closed",
-      real_profit: 2039.28,
-    });
-    const win3 = trade({
-      trade_id: "win3",
-      entry_time_ny: "2026-09-02T17:11:04Z",
-      real_close_time_ny: "2026-09-04T10:53:38Z",
-      equity_before: 50321.893028455204,
-      equity_after: null,
-      real_status: "closed",
-      real_profit: 2027.56,
-    });
-
-    // Passed in entry-time (newest-first) order, same as the API
-    // returns them -- buildRunningEquity must re-derive close-time
-    // order itself, not trust the array's own order.
-    const equity = buildRunningEquity([win2, win3, win1, loss1, firstTrade]);
-
-    expect(equity.get("first")).toBeCloseTo(50321.893028455204);
-    expect(equity.get("win1")).toBeCloseTo(50820.193028455204);
-    expect(equity.get("loss1")).toBeCloseTo(50329.443028455204);
-    expect(equity.get("win2")).toBeCloseTo(52368.723028455204);
-    // The most recent trade's row now carries the account's actual
-    // current equity -- exactly what was missing before this fix.
-    expect(equity.get("win3")).toBeCloseTo(54396.283028455204);
-  });
-
-  it("carries the running value forward unchanged for a trade with no real component", () => {
-    const win = trade({ trade_id: "w", entry_time_ny: "2026-08-01T00:00:00Z", equity_after: 10500, real_status: null });
-    const pureShadow = trade({
-      trade_id: "s",
-      entry_time_ny: "2026-08-02T00:00:00Z",
-      equity_after: null,
-      real_status: null,
-      real_profit: null,
-    });
-    const equity = buildRunningEquity([win, pureShadow]);
-    expect(equity.get("s")).toBe(10500);
-  });
-
-  it("does not advance the chain for a still-open real trade", () => {
-    const closed = trade({ trade_id: "c", entry_time_ny: "2026-08-01T00:00:00Z", equity_after: 10000, real_status: null });
-    const stillOpen = trade({
-      trade_id: "o",
-      entry_time_ny: "2026-08-02T00:00:00Z",
-      equity_after: null,
-      real_status: "open",
-      real_profit: null,
-    });
-    const equity = buildRunningEquity([closed, stillOpen]);
-    expect(equity.get("o")).toBe(10000);
   });
 });
 
