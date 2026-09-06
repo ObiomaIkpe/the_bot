@@ -536,9 +536,30 @@ it correctly with no further intervention needed.
       before a second account connects -- will watch closely once a
       real second account (e.g. the friend's) actually joins, instead.
       Still genuinely not built: the deployment-model shift (one
-      container per model, vs. today's still-one-container reality)
-      and the admin UI's nested per-subscriber trade story (fast-
-      follow, only matters once a second real account exists).
+      container per model, vs. today's still-one-container reality).
+
+      **The admin UI's nested per-subscriber trade story -- BUILT and
+      deployed 2026-09-06** (commit `87804ef`), on request. New page
+      at `/admin/trade-stories`, purely client-side -- no new backend
+      endpoint, reuses `GET /admin/trades` + `GET /admin/model-configs`.
+      Groups by (model, calendar day) rather than the exact shared
+      `trade_candidate_ready` event, matching the plan's own stated
+      granularity ("one shared narrative header per model per day") and
+      sidestepping the need to correlate every per-subscriber event type
+      back to one specific candidate on a sibling-race day (several,
+      like `order_placement_failed`/`pending_order_cancelled`, don't
+      carry direction/entry in their own details to match against).
+      Flags any currently-active subscriber with no trade row that day,
+      explicitly caveated as today's roster, not a historical snapshot
+      (`ModelConfig` isn't versioned). Caught and fixed a real,
+      pre-existing type bug while building this: `AdminTradeOut.user_email`
+      was typed non-nullable in the frontend despite the backend schema
+      always allowing `None` (the ownerless shared/shadow row) -- fixed,
+      and the two existing render sites that were silently showing a
+      blank cell for this case got the same friendly label. Only
+      visually interesting with 2+ real subscribers -- with just the one
+      real account today, every story nests exactly one outcome, which
+      is expected, not a bug.
 - [x] **Dedicated price-only reference account -- DONE, live
       2026-09-04.** Previously one single real account did double duty:
       supplied detection's price feed (`BRIDGE_URL`) AND placed real
