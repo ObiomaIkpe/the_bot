@@ -231,6 +231,8 @@ export function BrokerCredentials() {
                 <th>Server</th>
                 <th>Type</th>
                 <th>Active</th>
+                <th>Label</th>
+                <th>Connected</th>
                 <th>Status</th>
                 <th></th>
               </tr>
@@ -249,6 +251,10 @@ export function BrokerCredentials() {
                       disabled={toggleActive.isPending}
                       onChange={(e) => toggleActive.mutate({ id: cred.credential_id, is_active: e.target.checked })}
                     />
+                  </td>
+                  <td>{cred.provisioning_account_label ?? "-"}</td>
+                  <td>
+                    {cred.provisioning_claimed_at ? new Date(cred.provisioning_claimed_at).toLocaleString() : "-"}
                   </td>
                   <td>
                     {(() => {

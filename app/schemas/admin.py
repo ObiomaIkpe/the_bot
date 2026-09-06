@@ -76,13 +76,17 @@ class AdminTradeOut(BaseModel):
     # See TradeOut's own comment on this field -- same real-R-multiple
     # derivation need applies to the admin trade view.
     equity_before: float
+    equity_after: float | None
+    setup_context: dict
 
     entry_time_utc: datetime.datetime
     entry_time_ny: datetime.datetime
     exit_time_utc: datetime.datetime | None
 
     real_status: str | None
+    real_position_ticket: int | None
     real_fill_price: float | None
+    real_fill_time_ny: datetime.datetime | None
     real_close_price: float | None
     real_close_reason: str | None
     real_profit: float | None
@@ -104,11 +108,15 @@ class AdminTradeOut(BaseModel):
             realized_r=trade.realized_r,
             risk_pct_used=trade.risk_pct_used,
             equity_before=trade.equity_before,
+            equity_after=trade.equity_after,
+            setup_context=trade.setup_context,
             entry_time_utc=trade.entry_time_utc,
             entry_time_ny=trade.entry_time_ny,
             exit_time_utc=trade.exit_time_utc,
             real_status=trade.real_status,
+            real_position_ticket=trade.real_position_ticket,
             real_fill_price=trade.real_fill_price,
+            real_fill_time_ny=trade.real_fill_time_ny,
             real_close_price=trade.real_close_price,
             real_close_reason=trade.real_close_reason,
             real_profit=trade.real_profit,

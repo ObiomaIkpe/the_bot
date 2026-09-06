@@ -34,11 +34,22 @@ export interface TradeOut {
   // trade with no simulated realized_r (orphan/reconciled) still show a
   // real R-multiple via resolveRealizedR() in lib/pnl.ts.
   equity_before: number;
+  // Null until the trade closes.
+  equity_after: number | null;
+  // In practice only ever {trend, risk_pips} -- see the backend
+  // Trade model's own column comment.
+  setup_context: Record<string, unknown>;
   entry_time_utc: string;
   entry_time_ny: string;
   exit_time_utc: string | null;
   real_status: string | null;
+  // The actual broker order ticket -- lets a user cross-reference a
+  // trade against their own MT5/Exness terminal directly.
+  real_position_ticket: number | null;
   real_fill_price: number | null;
+  // When the real order actually filled at the broker -- distinct from
+  // entry_time_ny (the bot's own simulated decision time).
+  real_fill_time_ny: string | null;
   real_close_price: number | null;
   real_close_reason: string | null;
   real_profit: number | null;
@@ -127,6 +138,12 @@ export interface BrokerCredentialOut {
   provisioning_status: ProvisioningStatus;
   provisioning_step: string | null;
   provisioning_error: string | null;
+  // Neither is sensitive -- found unused in the DB during a full
+  // column audit. account_label is an opaque provisioning identifier
+  // (e.g. "6cf5919a"), claimed_at is when this account finished
+  // connecting.
+  provisioning_account_label: string | null;
+  provisioning_claimed_at: string | null;
 }
 
 export interface BrokerCredentialCreate {

@@ -1,3 +1,4 @@
+import datetime
 import uuid
 
 from pydantic import BaseModel, Field
@@ -50,6 +51,14 @@ class BrokerCredentialOut(BaseModel):
     provisioning_status: str
     provisioning_step: str | None
     provisioning_error: str | None
+    # Neither of these is sensitive (unlike bridge_url/bridge_fetch_token_hash,
+    # deliberately still excluded above) -- account_label is just an
+    # opaque identifier assigned during provisioning (e.g. "6cf5919a"),
+    # and claimed_at is a plain timestamp. Found sitting unused in the
+    # DB during a full column audit; added so a user can see when their
+    # own account finished connecting.
+    provisioning_account_label: str | None
+    provisioning_claimed_at: datetime.datetime | None
 
     class Config:
         from_attributes = True
@@ -67,6 +76,8 @@ class BrokerCredentialOut(BaseModel):
             provisioning_status=cred.provisioning_status,
             provisioning_step=cred.provisioning_step,
             provisioning_error=cred.provisioning_error,
+            provisioning_account_label=cred.provisioning_account_label,
+            provisioning_claimed_at=cred.provisioning_claimed_at,
         )
 
 

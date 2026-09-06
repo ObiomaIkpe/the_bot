@@ -30,13 +30,32 @@ class TradeOut(BaseModel):
     # recovered / historically-reconciled), the same gap already fixed
     # for exit price and close time.
     equity_before: float
+    # The equity snapshot right after this trade closed -- null until it
+    # does. Exposed alongside equity_before for the same reason: it
+    # existed on Trade the whole time and was simply never returned.
+    equity_after: float | None
+    # In practice only ever {trend, risk_pips} -- see Trade's own column
+    # comment. Exposed as-is (a small dict) rather than picking specific
+    # keys out of it, so this stays correct even if the shape changes.
+    setup_context: dict
 
     entry_time_utc: datetime.datetime
     entry_time_ny: datetime.datetime
     exit_time_utc: datetime.datetime | None
 
     real_status: str | None
+    # The actual broker order ticket -- lets a user cross-reference a
+    # trade against their own MT5/Exness terminal directly, which was
+    # previously only possible by asking for a raw DB query. Never
+    # exposed before despite always being captured once a real fill
+    # happens (migration 0022 widened this to BigInteger).
+    real_position_ticket: int | None
     real_fill_price: float | None
+    # When the real order actually filled at the broker -- distinct
+    # from entry_time_ny (the bot's own simulated decision time), which
+    # can differ by seconds to minutes. Never exposed before; only the
+    # close-side real_close_time_ny got added earlier today.
+    real_fill_time_ny: datetime.datetime | None
     real_close_price: float | None
     real_close_reason: str | None
     real_profit: float | None

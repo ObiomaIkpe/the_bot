@@ -94,6 +94,22 @@ export function TradeDetail() {
                 <dd className="m-0">{resolveOutcome(trade)}</dd>
                 <dt className="text-text-muted">Realized R</dt>
                 <dd className="m-0 font-mono">{resolveRealizedR(trade)?.toFixed(2) ?? "-"}</dd>
+                <dt className="text-text-muted">Equity before</dt>
+                <dd className="m-0 font-mono">{trade.equity_before.toFixed(2)}</dd>
+                <dt className="text-text-muted">Equity after</dt>
+                <dd className="m-0 font-mono">{trade.equity_after?.toFixed(2) ?? "-"}</dd>
+                {typeof trade.setup_context.trend === "string" && (
+                  <>
+                    <dt className="text-text-muted">Trend</dt>
+                    <dd className="m-0">{trade.setup_context.trend}</dd>
+                  </>
+                )}
+                {typeof trade.setup_context.risk_pips === "number" && (
+                  <>
+                    <dt className="text-text-muted">Risk (pips)</dt>
+                    <dd className="m-0 font-mono">{trade.setup_context.risk_pips}</dd>
+                  </>
+                )}
               </dl>
             </Card>
             <Card>
@@ -103,8 +119,12 @@ export function TradeDetail() {
               <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
                 <dt className="text-text-muted">Status</dt>
                 <dd className="m-0">{trade.real_status ?? "-"}</dd>
+                <dt className="text-text-muted">Ticket</dt>
+                <dd className="m-0 font-mono">{trade.real_position_ticket ?? "-"}</dd>
                 <dt className="text-text-muted">Fill price</dt>
                 <dd className="m-0 font-mono">{formatPrice(trade.real_fill_price)}</dd>
+                <dt className="text-text-muted">Fill time</dt>
+                <dd className="m-0">{trade.real_fill_time_ny ? new Date(trade.real_fill_time_ny).toLocaleString() : "-"}</dd>
                 <dt className="text-text-muted">Close price</dt>
                 <dd className="m-0 font-mono">{formatPrice(trade.real_close_price)}</dd>
                 <dt className="text-text-muted">Close reason</dt>

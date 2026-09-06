@@ -5,6 +5,8 @@ import type { AdminEventChainOut, AdminTradeOut } from "../../api/types";
 import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
 import { Table } from "../../components/Table";
+import { formatPrice } from "../../lib/format";
+import { resolveExitPrice, resolveOutcome, resolveRealizedR } from "../../lib/pnl";
 
 /** Ports admin_dashboard/'s Trades tab drill-down. There's no single
  * GET /admin/trades/:id -- the trade itself is found by filtering the
@@ -53,19 +55,23 @@ export function AdminTradeDetail() {
                 <dt className="text-text-muted">Direction</dt>
                 <dd className="m-0">{trade.direction}</dd>
                 <dt className="text-text-muted">Entry</dt>
-                <dd className="m-0 font-mono">{trade.entry_price}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.entry_price)}</dd>
                 <dt className="text-text-muted">Stop</dt>
-                <dd className="m-0 font-mono">{trade.stop_price}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.stop_price)}</dd>
                 <dt className="text-text-muted">Target</dt>
-                <dd className="m-0 font-mono">{trade.target_price}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.target_price)}</dd>
                 <dt className="text-text-muted">Risk</dt>
                 <dd className="m-0 font-mono">{(trade.risk_pct_used * 100).toFixed(1)}%</dd>
                 <dt className="text-text-muted">Exit</dt>
-                <dd className="m-0 font-mono">{trade.exit_price ?? "-"}</dd>
+                <dd className="m-0 font-mono">{formatPrice(resolveExitPrice(trade))}</dd>
                 <dt className="text-text-muted">Outcome</dt>
-                <dd className="m-0">{trade.outcome ?? "open"}</dd>
+                <dd className="m-0">{resolveOutcome(trade)}</dd>
                 <dt className="text-text-muted">Realized R</dt>
-                <dd className="m-0 font-mono">{trade.realized_r ?? "-"}</dd>
+                <dd className="m-0 font-mono">{resolveRealizedR(trade)?.toFixed(2) ?? "-"}</dd>
+                <dt className="text-text-muted">Equity before</dt>
+                <dd className="m-0 font-mono">{trade.equity_before.toFixed(2)}</dd>
+                <dt className="text-text-muted">Equity after</dt>
+                <dd className="m-0 font-mono">{trade.equity_after?.toFixed(2) ?? "-"}</dd>
               </dl>
             </Card>
             <Card>
@@ -75,10 +81,14 @@ export function AdminTradeDetail() {
               <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
                 <dt className="text-text-muted">Status</dt>
                 <dd className="m-0">{trade.real_status ?? "-"}</dd>
+                <dt className="text-text-muted">Ticket</dt>
+                <dd className="m-0 font-mono">{trade.real_position_ticket ?? "-"}</dd>
                 <dt className="text-text-muted">Fill price</dt>
-                <dd className="m-0 font-mono">{trade.real_fill_price ?? "-"}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.real_fill_price)}</dd>
+                <dt className="text-text-muted">Fill time</dt>
+                <dd className="m-0">{trade.real_fill_time_ny ? new Date(trade.real_fill_time_ny).toLocaleString() : "-"}</dd>
                 <dt className="text-text-muted">Close price</dt>
-                <dd className="m-0 font-mono">{trade.real_close_price ?? "-"}</dd>
+                <dd className="m-0 font-mono">{formatPrice(trade.real_close_price)}</dd>
                 <dt className="text-text-muted">Close reason</dt>
                 <dd className="m-0">{trade.real_close_reason ?? "-"}</dd>
                 <dt className="text-text-muted">Real profit</dt>
