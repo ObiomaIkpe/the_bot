@@ -162,6 +162,55 @@ export function summarizeTrades(trades: TradeOut[]): PnlSummary {
   };
 }
 
+/** Reported live: the "Equity after" column showed a real number on
+ * the FIRST trade's row (06/08/2026 -- the only one that went through
+ * the normal same-day pipeline, which always computes it) and nothing
+ * at all on every real trade after it -- exactly backwards from what
+ * a running balance should look like, since equity_after is left
+ * deliberately null for every orphan-recovered / historically-
+ * reconciled trade (see write_orphan_trade()/
+ * write_reconciled_historical_trade()'s own comments: computing it
+ * correctly at write time would mean recomputing every later trade's
+ * equity_before too, out of scope for that pass).
+ *
+ * This reconstructs a genuine running total for every trade by
+ * walking them in true chronological RESOLUTION order (by real close
+ * time when one exists, else entry time -- covers a still-open trade
+ * and the one trade with no real component at all) and cascading each
+ * closed real trade's own profit forward from the last known equity.
+ * Trusts a trade's own stored equity_after when it has one (the
+ * simulated-pipeline case) rather than recomputing it.
+ *
+ * This is a DERIVED best-effort reconstruction, not a stored fact --
+ * it assumes every real trade that ever affected this account's
+ * equity is present in the `trades` array passed in (true today, one
+ * real account) and that close-time order is a good approximation of
+ * resolution order. Returns a Map keyed by trade_id so callers can
+ * look up a value regardless of what order/filter they're currently
+ * displaying trades in. */
+export function buildRunningEquity(trades: TradeOut[]): Map<string, number | null> {
+  const ordered = [...trades].sort((a, b) => {
+    const at = new Date(resolveCloseTime(a) ?? a.entry_time_ny).getTime();
+    const bt = new Date(resolveCloseTime(b) ?? b.entry_time_ny).getTime();
+    return at - bt;
+  });
+
+  const result = new Map<string, number | null>();
+  let running: number | null = null;
+
+  for (const trade of ordered) {
+    if (trade.equity_after != null) {
+      running = trade.equity_after;
+    } else if (trade.real_status === "closed" && trade.real_profit != null) {
+      const base: number = running ?? trade.equity_before;
+      running = base + trade.real_profit;
+    }
+    result.set(trade.trade_id, running);
+  }
+
+  return result;
+}
+
 export interface PnlPoint {
   date: string;
   /** 1-based position in chronological order -- the chart's x-axis

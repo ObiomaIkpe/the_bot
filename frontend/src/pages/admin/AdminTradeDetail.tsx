@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "../../api/client";
@@ -6,7 +7,7 @@ import { Card } from "../../components/Card";
 import { EmptyState } from "../../components/EmptyState";
 import { Table } from "../../components/Table";
 import { formatPrice } from "../../lib/format";
-import { resolveExitPrice, resolveOutcome, resolveRealizedR } from "../../lib/pnl";
+import { buildRunningEquity, resolveExitPrice, resolveOutcome, resolveRealizedR } from "../../lib/pnl";
 
 /** Ports admin_dashboard/'s Trades tab drill-down. There's no single
  * GET /admin/trades/:id -- the trade itself is found by filtering the
@@ -27,6 +28,24 @@ export function AdminTradeDetail() {
   });
 
   const trade = tradesQuery.data?.find((t) => t.trade_id === tradeId);
+  // Same per-user grouping as AdminTrades.tsx -- see its own comment.
+  // This page fetches every user's trades in one list, so the chain
+  // must be built once per user, not across all of them mixed.
+  const runningEquity = useMemo(() => {
+    const byUser = new Map<string, AdminTradeOut[]>();
+    for (const t of tradesQuery.data ?? []) {
+      const key = t.user_email ?? "";
+      if (!byUser.has(key)) byUser.set(key, []);
+      byUser.get(key)!.push(t);
+    }
+    const merged = new Map<string, number | null>();
+    for (const userTrades of byUser.values()) {
+      for (const [id, equity] of buildRunningEquity(userTrades)) {
+        merged.set(id, equity);
+      }
+    }
+    return merged;
+  }, [tradesQuery.data]);
 
   return (
     <div>
@@ -70,8 +89,10 @@ export function AdminTradeDetail() {
                 <dd className="m-0 font-mono">{resolveRealizedR(trade)?.toFixed(2) ?? "-"}</dd>
                 <dt className="text-text-muted">Equity before</dt>
                 <dd className="m-0 font-mono">{trade.equity_before.toFixed(2)}</dd>
-                <dt className="text-text-muted">Equity after</dt>
-                <dd className="m-0 font-mono">{trade.equity_after?.toFixed(2) ?? "-"}</dd>
+                <dt className="text-text-muted" title="A derived reconstruction, not a stored value -- see the running-equity fix.">
+                  Running equity
+                </dt>
+                <dd className="m-0 font-mono">{runningEquity.get(trade.trade_id)?.toFixed(2) ?? "-"}</dd>
               </dl>
             </Card>
             <Card>

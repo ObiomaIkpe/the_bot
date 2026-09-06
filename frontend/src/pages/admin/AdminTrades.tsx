@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { apiClient } from "../../api/client";
@@ -6,7 +6,13 @@ import type { AdminTradeOut } from "../../api/types";
 import { EmptyState } from "../../components/EmptyState";
 import { Table } from "../../components/Table";
 import { formatPrice } from "../../lib/format";
-import { resolveExitPrice, resolveOutcome, resolveRealizedR, resolveRealStatusLabel } from "../../lib/pnl";
+import {
+  buildRunningEquity,
+  resolveExitPrice,
+  resolveOutcome,
+  resolveRealizedR,
+  resolveRealStatusLabel,
+} from "../../lib/pnl";
 import { useModels } from "../../lib/useModels";
 
 const OUTCOMES = ["win", "loss", "scratch"];
@@ -36,6 +42,28 @@ export function AdminTrades() {
   });
 
   const trades = tradesQuery.data ?? [];
+
+  // Unlike TradeHistory.tsx (always one user's own trades), this page
+  // can show multiple users at once -- each user has their own
+  // independent equity chain, so buildRunningEquity() must run once
+  // per user, never across the mixed list. Only matters once the
+  // already-built-but-undeployed multi-user fan-out engine goes live;
+  // today there's exactly one real account, so this is a no-op split.
+  const runningEquity = useMemo(() => {
+    const byUser = new Map<string, AdminTradeOut[]>();
+    for (const t of trades) {
+      const key = t.user_email ?? "";
+      if (!byUser.has(key)) byUser.set(key, []);
+      byUser.get(key)!.push(t);
+    }
+    const merged = new Map<string, number | null>();
+    for (const userTrades of byUser.values()) {
+      for (const [tradeId, equity] of buildRunningEquity(userTrades)) {
+        merged.set(tradeId, equity);
+      }
+    }
+    return merged;
+  }, [trades]);
 
   return (
     <div>
@@ -110,7 +138,9 @@ export function AdminTrades() {
               <th>Ticket</th>
               <th>Fill time</th>
               <th>Equity before</th>
-              <th>Equity after</th>
+              <th title="A derived reconstruction, not a stored per-trade value -- see the running-equity fix.">
+                Running equity
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -136,7 +166,7 @@ export function AdminTrades() {
                 <td className="font-mono">{t.real_position_ticket ?? "-"}</td>
                 <td>{t.real_fill_time_ny ? new Date(t.real_fill_time_ny).toLocaleString() : "-"}</td>
                 <td className="font-mono">{t.equity_before.toFixed(2)}</td>
-                <td className="font-mono">{t.equity_after?.toFixed(2) ?? "-"}</td>
+                <td className="font-mono">{runningEquity.get(t.trade_id)?.toFixed(2) ?? "-"}</td>
               </tr>
             ))}
           </tbody>

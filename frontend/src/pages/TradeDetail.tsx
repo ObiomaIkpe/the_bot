@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "../api/client";
@@ -5,7 +6,7 @@ import type { EventOut, TradeEventChainOut, TradeOut } from "../api/types";
 import { Card } from "../components/Card";
 import { EmptyState } from "../components/EmptyState";
 import { formatPrice } from "../lib/format";
-import { resolveOutcome, resolveRealizedR } from "../lib/pnl";
+import { buildRunningEquity, resolveOutcome, resolveRealizedR } from "../lib/pnl";
 
 /** The trader-facing "why was this trade placed" story -- see
  * app.core.trade_story.build_trade_chain()'s module docstring on the
@@ -53,6 +54,11 @@ export function TradeDetail() {
   });
 
   const trade = tradesQuery.data?.find((t) => t.trade_id === tradeId);
+  // See buildRunningEquity()'s own doc comment -- this page already
+  // fetches every one of this user's own trades (all-for-detail), so
+  // the chain is computed correctly here regardless of which one is
+  // being viewed.
+  const runningEquity = useMemo(() => buildRunningEquity(tradesQuery.data ?? []), [tradesQuery.data]);
 
   return (
     <div>
@@ -96,8 +102,10 @@ export function TradeDetail() {
                 <dd className="m-0 font-mono">{resolveRealizedR(trade)?.toFixed(2) ?? "-"}</dd>
                 <dt className="text-text-muted">Equity before</dt>
                 <dd className="m-0 font-mono">{trade.equity_before.toFixed(2)}</dd>
-                <dt className="text-text-muted">Equity after</dt>
-                <dd className="m-0 font-mono">{trade.equity_after?.toFixed(2) ?? "-"}</dd>
+                <dt className="text-text-muted" title="A derived reconstruction, not a stored value -- see the running-equity fix.">
+                  Running equity
+                </dt>
+                <dd className="m-0 font-mono">{runningEquity.get(trade.trade_id)?.toFixed(2) ?? "-"}</dd>
                 {typeof trade.setup_context.trend === "string" && (
                   <>
                     <dt className="text-text-muted">Trend</dt>
