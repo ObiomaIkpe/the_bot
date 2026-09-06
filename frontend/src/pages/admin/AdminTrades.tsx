@@ -121,7 +121,7 @@ export function AdminTrades() {
                     {new Date(t.entry_time_ny).toLocaleString()}
                   </Link>
                 </td>
-                <td>{t.user_email}</td>
+                <td>{t.user_email ?? "shared narrative (shadow)"}</td>
                 <td>{t.model}</td>
                 <td>{t.is_shadow ? "yes" : "no"}</td>
                 <td>{t.direction}</td>

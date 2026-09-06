@@ -12,6 +12,7 @@ import { AdminModels } from "./pages/admin/AdminModels";
 import { AdminSafetyChecks } from "./pages/admin/AdminSafetyChecks";
 import { AdminTradeDetail } from "./pages/admin/AdminTradeDetail";
 import { AdminTrades } from "./pages/admin/AdminTrades";
+import { AdminTradeStories } from "./pages/admin/AdminTradeStories";
 import { BrokerCredentials } from "./pages/BrokerCredentials";
 import { Live } from "./pages/Live";
 import { Login } from "./pages/Login";
@@ -58,6 +59,7 @@ function App() {
           <Route element={<AdminRoute />}>
             <Route path="/admin/events" element={<AdminEventFeed />} />
             <Route path="/admin/trades" element={<AdminTrades />} />
+            <Route path="/admin/trade-stories" element={<AdminTradeStories />} />
             <Route path="/admin/trades/:tradeId" element={<AdminTradeDetail />} />
             <Route path="/admin/safety-checks" element={<AdminSafetyChecks />} />
             <Route path="/admin/audit-log" element={<AdminAuditLog />} />

@@ -192,7 +192,14 @@ export interface CurrentUser {
 // not just a straight port.
 
 export type AdminEventOut = EventOut & { user_email: string };
-export type AdminTradeOut = TradeOut & { user_email: string };
+// user_email is nullable -- see app/schemas/admin.py's own comment:
+// None for the model's ownerless shared/shadow row (Trade.user_id IS
+// NULL, multi-user fan-out piece 2), which has no User row to join.
+// Every per-subscriber real-outcome row always still carries a real
+// email. Was previously typed as non-nullable `string` here, caught
+// while building AdminTradeStories.tsx (2026-09-06), which relies on
+// this null exactly to distinguish the shared row from a subscriber's own.
+export type AdminTradeOut = TradeOut & { user_email: string | null };
 export type AdminModelConfigOut = ModelConfigOut & { user_email: string };
 export type AdminModelCreateOut = ModelOut & { backfilled_users: number };
 

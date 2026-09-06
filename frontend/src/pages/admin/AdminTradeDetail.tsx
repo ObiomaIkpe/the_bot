@@ -51,7 +51,7 @@ export function AdminTradeDetail() {
               <h2 className="text-[13px] uppercase tracking-wide text-text-muted mt-0 mb-3">Simulated outcome</h2>
               <dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
                 <dt className="text-text-muted">User</dt>
-                <dd className="m-0">{trade.user_email}</dd>
+                <dd className="m-0">{trade.user_email ?? "shared narrative (shadow)"}</dd>
                 <dt className="text-text-muted">Direction</dt>
                 <dd className="m-0">{trade.direction}</dd>
                 <dt className="text-text-muted">Entry</dt>

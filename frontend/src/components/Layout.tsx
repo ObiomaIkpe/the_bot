@@ -20,6 +20,7 @@ const NAV_ITEMS = [
 const ADMIN_NAV_ITEMS = [
   { to: "/admin/events", label: "Live event feed" },
   { to: "/admin/trades", label: "Trades" },
+  { to: "/admin/trade-stories", label: "Trade stories" },
   { to: "/admin/safety-checks", label: "Safety checks" },
   { to: "/admin/audit-log", label: "Audit log" },
   { to: "/admin/model-configs", label: "Model configs" },
