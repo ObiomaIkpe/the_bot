@@ -167,11 +167,17 @@ describe("resolveRealStatusLabel", () => {
     expect(resolveRealStatusLabel(trade({ real_status: "closed" }))).toBe("closed");
   });
 
-  it("labels a shadow trade explicitly instead of a bare blank -- this was the very first trade's actual case (predates the real account)", () => {
-    expect(resolveRealStatusLabel(trade({ real_status: null, is_shadow: true }))).toBe("shadow (no real order)");
+  it("labels a trade with no real-order data explicitly instead of a bare blank -- this was the very first trade's actual live case (predates the real account, is_shadow=False)", () => {
+    expect(
+      resolveRealStatusLabel(
+        trade({ real_status: null, is_shadow: false, real_fill_price: null, real_close_price: null }),
+      ),
+    ).toBe("no real order");
   });
 
-  it("falls back to a plain blank for a real trade with no status yet", () => {
-    expect(resolveRealStatusLabel(trade({ real_status: null, is_shadow: false }))).toBe("-");
+  it("does not trust is_shadow alone -- a shadow-flagged trade with real fill/close data still isn't blank", () => {
+    expect(
+      resolveRealStatusLabel(trade({ real_status: null, is_shadow: true, real_fill_price: 1.1, real_close_price: null })),
+    ).toBe("-");
   });
 });

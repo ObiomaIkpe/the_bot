@@ -79,14 +79,23 @@ export function resolveCloseTime(trade: TradeOut): string | null {
 
 /** Reported live: "real status of very first trade isn't visible."
  * That trade predates the real account (06/08/2026, cutover was
- * 08/28) -- it's a genuine shadow/paper-only row (is_shadow), so a
- * blank real_status is technically correct: it never had a real
- * order to have a status. The bug is a bare "-" not saying that --
- * indistinguishable from "this should have a real status and
- * doesn't." Say which one it actually is. */
+ * 08/28), so a blank real_status is technically correct: it never had
+ * a real order to have a status. The bug is a bare "-" not saying
+ * that -- indistinguishable from "this should have a real status and
+ * doesn't."
+ *
+ * First attempt at this fix checked `is_shadow`, which turned out to
+ * be wrong: verified live against this exact trade, `is_shadow` is
+ * False for it -- it only reflects whether the model's config was
+ * 'active' at decision time (write_trade()'s own is_shadow param
+ * doc), NOT whether a broker actually existed to place a real order.
+ * The model was already configured active before the real account
+ * existed, so is_shadow=False here despite no real order ever being
+ * possible. Base the label on actual real-order data instead, which
+ * can't be fooled by that config/infrastructure gap. */
 export function resolveRealStatusLabel(trade: TradeOut): string {
   if (trade.real_status) return trade.real_status;
-  if (trade.is_shadow) return "shadow (no real order)";
+  if (trade.real_fill_price == null && trade.real_close_price == null) return "no real order";
   return "-";
 }
 
