@@ -61,23 +61,36 @@ function PnlTooltip({ active, payload }: { active?: boolean; payload?: Array<{ p
  * growing running total), and a shared x-axis across two small charts
  * reads cleanly without resorting to a second y-axis on one chart. */
 function PerTradeChart({ data }: { data: PnlPoint[] }) {
+  // Recharts' auto-domain, left unset, gave the tallest bars (a real
+  // account's two biggest wins) no headroom -- they rendered right up
+  // to, and visually past, this chart's own 90px box. A hidden axis
+  // still needs an explicit range: pad both directions by 20% of the
+  // largest magnitude seen (win or loss) so every bar -- including a
+  // bigger one than any seen yet -- stays inside its own box, and
+  // clip defensively at the container level in case a future Recharts
+  // version's rounding does the same thing again.
+  const maxAbsProfit = Math.max(...data.map((point) => Math.abs(point.profit)), 1);
+  const domain: [number, number] = [-maxAbsProfit * 1.2, maxAbsProfit * 1.2];
+
   return (
-    <ResponsiveContainer width="100%" height={90}>
-      <BarChart data={data} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
-        <XAxis dataKey="tradeNumber" hide />
-        <YAxis hide />
-        <ReferenceLine y={0} stroke="var(--color-line)" />
-        <Tooltip content={<PnlTooltip />} />
-        <Bar dataKey="profit" maxBarSize={20} radius={[3, 3, 3, 3]}>
-          {data.map((point) => (
-            <Cell
-              key={point.tradeNumber}
-              fill={point.profit >= 0 ? "var(--color-positive)" : "var(--color-negative)"}
-            />
-          ))}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
+    <div style={{ overflow: "hidden" }}>
+      <ResponsiveContainer width="100%" height={90}>
+        <BarChart data={data} margin={{ top: 4, right: 12, bottom: 0, left: 0 }}>
+          <XAxis dataKey="tradeNumber" hide />
+          <YAxis hide domain={domain} />
+          <ReferenceLine y={0} stroke="var(--color-line)" />
+          <Tooltip content={<PnlTooltip />} />
+          <Bar dataKey="profit" maxBarSize={20} radius={[3, 3, 3, 3]}>
+            {data.map((point) => (
+              <Cell
+                key={point.tradeNumber}
+                fill={point.profit >= 0 ? "var(--color-positive)" : "var(--color-negative)"}
+              />
+            ))}
+          </Bar>
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 
