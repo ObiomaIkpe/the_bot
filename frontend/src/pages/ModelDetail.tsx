@@ -8,7 +8,7 @@ import { PnlChart } from "../components/PnlChart";
 import { StatTile } from "../components/StatTile";
 import { Table } from "../components/Table";
 import { modelStatusBadgeVariant } from "../lib/modelStatus";
-import { buildCumulativeSeries, summarizeTrades } from "../lib/pnl";
+import { buildCumulativeSeries, resolveOutcome, summarizeTrades } from "../lib/pnl";
 
 const STATUSES: ModelStatus[] = ["disabled", "shadow", "active"];
 
@@ -128,7 +128,7 @@ export function ModelDetail() {
                 <td>{t.direction}</td>
                 <td className="font-mono">{t.entry_price}</td>
                 <td className="font-mono">{t.exit_price ?? "-"}</td>
-                <td>{t.outcome ?? "open"}</td>
+                <td>{resolveOutcome(t)}</td>
                 <td className={`font-mono ${(t.real_profit ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
                   {t.real_profit ?? "-"}
                 </td>

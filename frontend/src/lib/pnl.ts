@@ -19,6 +19,38 @@ function profitOf(trade: TradeOut): number {
   return trade.real_profit ?? 0;
 }
 
+/** `outcome` is the SIMULATED same-day verdict (win/loss/scratch),
+ * fixed at day-finalize time by the detection pipeline -- see
+ * shadow_runner/persistence.py's write_trade(). It is only ever null
+ * for a trade that was genuinely still open when this ran, EXCEPT for
+ * two classes discovered after the fact, which deliberately never go
+ * through that simulated grading step at all and so leave `outcome`
+ * null forever, even once fully resolved for real:
+ *   - an orphaned position, found unmanaged and healed
+ *     (write_orphan_trade())
+ *   - a historical-reconciliation backfill row (write_reconciled_
+ *     historical_trade(), 2026-09-05)
+ * Both still carry a definitive REAL result the moment
+ * `real_status === "closed"`, which this app never checked before --
+ * this was reported live by a tester ("win rate doesn't make sense
+ * given the trades we've seen") because both classes were showing a
+ * real, closed profit/loss number next to an "open" label, and were
+ * silently excluded from the win-rate math entirely. Prefer the real
+ * result whenever the simulated one is missing, and only fall back to
+ * "open" when there is truly no result of either kind yet. */
+export type ResolvedOutcome = "win" | "loss" | "scratch" | "open";
+
+export function resolveOutcome(trade: TradeOut): ResolvedOutcome {
+  if (trade.outcome) return trade.outcome as ResolvedOutcome;
+  if (trade.real_status === "closed") {
+    const profit = trade.real_profit ?? 0;
+    if (profit > 0) return "win";
+    if (profit < 0) return "loss";
+    return "scratch";
+  }
+  return "open";
+}
+
 export function summarizeTrades(trades: TradeOut[]): PnlSummary {
   const now = new Date();
   const todayKey = now.toDateString();
@@ -40,11 +72,12 @@ export function summarizeTrades(trades: TradeOut[]): PnlSummary {
     allTime += profit;
     if (entry.toDateString() === todayKey) today += profit;
     if (entry.getTime() >= weekAgo) thisWeek += profit;
-    if (trade.outcome) {
-      closed += 1;
-      if (trade.outcome === "win") wins += 1;
-    } else {
+    const resolved = resolveOutcome(trade);
+    if (resolved === "open") {
       open += 1;
+    } else {
+      closed += 1;
+      if (resolved === "win") wins += 1;
     }
   }
 
