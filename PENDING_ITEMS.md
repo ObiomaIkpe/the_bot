@@ -177,6 +177,76 @@ these two are the same incident, two separate root causes.
       a clean "nothing to reconcile" result instead of an obviously
       wrong query target.
 
+## Real bug found 2026-09-06 (duplicate real order placement -- root cause deliberately NOT fixed, by explicit user decision)
+
+Found while explaining a chart to the user: two real trades on 27 Aug
+2026 (tickets `3147397442` +498.30, `3147397683` -490.75) landed in
+the *same* account with identical entry/stop/direction and near-
+identical timestamps -- not the multi-user fan-out (only one real
+account existed then or now), and not a coincidence. Traced through
+the actual production `events` table (user shared prod DB credentials
+directly for this -- **see rotation note below**), then confirmed
+against the current `shadow_runner/order_manager.py` source, not
+assumed from memory.
+
+**Root cause, confirmed still present in current code**:
+`on_trade_candidate_ready()`'s only duplicate guard is
+`candidate_key = (event["raid_bar"], event["mss_bar"])`. The Aug 27
+incident's two `trade_candidate_ready` events had *different* raid
+bars (42 and 43) that both resolved to the identical entry/stop/
+direction -- the guard doesn't recognize "this would place an
+economically identical order," only "this exact raid+MSS pair already
+happened." Both got submitted to the broker as two separate real
+pending orders.
+
+**Downstream, a second real gap**: when order `3147397442` filled, the
+already-fixed sibling-cancel logic (`_handle_sibling_cancel_failure()`,
+2026-09-02) tried to cancel `3147397683` -- the broker itself rejected
+the cancel (`retcode=10013, comment='Invalid request'`), and since the
+sibling hadn't filled *yet* at that exact instant, the code correctly
+took the "just a cancel failure" branch (logs `cancel_sibling_order`
+and stops) rather than the "sibling already filled" branch it's built
+to catch. Nothing retries the cancel or re-checks that order later.
+`3147397683` filled and closed for real with **zero events between
+placement and reconciliation a day later** -- the live app never saw
+it happen. (This is one of the two original "invisible trades" that
+started the whole historical-reconciliation effort above -- now fully
+explained, not just recovered after the fact.)
+
+**Decision, made explicitly by the user**: don't fix the root cause --
+accept that a duplicate order can still occur, and make sure that when
+it does, it's always tracked and never silently forgotten, rather than
+preventing it outright.
+
+- [x] Confirmed how much of "always tracked" is **already true today**:
+      the continuous orphan-position safety net (live since 2026-09-04,
+      polls every 5 minutes) doesn't care *why* an unmatched real
+      position exists -- it would catch a repeat of this within one
+      polling cycle, alert on it, attempt to heal it, and write a
+      permanent trade record the moment it's found. Real trades here
+      run in hours, not minutes, so this covers the realistic case.
+- [ ] **One residual gap, narrower but real**: a duplicate order that
+      both fills *and* fully closes within a single 5-minute polling
+      window wouldn't be caught by anything standing today -- the only
+      thing that recovers a trade that fast is the historical-
+      reconciliation script above, and that's a **manual, one-off run**,
+      not a recurring job. Proposed fix (documented here per the user's
+      request, not built): turn
+      `shadow_runner/scripts/reconcile_deals_aug10_sept4_2026.py`'s
+      approach into a small **scheduled recurring job** (e.g. nightly)
+      against a rolling recent window, rather than a fixed historical
+      date range run by hand -- would make "always tracked" a durable,
+      standing guarantee instead of depending on someone remembering to
+      re-run a script.
+
+**Credential note**: the user shared production Postgres credentials
+directly in chat to run the diagnostic query for this investigation
+(`DATABASE_URL` with the `db_user`/password pointed at
+`db:5432/trading_bot` -- only reachable from inside the VPS's own
+Docker network, not from outside it). Per the user's own instruction,
+these need to be **rotated** once this investigation is done, same
+discipline as the 2026-09-02 secret rotation above.
+
 ## Quick cleanup (low effort, low risk)
 
 - [ ] **Delete the pre-cutover backup file on the VPS**
