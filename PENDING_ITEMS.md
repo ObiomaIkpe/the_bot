@@ -371,10 +371,11 @@ it correctly with no further intervention needed.
       journaled `Event.details`). Genuinely needs a migration + backend
       capture change, not a display fix -- explicitly not attempted
       without a separate go-ahead.
-- [ ] **`setup_context` (Trend / Risk in pips) only shown on the
+- [x] **`setup_context` (Trend / Risk in pips) only shown on the
       trader-facing `TradeDetail.tsx`, not `AdminTradeDetail.tsx`.**
-      Minor/cosmetic inconsistency, not data loss -- flagged, not yet
-      fixed.
+      Fixed 2026-09-06 (commit `fcd677f`): mirrored the same conditional
+      Trend/Risk(pips) rows onto `AdminTradeDetail.tsx`. Frontend-only,
+      not yet deployed to the live VPS.
 
 ## Quick cleanup (low effort, low risk)
 
