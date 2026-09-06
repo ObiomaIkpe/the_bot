@@ -70,6 +70,18 @@ export function AdminTradeDetail() {
                 <dd className="m-0 font-mono">{resolveRealizedR(trade)?.toFixed(2) ?? "-"}</dd>
                 <dt className="text-text-muted">Equity before</dt>
                 <dd className="m-0 font-mono">{trade.equity_before.toFixed(2)}</dd>
+                {typeof trade.setup_context.trend === "string" && (
+                  <>
+                    <dt className="text-text-muted">Trend</dt>
+                    <dd className="m-0">{trade.setup_context.trend}</dd>
+                  </>
+                )}
+                {typeof trade.setup_context.risk_pips === "number" && (
+                  <>
+                    <dt className="text-text-muted">Risk (pips)</dt>
+                    <dd className="m-0 font-mono">{trade.setup_context.risk_pips}</dd>
+                  </>
+                )}
               </dl>
             </Card>
             <Card>
