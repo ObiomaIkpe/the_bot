@@ -5,6 +5,7 @@ import { apiClient } from "../api/client";
 import type { TradeOut } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { Table } from "../components/Table";
+import { resolveOutcome } from "../lib/pnl";
 import { useModels } from "../lib/useModels";
 
 const OUTCOMES = ["win", "loss", "scratch"];
@@ -51,8 +52,13 @@ export function TradeHistory() {
     if (!tradesQuery.data) return [];
     const rows = [...tradesQuery.data];
     rows.sort((a, b) => {
-      const av = a[sortKey] ?? "";
-      const bv = b[sortKey] ?? "";
+      // "outcome" is sorted by the same resolved value that's actually
+      // displayed (see the table cell below) -- sorting the raw field
+      // would group a real, closed win/loss (orphan/reconciled trades,
+      // whose `outcome` is deliberately never set) in with genuinely
+      // open trades, contradicting what the column visibly shows.
+      const av = sortKey === "outcome" ? resolveOutcome(a) : (a[sortKey] ?? "");
+      const bv = sortKey === "outcome" ? resolveOutcome(b) : (b[sortKey] ?? "");
       if (av < bv) return sortDir === "asc" ? -1 : 1;
       if (av > bv) return sortDir === "asc" ? 1 : -1;
       return 0;
@@ -163,7 +169,7 @@ export function TradeHistory() {
                 <td>{t.direction}</td>
                 <td className="font-mono">{t.entry_price}</td>
                 <td className="font-mono">{t.exit_price ?? "-"}</td>
-                <td>{t.outcome ?? "open"}</td>
+                <td>{resolveOutcome(t)}</td>
                 <td>{t.real_status ?? "-"}</td>
                 <td className={`font-mono ${(t.real_profit ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
                   {t.real_profit ?? "-"}
