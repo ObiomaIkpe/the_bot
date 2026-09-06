@@ -93,7 +93,26 @@ export function summarizeTrades(trades: TradeOut[]): PnlSummary {
 
 export interface PnlPoint {
   date: string;
+  /** 1-based position in chronological order -- the chart's x-axis
+   * category. Two trades can share the exact same `date` (the same
+   * detected candidate, fanned out or reconciled into more than one
+   * real row -- see the 27/08/2026 sibling-order incident this was
+   * built to display clearly) and a raw-date axis collapses or
+   * visually crowds them with no way to tell them apart. A plain
+   * sequence number is always unique regardless of how many trades
+   * land on one calendar day; the real date/time lives in the
+   * tooltip instead. */
+  tradeNumber: number;
+  /** This one trade's own real profit/loss -- distinct from
+   * `cumulative` below. Needed so the chart can show each trade's own
+   * win/loss, not just the blended running total (a losing trade is
+   * still present in the cumulative line, but only as a dip -- easy
+   * to read as "it went down for some other reason" rather than "this
+   * specific trade lost"). */
+  profit: number;
   cumulative: number;
+  direction: string;
+  outcome: ResolvedOutcome;
 }
 
 /** Running-sum P&L over time, for PnlChart. Trades are sorted ascending
@@ -104,8 +123,16 @@ export function buildCumulativeSeries(trades: TradeOut[]): PnlPoint[] {
   );
 
   let running = 0;
-  return sorted.map((trade) => {
-    running += profitOf(trade);
-    return { date: trade.entry_time_ny, cumulative: running };
+  return sorted.map((trade, index) => {
+    const profit = profitOf(trade);
+    running += profit;
+    return {
+      date: trade.entry_time_ny,
+      tradeNumber: index + 1,
+      profit,
+      cumulative: running,
+      direction: trade.direction,
+      outcome: resolveOutcome(trade),
+    };
   });
 }

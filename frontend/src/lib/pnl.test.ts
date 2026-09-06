@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TradeOut } from "../api/types";
-import { resolveOutcome, summarizeTrades } from "./pnl";
+import { buildCumulativeSeries, resolveOutcome, summarizeTrades } from "./pnl";
 
 /** Regression coverage for the bug a tester reported live
  * ("win rate doesn't make sense given the trades we've seen"): a real,
@@ -88,5 +88,29 @@ describe("summarizeTrades", () => {
     const summary = summarizeTrades([trade({ outcome: null, real_status: "open", real_profit: null })]);
     expect(summary.openCount).toBe(1);
     expect(summary.winRate).toBeNull();
+  });
+});
+
+describe("buildCumulativeSeries", () => {
+  it("gives every trade a unique, sequential tradeNumber even when two trades share the exact same entry_time_ny", () => {
+    // Exactly the 27/08/2026 sibling-order incident this was built for:
+    // two real trades from one detected candidate, same simulated
+    // entry timestamp, different real outcomes. A date-keyed x-axis
+    // collapses or crowds these; tradeNumber never does.
+    const series = buildCumulativeSeries([
+      trade({ entry_time_ny: "2026-08-27T15:59:22-04:00", real_profit: 498.3 }),
+      trade({ entry_time_ny: "2026-08-27T15:59:22-04:00", real_profit: -490.75 }),
+    ]);
+    expect(series.map((p) => p.tradeNumber)).toEqual([1, 2]);
+    expect(series[0].date).toBe(series[1].date);
+  });
+
+  it("carries this trade's own profit separately from the running cumulative total", () => {
+    const series = buildCumulativeSeries([
+      trade({ entry_time_ny: "2026-08-01T00:00:00Z", real_profit: 100 }),
+      trade({ entry_time_ny: "2026-08-02T00:00:00Z", real_profit: -30 }),
+    ]);
+    expect(series[0]).toMatchObject({ profit: 100, cumulative: 100 });
+    expect(series[1]).toMatchObject({ profit: -30, cumulative: 70 });
   });
 });
