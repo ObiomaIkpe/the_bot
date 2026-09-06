@@ -5,7 +5,7 @@ import type { EventOut, TradeEventChainOut, TradeOut } from "../api/types";
 import { Card } from "../components/Card";
 import { EmptyState } from "../components/EmptyState";
 import { formatPrice } from "../lib/format";
-import { resolveOutcome, resolveRealizedR } from "../lib/pnl";
+import { resolveExitPrice, resolveOutcome, resolveRealizedR } from "../lib/pnl";
 
 /** The trader-facing "why was this trade placed" story -- see
  * app.core.trade_story.build_trade_chain()'s module docstring on the
@@ -89,7 +89,7 @@ export function TradeDetail() {
                 <dt className="text-text-muted">Risk</dt>
                 <dd className="m-0 font-mono">{(trade.risk_pct_used * 100).toFixed(1)}%</dd>
                 <dt className="text-text-muted">Exit</dt>
-                <dd className="m-0 font-mono">{formatPrice(trade.exit_price)}</dd>
+                <dd className="m-0 font-mono">{formatPrice(resolveExitPrice(trade))}</dd>
                 <dt className="text-text-muted">Outcome</dt>
                 <dd className="m-0">{resolveOutcome(trade)}</dd>
                 <dt className="text-text-muted">Realized R</dt>
