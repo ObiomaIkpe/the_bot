@@ -540,6 +540,7 @@ def write_trade(
         real_close_time_ny=real_outcome["close_time_ny"] if real_outcome else None,
         real_profit=real_outcome["profit"] if real_outcome else None,
         real_close_reason=real_outcome["close_reason"] if real_outcome else None,
+        real_volume=real_outcome["volume"] if real_outcome else None,
         # Phase 4 overnight-position handling: 'open' the moment a real
         # fill exists but hasn't closed yet (the common case -- a real
         # position rarely resolves within the same poll cycle it's
@@ -624,6 +625,7 @@ def write_orphan_trade(
         real_profit=None,
         real_close_reason=None,
         real_status="open",
+        real_volume=position["volume"],
     )
     db.add(row)
     return row
@@ -713,6 +715,7 @@ def write_reconciled_historical_trade(
         real_profit=close_deal["profit"],
         real_close_reason=close_deal["reason"],
         real_status="closed",
+        real_volume=entry_deal["volume"],
     )
     db.add(row)
     return row

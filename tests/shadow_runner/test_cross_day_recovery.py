@@ -210,6 +210,7 @@ def test_orphan_found_and_healed_attaches_target(db_session):
     assert row.target_price == (1.1680 + 1.1652) / 2
     assert row.real_position_ticket == 3147397683
     assert row.real_status == "open"
+    assert row.real_volume == 7.55, "the orphaned position's own lot size, from the position itself"
     assert row.is_shadow is False
     # No simulated outcome exists for an orphan -- genuinely open,
     # genuinely unresolved, not a fabricated value.

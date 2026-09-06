@@ -86,6 +86,15 @@ class Trade(Base):
     real_close_time_ny = Column(DateTime(timezone=True), nullable=True)
     real_profit = Column(Float, nullable=True)
     real_close_reason = Column(String, nullable=True)  # 'stop_loss' | 'take_profit' | 'manual' | 'expert' | 'unknown'
+    # Migration 0023 (2026-09-06): the broker-filled lot size (MT5's own
+    # "volume" field, e.g. 0.01 = a micro lot) -- distinct from
+    # partial_close_volume above, which is the portion closed at the
+    # 5pm partial-close step, not the original fill size. A purely
+    # real-broker concept: the simulation works in R-multiples and never
+    # had a lot size to begin with, so there's no simulated counterpart
+    # to fall back to the way exit_price/outcome do -- null simply means
+    # "no real order was ever filled for this trade."
+    real_volume = Column(Float, nullable=True)
 
     # Phase 4 step 3 (overnight-position handling): a real trade's own
     # lifecycle, tracked independently of `outcome` (the SIMULATION's

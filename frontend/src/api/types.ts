@@ -54,6 +54,9 @@ export interface TradeOut {
   real_close_reason: string | null;
   real_profit: number | null;
   real_close_time_ny: string | null;
+  // The broker-filled lot size (e.g. 0.05 = 5% of a standard lot). Purely
+  // real-broker data -- null means no real order was ever filled.
+  real_volume: number | null;
 }
 
 export interface TradeEventChainOut {

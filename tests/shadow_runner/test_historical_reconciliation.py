@@ -95,6 +95,7 @@ def test_matched_deal_writes_a_full_trade_row_using_candidate_numbers_not_real_f
     assert trade.real_fill_price == 1.10015, "the real fill price still belongs in real_fill_price"
     assert trade.real_close_price == 1.1050
     assert trade.real_profit == 50.0
+    assert trade.real_volume == 0.1, "the entry deal's own lot size, not fabricated or left blank"
     assert trade.real_status == "closed"
     assert trade.is_shadow is False
     assert trade.setup_context == {"source": "historical_reconciliation"}

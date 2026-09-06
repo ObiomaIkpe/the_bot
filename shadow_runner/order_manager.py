@@ -194,6 +194,7 @@ class OrderManager:
         self._real_fill_price = None
         self._real_fill_time_utc = None
         self._real_fill_time_ny = None
+        self._real_volume = None  # the broker-filled lot size -- see get_real_outcome()
         # Phase 4 step 4 Part 2: only emit daily_loss_threshold_crossed
         # ONCE per day -- naturally resets since a fresh OrderManager is
         # constructed each day, same as everything else day-scoped here.
@@ -522,6 +523,7 @@ class OrderManager:
             "fill_price": self._real_fill_price,
             "fill_time_utc": self._real_fill_time_utc,
             "fill_time_ny": self._real_fill_time_ny,
+            "volume": self._real_volume,
             "close_price": self._closed_info["close_price"] if self._closed_info else None,
             "close_time_utc": self._closed_info["close_time_utc"] if self._closed_info else None,
             "close_time_ny": self._closed_info["close_time_ny"] if self._closed_info else None,
@@ -600,6 +602,7 @@ class OrderManager:
         self._real_fill_price = position["open_price"]
         self._real_fill_time_utc = position["time_utc"]
         self._real_fill_time_ny = position["time_ny"]
+        self._real_volume = position["volume"]
         self._emit(
             {
                 "event_type": "candidate_filled",

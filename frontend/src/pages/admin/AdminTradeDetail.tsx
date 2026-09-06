@@ -93,6 +93,8 @@ export function AdminTradeDetail() {
                 <dd className="m-0">{trade.real_status ?? "-"}</dd>
                 <dt className="text-text-muted">Ticket</dt>
                 <dd className="m-0 font-mono">{trade.real_position_ticket ?? "-"}</dd>
+                <dt className="text-text-muted">Lot size</dt>
+                <dd className="m-0 font-mono">{trade.real_volume ?? "-"}</dd>
                 <dt className="text-text-muted">Fill price</dt>
                 <dd className="m-0 font-mono">{formatPrice(trade.real_fill_price)}</dd>
                 <dt className="text-text-muted">Fill time</dt>

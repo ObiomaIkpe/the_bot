@@ -117,7 +117,7 @@ def test_one_subscriber_with_a_real_outcome_gets_its_own_row_too(db_session):
         "position_ticket": 555, "fill_price": 1.10505, "fill_time_utc": cd.bars[2]["time_utc"],
         "fill_time_ny": cd.bars[2]["time_ny"], "close_price": 1.10700,
         "close_time_utc": cd.bars[4]["time_utc"], "close_time_ny": cd.bars[4]["time_ny"],
-        "profit": 42.0, "close_reason": "take_profit",
+        "profit": 42.0, "close_reason": "take_profit", "volume": 0.05,
     }
     cd.order_managers[subscriber_id] = FakeSubscriberOrderManager(
         {"model_name": "fvg", "status": "active", "risk_pct": 0.02, "magic_number": 900201},
@@ -173,7 +173,7 @@ def test_multiple_subscribers_each_get_their_own_row(db_session):
         "position_ticket": 777, "fill_price": 1.10505, "fill_time_utc": cd.bars[2]["time_utc"],
         "fill_time_ny": cd.bars[2]["time_ny"], "close_price": 1.10700,
         "close_time_utc": cd.bars[4]["time_utc"], "close_time_ny": cd.bars[4]["time_ny"],
-        "profit": 10.0, "close_reason": "take_profit",
+        "profit": 10.0, "close_reason": "take_profit", "volume": 0.05,
     }
     cd.order_managers[sub1_id] = FakeSubscriberOrderManager(
         {"model_name": "fvg", "status": "active", "risk_pct": 0.01, "magic_number": 900203},
@@ -215,7 +215,7 @@ def test_one_subscribers_write_failure_does_not_block_the_others(db_session):
         "position_ticket": 888, "fill_price": 1.10505, "fill_time_utc": cd.bars[2]["time_utc"],
         "fill_time_ny": cd.bars[2]["time_ny"], "close_price": 1.10700,
         "close_time_utc": cd.bars[4]["time_utc"], "close_time_ny": cd.bars[4]["time_ny"],
-        "profit": 5.0, "close_reason": "take_profit",
+        "profit": 5.0, "close_reason": "take_profit", "volume": 0.05,
     }
     cd.order_managers[broken_id] = ExplodingOrderManager()
     cd.order_managers[healthy_id] = FakeSubscriberOrderManager(
@@ -266,7 +266,7 @@ def test_a_db_commit_failure_for_one_subscriber_does_not_cascade_to_the_next(db_
         "fill_price": 1.10505, "fill_time_utc": cd.bars[2]["time_utc"],
         "fill_time_ny": cd.bars[2]["time_ny"], "close_price": 1.10700,
         "close_time_utc": cd.bars[4]["time_utc"], "close_time_ny": cd.bars[4]["time_ny"],
-        "profit": 5.0, "close_reason": "take_profit",
+        "profit": 5.0, "close_reason": "take_profit", "volume": 0.05,
     }
     real_outcome_healthy = dict(real_outcome_broken, position_ticket=222)
 

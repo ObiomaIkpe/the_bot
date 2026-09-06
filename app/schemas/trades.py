@@ -64,6 +64,11 @@ class TradeOut(BaseModel):
     # history page had no way to show when a trade actually closed at
     # all, real or simulated.
     real_close_time_ny: datetime.datetime | None
+    # The broker-filled lot size (migration 0023, 2026-09-06) -- purely
+    # real-broker data, no simulated counterpart (the simulation works
+    # in R-multiples, never had a lot size). Null means no real order
+    # was ever filled for this trade.
+    real_volume: float | None
 
     class Config:
         from_attributes = True

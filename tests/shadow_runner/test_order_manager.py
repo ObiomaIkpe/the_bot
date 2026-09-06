@@ -634,6 +634,7 @@ def test_get_real_outcome_has_fill_data_but_none_close_data_while_open():
     assert outcome["position_ticket"] == ticket
     assert outcome["fill_price"] == 1.1050
     assert outcome["fill_time_utc"] == "2026-08-04T13:35:00+00:00"
+    assert outcome["volume"] == 0.01, "the actual broker-filled lot size, from the fill position itself"
     assert outcome["close_price"] is None, "must not fabricate close data while still genuinely open"
     assert outcome["close_time_utc"] is None
     assert outcome["profit"] is None

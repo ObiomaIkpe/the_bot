@@ -49,6 +49,7 @@ function trade(overrides: Partial<TradeOut>): TradeOut {
     real_close_reason: null,
     real_profit: null,
     real_close_time_ny: null,
+    real_volume: null,
     ...overrides,
   };
 }

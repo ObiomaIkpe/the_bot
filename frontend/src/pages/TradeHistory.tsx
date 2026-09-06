@@ -161,6 +161,7 @@ export function TradeHistory() {
               </th>
               <th>Realized R</th>
               <th>Ticket</th>
+              <th>Lot size</th>
               <th>Fill time</th>
               <th>Equity before</th>
             </tr>
@@ -185,6 +186,7 @@ export function TradeHistory() {
                 </td>
                 <td className="font-mono">{resolveRealizedR(t)?.toFixed(2) ?? "-"}</td>
                 <td className="font-mono">{t.real_position_ticket ?? "-"}</td>
+                <td className="font-mono">{t.real_volume ?? "-"}</td>
                 <td>{t.real_fill_time_ny ? new Date(t.real_fill_time_ny).toLocaleString() : "-"}</td>
                 <td className="font-mono">{t.equity_before.toFixed(2)}</td>
               </tr>
