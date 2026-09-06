@@ -5,7 +5,8 @@ import { apiClient } from "../../api/client";
 import type { AdminTradeOut } from "../../api/types";
 import { EmptyState } from "../../components/EmptyState";
 import { Table } from "../../components/Table";
-import { resolveExitPrice, resolveOutcome, resolveRealStatusLabel } from "../../lib/pnl";
+import { formatPrice } from "../../lib/format";
+import { resolveExitPrice, resolveOutcome, resolveRealizedR, resolveRealStatusLabel } from "../../lib/pnl";
 import { useModels } from "../../lib/useModels";
 
 const OUTCOMES = ["win", "loss", "scratch"];
@@ -105,6 +106,11 @@ export function AdminTrades() {
               <th>Outcome</th>
               <th>Real status</th>
               <th>Real profit</th>
+              <th>Realized R</th>
+              <th>Ticket</th>
+              <th>Fill time</th>
+              <th>Equity before</th>
+              <th>Equity after</th>
             </tr>
           </thead>
           <tbody>
@@ -119,13 +125,18 @@ export function AdminTrades() {
                 <td>{t.model}</td>
                 <td>{t.is_shadow ? "yes" : "no"}</td>
                 <td>{t.direction}</td>
-                <td className="font-mono">{t.entry_price}</td>
-                <td className="font-mono">{resolveExitPrice(t) ?? "-"}</td>
+                <td className="font-mono">{formatPrice(t.entry_price)}</td>
+                <td className="font-mono">{formatPrice(resolveExitPrice(t))}</td>
                 <td>{resolveOutcome(t)}</td>
                 <td>{resolveRealStatusLabel(t)}</td>
                 <td className={`font-mono ${(t.real_profit ?? 0) >= 0 ? "text-positive" : "text-negative"}`}>
                   {t.real_profit ?? "-"}
                 </td>
+                <td className="font-mono">{resolveRealizedR(t)?.toFixed(2) ?? "-"}</td>
+                <td className="font-mono">{t.real_position_ticket ?? "-"}</td>
+                <td>{t.real_fill_time_ny ? new Date(t.real_fill_time_ny).toLocaleString() : "-"}</td>
+                <td className="font-mono">{t.equity_before.toFixed(2)}</td>
+                <td className="font-mono">{t.equity_after?.toFixed(2) ?? "-"}</td>
               </tr>
             ))}
           </tbody>
