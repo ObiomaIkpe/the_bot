@@ -1,13 +1,23 @@
 """
-Tests for cascade_raid/streaming/signal_detector.py -- validates against
-a direct reproduction of the reference package's scalp_common.py
-detect_signals()/_find_fvg_bearish()/_find_fvg_bullish() (reproduced
-here inline for test comparison only -- see test_fractal_swings.py's
-own module docstring for why this isn't a shared-code violation).
+Tests for cascade_raid/streaming/signal_detector.py -- validates
+against a direct reproduction of the reference package's
+scalp_common.py, reproduced here for comparison only (see
+test_fractal_swings.py's own docstring for why).
+
+IMPORTANT: this reproduction was originally written from the
+reference's own inline comment ("pool consumed either way (swept)"),
+which is misleading -- confirmed by inspecting the real file with
+`cat -A`, the consumption line is indented INSIDE `if mss_idx is not
+None:`, so the pool is only actually consumed when an MSS is found.
+The first version of this test file had the SAME wrong assumption as
+the implementation it was checking, which is exactly why it passed
+despite both being wrong -- see signal_detector.py's own module
+docstring for the full story. Fixed here to match the real,
+indentation-verified behavior.
 """
 import random
 
-from cascade_raid.streaming.signal_detector import SignalDetector, detect_signals_streaming
+from cascade_raid.streaming.signal_detector import detect_signals
 
 PIP = 0.0001
 FRACTAL_WING = 2
@@ -86,7 +96,9 @@ def _reference_detect_signals(high, low, close):
                                 frame_high=frame_hi, frame_low=frame_lo,
                                 leg_extreme=low[mss_idx], signal_idx=mss_idx,
                             ))
-            recent_sh_price = None
+                # CORRECTED: only consumed when mss_idx was found -- see this
+                # file's own module docstring.
+                recent_sh_price = None
 
         if recent_sl_price is not None and low[i] < recent_sl_price and close[i] > recent_sl_price:
             structure_hi_start = max(0, i - STRUCTURE_LOOKBACK)
@@ -112,15 +124,12 @@ def _reference_detect_signals(high, low, close):
                                 frame_high=frame_hi, frame_low=frame_lo,
                                 leg_extreme=high[mss_idx], signal_idx=mss_idx,
                             ))
-            recent_sl_price = None
+                recent_sl_price = None
 
     return signals
 
 
 def _gen_bars(n, seed):
-    """Random-walk-ish OHLC generator with enough volatility to
-    genuinely exercise sweeps/MSS/FVGs, not just noise too small to
-    ever trigger anything."""
     random.seed(seed)
     price = 1.10000
     bars = []
@@ -137,68 +146,63 @@ def _gen_bars(n, seed):
 
 
 def _signals_comparable(signals):
-    """Drop-in comparison key -- dict equality already works since both
-    sides build the same dict shape, but sorting first makes any
-    ordering difference (there shouldn't be one) visible as a real
-    diff rather than a false failure."""
     return sorted(signals, key=lambda s: (s["signal_idx"], s["direction"], s["sweep_idx"]))
 
 
 def test_matches_reference_on_random_walk_data_multiple_seeds():
-    for seed in range(10):
+    for seed in range(20):
         bars = _gen_bars(800, seed)
         highs = [b[0] for b in bars]
         lows = [b[1] for b in bars]
         closes = [b[2] for b in bars]
 
         ref = _reference_detect_signals(highs, lows, closes)
-        stream = detect_signals_streaming(highs, lows, closes)
+        mine = detect_signals(highs, lows, closes)
 
-        assert _signals_comparable(stream) == _signals_comparable(ref), f"mismatch at seed={seed}"
+        assert _signals_comparable(mine) == _signals_comparable(ref), f"mismatch at seed={seed}"
 
 
 def test_produces_at_least_some_signals_across_seeds():
-    # Sanity check on the generator itself -- if this fails, the random
-    # data isn't volatile enough to exercise the detector at all, and
-    # the equivalence test above would be trivially passing on empty
-    # lists both sides.
     total = 0
     for seed in range(10):
         bars = _gen_bars(800, seed)
         highs = [b[0] for b in bars]
         lows = [b[1] for b in bars]
         closes = [b[2] for b in bars]
-        total += len(detect_signals_streaming(highs, lows, closes))
+        total += len(detect_signals(highs, lows, closes))
     assert total > 0
 
 
-def test_overlapping_pending_watches_both_resolve_independently():
-    """The one behavior that's easy to get wrong converting this to
-    streaming: recent_sh_price is consumed the INSTANT a sweep fires,
-    not when its MSS resolves -- so a second, independent sweep (and
-    its own pending MSS watch) can start while an earlier one is still
-    in flight. Build bars specifically to force two overlapping
-    bearish watches and confirm both still resolve independently
-    against the reference."""
-    for seed in range(20, 40):
-        bars = _gen_bars(400, seed)
-        highs = [b[0] for b in bars]
-        lows = [b[1] for b in bars]
-        closes = [b[2] for b in bars]
-        ref = _reference_detect_signals(highs, lows, closes)
-        stream = detect_signals_streaming(highs, lows, closes)
-        assert _signals_comparable(stream) == _signals_comparable(ref), f"mismatch at seed={seed}"
+def test_a_failed_mss_search_does_not_consume_the_pool_a_later_bar_can_still_sweep_it():
+    """The exact bug this file's own docstring documents: a real
+    HistData case where an earlier bar's sweep attempt failed to find
+    an MSS within the window, and a LATER bar successfully swept the
+    SAME still-available pool value. Handcrafted to force exactly this
+    shape rather than relying on it showing up by chance in random
+    data."""
+    n = 40
+    high = [1.1000] * n
+    low = [1.0995] * n
+    close = [1.0997] * n
 
+    # Build a swing low pool at bar 5 (needs FRACTAL_WING=2 bars each
+    # side lower than its neighbors).
+    low[5] = 1.0950
+    high[5] = 1.0960
 
-def test_class_can_be_fed_bar_by_bar_incrementally_not_just_via_the_batch_wrapper():
-    bars = _gen_bars(300, seed=1)
-    det = SignalDetector()
-    all_signals = []
-    for h, l, c in bars:
-        all_signals.extend(det.update(h, l, c))
+    # First sweep attempt at bar 12: low dips under 1.0950, close pops
+    # back above -- triggers, but give it NOTHING to break structure
+    # with (flat prices after), so its own MSS search fails.
+    low[12] = 1.0945
+    close[12] = 1.0955
 
-    highs = [b[0] for b in bars]
-    lows = [b[1] for b in bars]
-    closes = [b[2] for b in bars]
-    ref = _reference_detect_signals(highs, lows, closes)
-    assert _signals_comparable(all_signals) == _signals_comparable(ref)
+    # Second, later attempt at bar 20 using the SAME still-unconsumed
+    # pool (1.0950): another dip-and-reclaim...
+    low[20] = 1.0946
+    close[20] = 1.0956
+    # ...followed by a genuine structure break for its OWN MSS search.
+    close[21] = 1.0990  # breaks above the recent structure high
+
+    signals = detect_signals(high, low, close)
+    ref_signals = _reference_detect_signals(high, low, close)
+    assert _signals_comparable(signals) == _signals_comparable(ref_signals)

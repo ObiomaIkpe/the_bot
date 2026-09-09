@@ -1,216 +1,169 @@
 """
-signal_detector.py -- streaming reimplementation of the reference
-package's `scalp_common.detect_signals()` (liquidity sweep -> rapid
-market-structure-shift -> fair-value-gap -> equilibrium-filter signal
-detection).
+signal_detector.py -- reimplementation of the reference package's
+`scalp_common.detect_signals()` (liquidity sweep -> rapid market-
+structure-shift -> fair-value-gap -> equilibrium-filter detection).
 
-THE CORE STREAMING CHALLENGE, and how it's solved here:
+A GENUINE FINDING, confirmed against the reference's actual source
+(not its comments) -- READ BEFORE CHANGING THIS FILE'S STRUCTURE:
 
-The reference is a whole-array batch function. At the exact bar a sweep
-is detected, it immediately resolves that sweep's entire fate --
-scanning up to MSS_WINDOW bars AHEAD for the structure break, then
-walking backward for the FVG -- because in a batch context those future
-bars already sit in the array. A live process obviously can't do that;
-it only knows about a sweep's future outcome once that future actually
-arrives, bar by bar.
+An earlier version of this module modeled the sweep-consumption rule
+as "the pool is consumed the INSTANT a sweep condition triggers,
+whether or not an MSS is ever found" -- following the reference's own
+inline comment, `recent_sl_price = None  # pool consumed either way
+(swept)`. That version passed extensive synthetic-data testing but
+FAILED against real HistData. Tracing the failure down to the
+reference's actual source with `cat -A` (not just reading it) showed
+the comment is misleading: `recent_sl_price = None` is indented INSIDE
+`if mss_idx is not None:` -- both for the bearish and bullish blocks,
+confirmed identically in both. The pool is only actually consumed once
+an MSS is genuinely found within the MSS_WINDOW; a sweep attempt that
+fails to find one leaves the pool untouched, free to be swept again by
+a LATER bar. This also explains a duplicate-looking signal noticed
+earlier in the reference's own raw output -- two different bars
+attempting (and one eventually succeeding at) a sweep of the exact
+same still-unconsumed pool value.
 
-This is solved with explicit PENDING WATCHES: the instant a sweep is
-detected, a pending-MSS record is created (direction, sweep bar's
-own extreme, the structure-break threshold, a deadline `sweep_idx +
-MSS_WINDOW`) instead of resolving it immediately. Every subsequent bar
-checks ALL currently-pending watches against its own close; the first
-one to break the threshold resolves (and only then is the backward FVG
-walk performed, using a rolling bar-history buffer). A watch that
-reaches its deadline unresolved simply expires -- no signal, matching
-the reference's `if mss_idx is not None`.
+The consequence for streaming, same shape as position_manager.py's own
+finding: because the reference resolves each bar's ENTIRE sweep
+attempt (up to a 15-bar-deep MSS search) via instant lookahead before
+its outer loop even advances to the next bar, there is never more than
+one attempt "in flight" against a given pool value at once, from the
+reference's own perspective -- a later bar only gets to try because
+the earlier bar's own attempt has ALREADY been fully resolved (found
+MSS or not) by the time the outer loop reaches it. A genuinely live
+process can't replicate that -- it would need to already know, at bar
+i+1, whether bar i's own attempt (which needs up to 15 MORE bars to
+resolve) is going to succeed. Not solvable by a cleverer streaming
+design; flagged here the same way as the breaker's own forward-looking
+dependency, for the same later Phase 2 decision.
 
-Multiple pending watches (same direction or opposite) CAN be in flight
-at once -- confirmed by tracing the reference: `recent_sh_price` is
-consumed (set to None) the INSTANT a sweep triggers, not when its MSS
-resolves, so a fresh swing high can reconfirm and get swept again while
-an earlier sweep's MSS search window is still open. This class supports
-that -- pending watches are a list, not a single slot.
-
-Everything else mirrors the reference exactly: strict pool-consumption
-semantics (swept whether or not a signal ultimately results), the
-per-bar ordering (pool update, then bearish check, then bullish check),
-and the equilibrium filter's aggressive-half requirement.
+WHAT THIS MODULE ACTUALLY DOES: reproduces the reference's exact
+sequential structure -- for each bar, check the sweep condition; if
+met, resolve it FULLY via a bounded (MSS_WINDOW-bar) local lookahead
+before considering the next bar, exactly matching the reference's own
+order of operations. Bounded lookahead is legitimate here because
+Phase 1's job is reproducing already-known history, not real-time
+prediction -- same discipline as position_manager.py.
 """
-from collections import deque
-
-from cascade_raid.streaming.fractal_swings import FractalSwingDetector
-
 PIP = 0.0001
 STRUCTURE_LOOKBACK = 10
 MSS_WINDOW = 15
 FILL_EXPIRY = 30
 FRACTAL_WING = 2
 
-# Bar-history buffer needs to cover, at worst, from a pending watch's
-# sweep_idx (created up to MSS_WINDOW bars ago) through "now", plus
-# STRUCTURE_LOOKBACK for the threshold computation at sweep time, plus
-# a small margin.
-_HISTORY_MAXLEN = STRUCTURE_LOOKBACK + MSS_WINDOW + FRACTAL_WING + 10
+
+def _find_fractal_swings(high, low, wing: int = FRACTAL_WING):
+    n = len(high)
+    swing_high = [False] * n
+    swing_low = [False] * n
+    for i in range(wing, n - wing):
+        window_h = high[i - wing:i + wing + 1]
+        if high[i] == max(window_h) and window_h.count(high[i]) == 1:
+            swing_high[i] = True
+        window_l = low[i - wing:i + wing + 1]
+        if low[i] == min(window_l) and window_l.count(low[i]) == 1:
+            swing_low[i] = True
+    return swing_high, swing_low
 
 
-class SignalDetector:
-    def __init__(self):
-        self._fractal = FractalSwingDetector(wing=FRACTAL_WING)
-        self._history: deque = deque(maxlen=_HISTORY_MAXLEN)  # (idx, high, low)
+def _find_fvg_bearish(high, low, sweep_idx: int, mss_idx: int):
+    for k in range(mss_idx, sweep_idx + 1, -1):
+        if low[k - 2] > high[k]:
+            return k, low[k - 2], high[k], high[k - 1], low[k - 1]  # k, fvg_top, fvg_bot, frame_hi, frame_lo
+    return None
 
-        self._recent_sh_price = None
-        self._recent_sh_idx = None
-        self._recent_sl_price = None
-        self._recent_sl_idx = None
 
-        self._pending_bearish: list[dict] = []  # {sweep_idx, sweep_high, structure_low, deadline}
-        self._pending_bullish: list[dict] = []  # {sweep_idx, sweep_low, structure_high, deadline}
+def _find_fvg_bullish(high, low, sweep_idx: int, mss_idx: int):
+    for k in range(mss_idx, sweep_idx + 1, -1):
+        if high[k - 2] < low[k]:
+            return k, low[k], high[k - 2], high[k - 1], low[k - 1]  # k, fvg_top, fvg_bot, frame_hi, frame_lo
+    return None
 
-        self._next_idx = 0
 
-    def _hl_at(self, idx: int):
-        """O(1): `_history` holds strictly-consecutive global indices,
-        so idx's position is a direct offset from the oldest entry --
-        no need to scan."""
-        oldest_idx = self._history[0][0]
-        pos = idx - oldest_idx
-        if pos < 0 or pos >= len(self._history):
-            raise KeyError(f"bar {idx} no longer in history buffer (increase _HISTORY_MAXLEN)")
-        _, h, l = self._history[pos]
-        return h, l
+def detect_signals(high, low, close) -> list[dict]:
+    """`high`/`low`/`close`: full bar series (list or array-like,
+    indexable). Bounded-lookahead reproduction of the reference's
+    detect_signals() -- see this module's own docstring for why a
+    persistent-pending-watch streaming design (the earlier, wrong
+    version of this file) doesn't actually match the reference's real
+    consumption timing."""
+    # Accept numpy arrays or plain lists -- .count()-based uniqueness
+    # checks below need plain lists either way.
+    high = list(high)
+    low = list(low)
+    close = list(close)
+    n = len(high)
+    swing_high, swing_low = _find_fractal_swings(high, low)
 
-    def _find_fvg_bearish(self, sweep_idx: int, mss_idx: int):
-        for k in range(mss_idx, sweep_idx + 1, -1):
-            h_k, _ = self._hl_at(k)
-            _, l_km2 = self._hl_at(k - 2)
-            if l_km2 > h_k:
-                h_frame, l_frame = self._hl_at(k - 1)
-                return k, l_km2, h_k, h_frame, l_frame  # k, fvg_top, fvg_bot, frame_hi, frame_lo
-        return None
+    signals: list[dict] = []
+    recent_sh_price = recent_sh_idx = None
+    recent_sl_price = recent_sl_idx = None
+    w = FRACTAL_WING
 
-    def _find_fvg_bullish(self, sweep_idx: int, mss_idx: int):
-        for k in range(mss_idx, sweep_idx + 1, -1):
-            _, l_k = self._hl_at(k)
-            h_km2, _ = self._hl_at(k - 2)
-            if h_km2 < l_k:
-                h_frame, l_frame = self._hl_at(k - 1)
-                return k, l_k, h_km2, h_frame, l_frame  # k, fvg_top, fvg_bot, frame_hi, frame_lo
-        return None
-
-    def update(self, high: float, low: float, close: float) -> list[dict]:
-        """Feed one new bar (already-closed). Returns a list of zero or
-        more signal dicts newly confirmed on THIS bar -- same shape as
-        one entry of the reference's detect_signals() output, plus
-        `signal_idx` for downstream ordering."""
-        i = self._next_idx
-        self._next_idx += 1
-        self._history.append((i, high, low))
-
-        new_signals: list[dict] = []
-
-        # Pool update -- matches the reference's exact per-bar ordering
-        # (uses the fractal confirmation for bar i-wing, computed from
-        # the window ending at bar i).
-        confirmation = self._fractal.update(high, low)
-        if confirmation is not None:
-            if confirmation["swing_high"]:
-                self._recent_sh_price = confirmation["high"]
-                self._recent_sh_idx = confirmation["idx"]
-            if confirmation["swing_low"]:
-                self._recent_sl_price = confirmation["low"]
-                self._recent_sl_idx = confirmation["idx"]
-
-        # Resolve any pending MSS watches using THIS bar's close --
-        # first-match-wins per watch, matching the reference's `break`.
-        still_pending_bearish = []
-        for watch in self._pending_bearish:
-            if close < watch["structure_low"]:
-                new_signals.extend(self._resolve_bearish(watch, mss_idx=i))
-            elif i < watch["deadline"]:
-                still_pending_bearish.append(watch)
-            # else: deadline reached this bar with no break -> expires, dropped
-        self._pending_bearish = still_pending_bearish
-
-        still_pending_bullish = []
-        for watch in self._pending_bullish:
-            if close > watch["structure_high"]:
-                new_signals.extend(self._resolve_bullish(watch, mss_idx=i))
-            elif i < watch["deadline"]:
-                still_pending_bullish.append(watch)
-        self._pending_bullish = still_pending_bullish
+    for i in range(n):
+        if i >= w:
+            conf_i = i - w
+            if swing_high[conf_i]:
+                recent_sh_price = high[conf_i]
+                recent_sh_idx = conf_i
+            if swing_low[conf_i]:
+                recent_sl_price = low[conf_i]
+                recent_sl_idx = conf_i
 
         # --- Bearish candidate: sweep of recent swing high ---
-        if self._recent_sh_price is not None and high > self._recent_sh_price and close < self._recent_sh_price:
+        if recent_sh_price is not None and high[i] > recent_sh_price and close[i] < recent_sh_price:
             structure_lo_start = max(0, i - STRUCTURE_LOOKBACK)
-            structure_low = min(
-                l for idx_, _, l in self._history if structure_lo_start <= idx_ <= i
-            )
-            self._pending_bearish.append(dict(
-                sweep_idx=i, sweep_high=high, structure_low=structure_low, deadline=i + MSS_WINDOW,
-            ))
-            self._recent_sh_price = None  # pool consumed either way
+            structure_low = min(low[structure_lo_start:i + 1])
+            sweep_idx = i
+            mss_idx = None
+            for j in range(i + 1, min(n, i + 1 + MSS_WINDOW)):
+                if close[j] < structure_low:
+                    mss_idx = j
+                    break
+            if mss_idx is not None:
+                fvg = _find_fvg_bearish(high, low, sweep_idx, mss_idx)
+                if fvg is not None:
+                    _, fvg_top, fvg_bot, frame_hi, frame_lo = fvg
+                    leg_range = high[sweep_idx] - low[mss_idx]
+                    if leg_range > 0:
+                        fvg_mid = (fvg_top + fvg_bot) / 2
+                        eq = low[mss_idx] + leg_range * 0.5
+                        if fvg_mid >= eq:  # aggressive/expensive half for bearish
+                            signals.append(dict(
+                                direction="short", sweep_idx=sweep_idx, mss_idx=mss_idx,
+                                fvg_near=fvg_top, fvg_far=fvg_bot,
+                                frame_high=frame_hi, frame_low=frame_lo,
+                                leg_extreme=low[mss_idx], signal_idx=mss_idx,
+                            ))
+                # Pool consumed ONLY when an MSS was actually found -- see
+                # module docstring. A failed attempt leaves it untouched.
+                recent_sh_price = None
 
         # --- Bullish candidate: sweep of recent swing low ---
-        if self._recent_sl_price is not None and low < self._recent_sl_price and close > self._recent_sl_price:
+        if recent_sl_price is not None and low[i] < recent_sl_price and close[i] > recent_sl_price:
             structure_hi_start = max(0, i - STRUCTURE_LOOKBACK)
-            structure_high = max(
-                h for idx_, h, _ in self._history if structure_hi_start <= idx_ <= i
-            )
-            self._pending_bullish.append(dict(
-                sweep_idx=i, sweep_low=low, structure_high=structure_high, deadline=i + MSS_WINDOW,
-            ))
-            self._recent_sl_price = None
+            structure_high = max(high[structure_hi_start:i + 1])
+            sweep_idx = i
+            mss_idx = None
+            for j in range(i + 1, min(n, i + 1 + MSS_WINDOW)):
+                if close[j] > structure_high:
+                    mss_idx = j
+                    break
+            if mss_idx is not None:
+                fvg = _find_fvg_bullish(high, low, sweep_idx, mss_idx)
+                if fvg is not None:
+                    _, fvg_top, fvg_bot, frame_hi, frame_lo = fvg
+                    leg_range = high[mss_idx] - low[sweep_idx]
+                    if leg_range > 0:
+                        fvg_mid = (fvg_top + fvg_bot) / 2
+                        eq = low[sweep_idx] + leg_range * 0.5
+                        if fvg_mid <= eq:  # aggressive/cheap half for bullish
+                            signals.append(dict(
+                                direction="long", sweep_idx=sweep_idx, mss_idx=mss_idx,
+                                fvg_near=fvg_bot, fvg_far=fvg_top,
+                                frame_high=frame_hi, frame_low=frame_lo,
+                                leg_extreme=high[mss_idx], signal_idx=mss_idx,
+                            ))
+                recent_sl_price = None
 
-        return new_signals
-
-    def _resolve_bearish(self, watch: dict, mss_idx: int) -> list[dict]:
-        fvg = self._find_fvg_bearish(watch["sweep_idx"], mss_idx)
-        if fvg is None:
-            return []
-        _, fvg_top, fvg_bot, frame_hi, frame_lo = fvg
-        _, mss_low = self._hl_at(mss_idx)
-        leg_range = watch["sweep_high"] - mss_low
-        if leg_range <= 0:
-            return []
-        fvg_mid = (fvg_top + fvg_bot) / 2
-        eq = mss_low + leg_range * 0.5
-        if fvg_mid < eq:  # not the aggressive/expensive half for bearish
-            return []
-        return [dict(
-            direction="short", sweep_idx=watch["sweep_idx"], mss_idx=mss_idx,
-            fvg_near=fvg_top, fvg_far=fvg_bot,
-            frame_high=frame_hi, frame_low=frame_lo,
-            leg_extreme=mss_low, signal_idx=mss_idx,
-        )]
-
-    def _resolve_bullish(self, watch: dict, mss_idx: int) -> list[dict]:
-        fvg = self._find_fvg_bullish(watch["sweep_idx"], mss_idx)
-        if fvg is None:
-            return []
-        _, fvg_top, fvg_bot, frame_hi, frame_lo = fvg
-        mss_high, _ = self._hl_at(mss_idx)
-        leg_range = mss_high - watch["sweep_low"]
-        if leg_range <= 0:
-            return []
-        fvg_mid = (fvg_top + fvg_bot) / 2
-        eq = watch["sweep_low"] + leg_range * 0.5
-        if fvg_mid > eq:  # not the aggressive/cheap half for bullish
-            return []
-        return [dict(
-            direction="long", sweep_idx=watch["sweep_idx"], mss_idx=mss_idx,
-            fvg_near=fvg_bot, fvg_far=fvg_top,
-            frame_high=frame_hi, frame_low=frame_lo,
-            leg_extreme=mss_high, signal_idx=mss_idx,
-        )]
-
-
-def detect_signals_streaming(m1_highs, m1_lows, m1_closes) -> list[dict]:
-    """Batch-shaped convenience wrapper ONLY for testing bit-for-bit
-    equivalence against the reference's detect_signals() -- feeds a
-    full series through SignalDetector bar by bar. Not used by the live
-    detector itself."""
-    det = SignalDetector()
-    signals = []
-    for h, l, c in zip(m1_highs, m1_lows, m1_closes):
-        signals.extend(det.update(h, l, c))
     return signals
