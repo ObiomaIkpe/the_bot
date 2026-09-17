@@ -71,7 +71,12 @@ export function Overview() {
 
   const notConfigured = bridgeHealthQuery.error instanceof ApiError && bridgeHealthQuery.error.status === 503;
   const bridgeUnreachable = bridgeHealthQuery.error instanceof ApiError && bridgeHealthQuery.error.status === 502;
-  const mt5Disconnected = bridgeHealthQuery.data && !bridgeHealthQuery.data.connected;
+  // isSuccess (not just truthy `.data`) matters here: react-query doesn't
+  // clear a query's last-successful `data` just because a LATER fetch
+  // errored (e.g. the account got removed after this loaded once) --
+  // `.data` alone would keep showing a stale "disconnected" banner from
+  // before the removal, stacked on top of the correct, fresh 503 state.
+  const mt5Disconnected = bridgeHealthQuery.isSuccess && !bridgeHealthQuery.data.connected;
   const summary = tradesQuery.data ? summarizeTrades(tradesQuery.data) : null;
   const series = tradesQuery.data ? buildCumulativeSeries(tradesQuery.data) : [];
 

@@ -95,7 +95,12 @@ export function Live() {
         <h1 className="m-0 text-2xl">Live</h1>
       </div>
 
-      {bridgeHealthQuery.data && !bridgeHealthQuery.data.connected && (
+      {/* isSuccess, not just truthy `.data` -- see Overview.tsx's own
+          comment on this exact query: react-query doesn't clear a
+          query's last-successful `data` just because a LATER fetch
+          errored (e.g. the account was removed after this loaded once),
+          so `.data` alone can show a stale "disconnected" banner. */}
+      {bridgeHealthQuery.isSuccess && !bridgeHealthQuery.data.connected && (
         <div className="px-4 py-3 rounded-lg mb-5 text-sm bg-warning/10 border border-warning/30 text-warning">
           The bridge is reachable, but its MT5 terminal isn't currently connected
           {bridgeHealthQuery.data.detail ? ` — ${bridgeHealthQuery.data.detail}` : "."}
