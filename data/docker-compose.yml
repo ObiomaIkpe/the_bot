@@ -1,0 +1,19 @@
+services:
+  builder:
+    build: .
+    container_name: dxy-builder
+
+    # All files (cache, chunks, CSVs) land in ./trading_data/ on the host.
+    # This is a plain folder on the Hetzner server — easy to scp from later.
+    volumes:
+      - ./trading_data:/data
+
+    # Keep logs manageable over a multi-hour run
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+    # Don't restart automatically — the container should exit cleanly when done
+    restart: "no"
