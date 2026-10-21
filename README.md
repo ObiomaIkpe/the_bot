@@ -1,111 +1,126 @@
-# Phase 0 — Foundation (users, config, journal schema, basic auth)
+# The Bot
 
-Stack: Python + FastAPI + SQLAlchemy + Alembic + Postgres. Chosen over
-NestJS/TypeORM specifically because Phase 2 needs the official
-`MetaTrader5` Python package, which has no equivalent officially-supported
-Node client -- staying in one language end-to-end avoids a rewrite later.
+A multi-user trading platform built around one idea: a single shared
+detection engine finds a setup once per model, and that same trade
+fires across every user's own broker account that has that model
+enabled, sized to their own balance. Users opt in/out per model, not
+by running their own separate bot instance.
 
-**Not yet run or tested against a real database.** This sandbox has no
-network access, so none of this has been installed or executed. Every
-file was syntax-checked (`python -m py_compile`) but that's it -- please
-verify the steps below actually work before trusting this, per the
-project's own standard of testing every change in isolation.
+**Status**: the FVG model has been trading real money live since
+2026-08-28. A second model, Cascade Raid, was built and validated
+against real historical data but has since been deprecated and is
+being replaced from scratch — don't build on `cascade_raid/`.
 
-## What's here
+Stack: Python + FastAPI + SQLAlchemy + Alembic + Postgres on the
+backend, React (Vite) on the frontend, `MetaTrader5`'s official Python
+package for broker connectivity (the reason this is Python end-to-end
+rather than Node — no supported Node equivalent exists).
+
+## Architecture
 
 ```
-app/
-  core/
-    config.py     -- Settings (env-var driven: DATABASE_URL, JWT secret, encryption key)
-    database.py   -- SQLAlchemy engine/session, Base, get_db() dependency
-    security.py   -- password hashing (bcrypt), JWT issue/verify, Fernet encrypt/decrypt
-    deps.py       -- get_current_user() FastAPI dependency
-  models/
-    user.py             -- users
-    broker_credential.py -- broker_credentials (login/password encrypted at rest)
-    user_settings.py     -- user_settings (incl. live_model / shadow_models split)
-    trade.py             -- trades
-    event.py             -- events
-    notification.py      -- notifications
-  schemas/auth.py -- Pydantic request/response models for register/login
-  routers/auth.py -- POST /auth/register, POST /auth/login, GET /auth/me
-  main.py         -- FastAPI app, mounts the auth router, GET /health
-alembic/
-  env.py                       -- wires Alembic to app.core.config.settings + all models
-  versions/0001_initial_schema.py -- hand-written initial migration (see caveat below)
-requirements.txt
-.env.example
+app/              -- the main API: auth, broker credential onboarding,
+                     model configs, trades, events, settings, admin
+frontend/         -- React app: trader-facing pages + an /admin section
+phase1/streaming/ -- the FVG model's detection engine (pure: bar in,
+                     event out -- no DB or bridge knowledge at all)
+shadow_runner/    -- the live process: polls bars, runs them through a
+                     model, fans results out to every active
+                     subscriber's own order-execution handler, journals
+                     every event/trade to Postgres
+bridge/           -- a SEPARATE FastAPI service that runs on a Windows
+                     VPS next to a real MT5 terminal, wrapping the
+                     MetaTrader5 package; one process = one MT5
+                     connection = one account = one port
+cascade_raid/     -- DEPRECATED, being replaced -- do not extend
+alembic/          -- migrations
+tests/            -- pytest suite
 ```
 
-## Setup
+Each of `bridge/`, `phase1/`, and `frontend/` has its own README with
+component-specific detail -- this file stays at the system level.
 
-1. Create a Postgres database and user, e.g.:
-   ```
-   createdb trading_bot
-   ```
-2. Copy `.env.example` to `.env` and fill in real values:
-   - `DATABASE_URL` -- your Postgres connection string
-   - `JWT_SECRET_KEY` -- any long random string
-   - `CREDENTIALS_ENCRYPTION_KEY` -- generate with:
-     ```
-     python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-     ```
-3. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-4. Run the migration:
-   ```
-   alembic upgrade head
-   ```
-5. Start the API:
-   ```
-   uvicorn app.main:app --reload
-   ```
-6. Verify:
-   ```
-   curl http://localhost:8000/health
-   curl -X POST http://localhost:8000/auth/register -H "Content-Type: application/json" \
-     -d '{"email": "you@example.com", "password": "a-real-password"}'
-   curl -X POST http://localhost:8000/auth/login -d "username=you@example.com&password=a-real-password"
-   ```
+### How a trade actually happens
 
-## Things to specifically check, since I couldn't run this myself
+1. `shadow_runner` polls its reference bridge for newly-closed bars
+   (plain HTTP GET on a fixed interval -- not push/streaming) and feeds
+   them into the active model's detection engine (`phase1/streaming/`
+   for FVG), bar by bar.
+2. When the engine emits a `trade_candidate_ready` event, `shadow_runner`
+   looks up everyone currently subscribed to that model (checked fresh
+   every time, never cached) and fans the event out to each
+   subscriber's own `OrderManager` -- each isolated in its own
+   try/except, so one subscriber's broken bridge connection can't block
+   execution for anyone else.
+3. Each subscriber's `OrderManager` places a real pending order on
+   their own MT5 bridge, sized from their own account balance and
+   `risk_pct`. Fills/closes are confirmed by polling the broker's own
+   position/order state -- never inferred from price.
+4. Everything (detection milestones, order placement, fills, closes,
+   safety-check failures) is journaled to the `events`/`trades` tables
+   for the trader-facing and admin UIs to read back.
 
-- **The hand-written migration (`0001_initial_schema.py`) matches the
-  SQLAlchemy models exactly.** I wrote both by hand rather than running
-  `alembic revision --autogenerate` against a live DB. Recommend running
-  autogenerate yourself once you have Postgres up (`alembic revision
-  --autogenerate -m "check"`) -- it should produce an empty diff if
-  0001 is correct. If it doesn't, trust autogenerate's diff, not my file.
-- **The `CheckConstraint("NOT (live_model = ANY(shadow_models))")`
-  syntax** -- this is valid Postgres (`ANY` over an array column in a
-  CHECK constraint), but double check it actually creates without error
-  on your Postgres version.
-- **`BrokerCredential`'s encrypted columns** use Python `@property`
-  getters/setters (`.account_login` / `.account_password`) backed by
-  `_account_login_enc` / `_account_password_enc` columns. Any code that
-  creates or reads these needs to go through the properties, not the
-  underlying `_*_enc` attributes directly -- worth a quick unit test
-  confirming round-trip encrypt/decrypt works before this touches any
-  real credential.
-- **`notifications` table**: the build plan's table definition was
-  truncated after the `destination` column when I read it. I filled in
-  `event_id` (FK), `status`, `created_at`, `sent_at` based on context --
-  flagged in a comment in `app/models/notification.py` too. Please
-  compare against your original doc if you have the untruncated version.
-- **UUID primary keys**: I chose UUIDs (generated client-side via
-  `uuid.uuid4()`, not `gen_random_uuid()` server-side) over serial
-  integers, since this is a multi-user product and sequential IDs would
-  leak user/trade counts. If you'd rather use integers, that's a
-  straightforward model + migration change -- flag it before Phase 1
-  builds on top of this.
-- **Auth is password + JWT** (the plan left this undecided). Swappable
-  later since `password_hash` is already the column name the plan itself
-  specified.
+### Broker connectivity
 
-## Deliberately not done in Phase 0
+MT5 only allows one connection per process, so the `bridge/` service
+runs one instance per connected account on a Windows VPS, each its own
+port. Connecting a new account is self-service (`bridge/scripts/provisioning_poller/`
+drives the actual Windows-side setup) -- a user submits credentials in
+the app, and a background poller on the Windows box provisions a
+dedicated MT5 terminal + bridge worker for them, with no manual admin
+step. Real order placement is additionally gated behind
+`orders_enabled` in each bridge worker's own `config.json` -- a
+filesystem-only, intentionally non-network-reachable kill switch, not
+something togglable from the UI.
 
-Per the plan, these come later: broker adapter, strategy engine, risk
-limits UI, actual notification sending, Slack/Discord. Phase 0 is schema
-+ auth only.
+## Running it locally
+
+1. Create a Postgres database and user, or just use the bundled
+   `docker-compose.yml` (brings up `db`, `api`, `shadow_runner`,
+   `frontend`, and a Caddy reverse proxy).
+2. Copy `.env.example` to `.env` and fill in real values -- at minimum:
+   - `DATABASE_URL`, `JWT_SECRET_KEY`, `CREDENTIALS_ENCRYPTION_KEY`
+     (the last one encrypts broker credentials at rest -- generate with
+     `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)
+   - `BRIDGE_URL` / `SHADOW_RUNNER_USER_ID` -- which bridge
+     `shadow_runner` uses as its detection price feed, and which real
+     user it journals events against. See `DEDICATED_REFERENCE_ACCOUNT.md`
+     for why the price feed is a dedicated, order-less reference
+     account rather than tied to any one trader's real account.
+   - Telegram/healthchecks.io vars are optional -- everything no-ops
+     safely if left unset.
+3. Install dependencies: `pip install -r requirements.txt`
+4. Run migrations: `alembic upgrade head`
+5. Start the API: `uvicorn app.main:app --reload`
+   (or `docker compose up -d` for the full stack)
+6. Verify: `curl http://localhost:8000/health`
+
+The `bridge/` service is a separate deployment target entirely -- it
+runs on a Windows VPS next to real MT5 terminals, not as part of this
+compose file. See `bridge/README.md`.
+
+## Testing
+
+`pytest` (config in `pytest.ini`, `testpaths = tests`). Scripts meant
+to be run directly (backfills, one-off reconciliation jobs) follow a
+"extract the core logic into a pure, testable function, keep `main()`
+as a thin wrapper" convention throughout -- see
+`shadow_runner/scripts/` for examples.
+
+## Where the rest of the history lives
+
+This repo accumulates a lot of dated, working-notes-style markdown at
+the root as real incidents/builds happen (deploy diagnoses, secret-handling
+notes, phase validation writeups, etc.) -- most are point-in-time and not
+meant to stay authoritative forever. The two most load-bearing for
+understanding current state:
+
+- `PENDING_ITEMS.md` -- open/deferred work, organized by area.
+- `HANDOFF.md` -- design history and decisions, for context on *why*
+  things are shaped the way they are.
+
+## Deliberately out of scope here
+
+Anything broker-credential-bearing never belongs in this README (or
+anywhere in chat/logs) -- see `SECRET_HANDLING_DISCIPLINE.md` for the
+project's actual discipline on this.
