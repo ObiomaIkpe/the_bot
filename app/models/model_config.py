@@ -72,6 +72,18 @@ class ModelConfig(Base):
     status = Column(String, nullable=False, server_default="disabled")
     risk_pct = Column(Float, nullable=False)
 
+    # Migration 0024 (multi-account-per-user, phase 1): which of this
+    # user's broker accounts this row's risk_pct/status/magic_number
+    # actually apply to. Nullable for now, purely additive -- existing
+    # rows backfilled by migration 0025, uq_model_configs_user_model
+    # stays the enforced constraint until phase 5 replaces it with
+    # uq_model_configs_credential_model. Not yet load-bearing: every
+    # reader of this table still assumes "one active account per user"
+    # until the later phases of the multi-account plan land.
+    credential_id = Column(
+        UUID(as_uuid=True), ForeignKey("broker_credentials.credential_id"), nullable=True, index=True
+    )
+
     # MT5's magic field is a plain integer at the protocol level (not an
     # application choice -- see this phase's chat history for why text
     # isn't possible there). Globally unique across the whole system,

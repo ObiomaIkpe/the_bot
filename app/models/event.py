@@ -261,6 +261,17 @@ class Event(Base):
     # NARRATIVE_EVENT_TYPES above), not a missing/broken reference. Every
     # other event type keeps a real user_id, same as always.
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
+
+    # Migration 0024 (multi-account-per-user, phase 1): same reasoning
+    # as Trade.credential_id -- WHICH of this user's broker accounts
+    # this event is actually about. NULL for shared narrative rows
+    # (NARRATIVE_EVENT_TYPES above, which have no owning account at
+    # all, same as they have no owning user) and for existing rows
+    # until migration 0025 backfills them. Not yet load-bearing.
+    credential_id = Column(
+        UUID(as_uuid=True), ForeignKey("broker_credentials.credential_id"), nullable=True, index=True
+    )
+
     # FK to models.model_name (migration 0018) -- previously a hardcoded
     # CHECK constraint (ck_events_model_valid, 'fvg'/'ob'/'fvg_ob' only);
     # see app/models/model.py's module docstring for why.

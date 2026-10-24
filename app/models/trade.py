@@ -20,6 +20,19 @@ class Trade(Base):
     # NOT a general relaxation of trade ownership, just the one shared row.
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.user_id"), nullable=True, index=True)
 
+    # Migration 0024 (multi-account-per-user, phase 1): WHICH of this
+    # user's broker accounts this trade actually happened on. Nullable
+    # for now -- purely additive at this phase, backfilled for existing
+    # rows by migration 0025, and populated going forward by
+    # shadow_runner/runner.py once it starts threading
+    # subscriber["credential_id"] through (see MULTI_ACCOUNT plan). Not
+    # yet load-bearing anywhere -- today's code still assumes "the one
+    # active account per user" everywhere else, so this column exists
+    # ahead of the code that will actually rely on it.
+    credential_id = Column(
+        UUID(as_uuid=True), ForeignKey("broker_credentials.credential_id"), nullable=True, index=True
+    )
+
     # FK to models.model_name (migration 0018) -- previously a hardcoded
     # CHECK constraint (ck_trades_model_valid, 'fvg'/'ob'/'fvg_ob' only);
     # see app/models/model.py's module docstring for why.
